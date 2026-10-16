@@ -1,0 +1,6 @@
+{
+  "name": "Phivonex",
+  "description": "Phivonex Core Engine - Next-generation decentralized platform, node infrastructure and ecosystem dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

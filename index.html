@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en" class="dark scroll-smooth">
+  <head>
+    <meta charset="UTF-8" />
+    <script>
+      (function() {
+        function isWsError(msg) {
+          if (!msg) return false;
+          var str = String(msg).toLowerCase();
+          return str.indexOf('websocket') !== -1 || str.indexOf('failed to connect') !== -1 || str.indexOf('closed without opened') !== -1;
+        }
+        function isChunkError(msg) {
+          if (!msg) return false;
+          var str = String(msg).toLowerCase();
+          return str.indexOf('loading chunk') !== -1 || str.indexOf('failed to fetch dynamically imported module') !== -1 || str.indexOf('importing a module script failed') !== -1;
+        }
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && event.reason;
+          var msg = (reason && reason.message) || String(reason || '');
+          if (isWsError(msg)) {
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (isChunkError(msg)) {
+            console.warn('[PHIVONEX] Deployment chunk mismatch detected. Auto-refreshing...');
+            if (!sessionStorage.getItem('phx_chunk_reloaded')) {
+              sessionStorage.setItem('phx_chunk_reloaded', '1');
+              window.location.reload();
+            }
+          }
+        }, true);
+        window.addEventListener('error', function(event) {
+          var msg = (event && (event.message || (event.error && event.error.message))) || '';
+          if (isWsError(msg)) {
+            event.preventDefault();
+            event.stopPropagation();
+          } else if (isChunkError(msg)) {
+            console.warn('[PHIVONEX] Deployment chunk mismatch error. Auto-refreshing...');
+            if (!sessionStorage.getItem('phx_chunk_reloaded')) {
+              sessionStorage.setItem('phx_chunk_reloaded', '1');
+              window.location.reload();
+            }
+          }
+        }, true);
+      })();
+    </script>
+    <style>
+      /* Critical Immediate Shell CSS — Guarantees dark paint on millisecond 0 */
+      html, body, #root {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        min-height: 100vh;
+        background-color: #05070B !important;
+        color: #F5F7FA !important;
+        font-family: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        overflow-x: hidden;
+      }
+      .phx-bg-midnight {
+        background-color: #05070B !important;
+      }
+      .phx-initial-shell {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        width: 100%;
+        background: radial-gradient(circle at 50% 35%, rgba(0, 207, 255, 0.12) 0%, #05070B 75%);
+        color: #F5F7FA;
+        text-align: center;
+        box-sizing: border-box;
+        padding: 24px;
+        user-select: none;
+      }
+      .phx-initial-logo {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-family: 'JetBrains Mono', monospace, sans-serif;
+        font-weight: 800;
+        font-size: 22px;
+        letter-spacing: 3px;
+        color: #FFFFFF;
+        margin-bottom: 24px;
+      }
+      .phx-initial-mark {
+        width: 36px;
+        height: 36px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #00CFFF 0%, #00A3FF 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 0 20px rgba(0, 207, 255, 0.4);
+      }
+      .phx-initial-pulse {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 2px solid rgba(0, 207, 255, 0.2);
+        border-top-color: #00CFFF;
+        animation: phxSpin 0.9s linear infinite;
+        margin-bottom: 16px;
+      }
+      .phx-initial-sub {
+        font-size: 11px;
+        font-family: 'JetBrains Mono', monospace, sans-serif;
+        letter-spacing: 2px;
+        color: #00CFFF;
+        text-transform: uppercase;
+        opacity: 0.9;
+      }
+      @keyframes phxSpin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>PHIVONEX | Transparent Node Economy &amp; Digital Ecosystem</title>
+    <meta
+      name="description"
+      content="Explore PHIVONEX, a digital ecosystem powered by limited Genesis Nodes, transparent supply mechanics, protocol-based rewards, real-time network data, and a verifiable economic ledger."
+    />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://phivonex.com" />
+    <meta property="og:title" content="PHIVONEX | Transparent Node Economy &amp; Digital Ecosystem" />
+    <meta
+      property="og:description"
+      content="Explore PHIVONEX, a digital ecosystem powered by limited Genesis Nodes, transparent supply mechanics, protocol-based rewards, real-time network data, and a verifiable economic ledger."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://phivonex.com" />
+    <meta property="og:site_name" content="PHIVONEX" />
+    <meta property="og:image" content="https://phivonex.com/brand/phivonex-app-icon-512.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="PHIVONEX | Transparent Node Economy &amp; Digital Ecosystem" />
+    <meta
+      name="twitter:description"
+      content="Explore PHIVONEX, a digital ecosystem powered by limited Genesis Nodes, transparent supply mechanics, protocol-based rewards, real-time network data, and a verifiable economic ledger."
+    />
+    <meta name="twitter:image" content="https://phivonex.com/brand/phivonex-app-icon-512.png" />
+    <meta name="theme-color" content="#05070B" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="PHIVONEX" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/brand/phivonex-app-icon-512.png" />
+    <link rel="icon" type="image/svg+xml" href="/brand/phivonex-favicon.svg" />
+    <link rel="apple-touch-icon" href="/brand/phivonex-app-icon-512.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://phivonex.com/#organization",
+            "name": "PHIVONEX",
+            "url": "https://phivonex.com",
+            "logo": "https://phivonex.com/brand/phivonex-app-icon-512.png",
+            "description": "Enterprise-grade Web3 infrastructure network powering transparent node validation, reward calculation, and verifiable digital ecosystem mechanics."
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://phivonex.com/#website",
+            "url": "https://phivonex.com",
+            "name": "PHIVONEX Network",
+            "publisher": { "@id": "https://phivonex.com/#organization" }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://phivonex.com/#webapp",
+            "name": "PHIVONEX Protocol Dashboard",
+            "url": "https://phivonex.com",
+            "applicationCategory": "FinTech / Blockchain Infrastructure",
+            "operatingSystem": "Web Browser",
+            "browserRequirements": "Requires JavaScript. Requires HTML5.",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            }
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://phivonex.com/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is PHIVONEX?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PHIVONEX is a next-generation decentralized infrastructure network powering Web3 applications through a fixed supply of Genesis Nodes, transparent supply mechanics, and server-validated ledger security."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What is a Genesis Node?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "A Genesis Node is a key infrastructure validator within the PHIVONEX network. Hard-capped at 10,000 total nodes, activating a node allows operators to earn PHIVO validation rewards per epoch."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "What is PHIVO?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PHIVO is the native ecosystem asset of PHIVONEX, issued primarily as node validation rewards according to configured reward epoch mechanics."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How does PHIVO → USDT work?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PHIVONEX includes an internal conversion module allowing operators to swap accumulated PHIVO rewards into USDT instantly within the secure wallet ledger based on current administrative conversion rates."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How are rewards calculated?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Node rewards are distributed per epoch based on real-time node activity, qualifying network participation, and configured protocol rules."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is PHIVONEX transparent?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. PHIVONEX provides a public ledger where node activations, reward epochs, and swap events are systematically logged and publicly verifiable."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "How is user security handled?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "PHIVONEX implements enterprise-grade security where all financial ledger entries, swaps, and withdrawals are validated exclusively server-side with strict idempotency and cryptographic protection."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body class="bg-[#05070B] text-[#F5F7FA] antialiased selection:bg-[#00CFFF]/20 selection:text-[#00CFFF] overflow-x-hidden font-sans">
+    <div id="root">
+      <div class="phx-initial-shell">
+        <div class="phx-initial-logo">
+          <div class="phx-initial-mark">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#05070B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="8" rx="2" />
+              <rect x="2" y="14" width="20" height="8" rx="2" />
+              <line x1="6" y1="6" x2="6.01" y2="6" />
+              <line x1="6" y1="18" x2="6.01" y2="18" />
+            </svg>
+          </div>
+          <span>PHIVONEX</span>
+        </div>
+        <div class="phx-initial-pulse"></div>
+        <div class="phx-initial-sub">Synchronizing Protocol Layer...</div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

@@ -1,0 +1,44 @@
+{
+  "id": "/",
+  "name": "PHIVONEX Network",
+  "short_name": "PHIVONEX",
+  "description": "Transparent Node Economy & Digital Ecosystem with Genesis Nodes, USDT & BNB deposits, protocol rewards, and live ledger verification.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05070B",
+  "theme_color": "#05070B",
+  "icons": [
+    {
+      "src": "/brand/phivonex-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/phivonex-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

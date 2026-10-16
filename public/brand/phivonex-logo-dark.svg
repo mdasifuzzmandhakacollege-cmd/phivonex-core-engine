@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 240" fill="none" width="100%" height="100%">
+  <!-- Re-uses dark optimized vectors -->
+  <defs>
+    <radialGradient id="pxHLogoAuraD" cx="120" cy="120" r="110" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#00CFFF" stop-opacity="0.25" />
+      <stop offset="60%" stop-color="#168BFF" stop-opacity="0.08" />
+      <stop offset="100%" stop-color="#7057FF" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="pxGradTopRibbonD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#80EAFF" /><stop offset="35%" stop-color="#00CFFF" /><stop offset="80%" stop-color="#168BFF" /><stop offset="100%" stop-color="#1760E8" />
+    </linearGradient>
+    <linearGradient id="pxGradRightBevelD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00CFFF" /><stop offset="40%" stop-color="#168BFF" /><stop offset="100%" stop-color="#0D47A1" />
+    </linearGradient>
+    <linearGradient id="pxGradStemD" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#7057FF" /><stop offset="35%" stop-color="#4F46E5" /><stop offset="70%" stop-color="#168BFF" /><stop offset="100%" stop-color="#00CFFF" />
+    </linearGradient>
+    <linearGradient id="pxGradLeftInnerD" x1="0%" y1="100%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#8B5CF6" stop-opacity="0.9" /><stop offset="60%" stop-color="#6366F1" stop-opacity="0.75" /><stop offset="100%" stop-color="#00CFFF" stop-opacity="0.4" />
+    </linearGradient>
+    <linearGradient id="pxGradInnerReturnD" x1="100%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#00CFFF" /><stop offset="45%" stop-color="#168BFF" /><stop offset="85%" stop-color="#0A1E4A" /><stop offset="100%" stop-color="#060E24" />
+    </linearGradient>
+    <linearGradient id="pxGradBackdropD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#09142E" stop-opacity="0.95" /><stop offset="100%" stop-color="#050A18" stop-opacity="0.8" />
+    </linearGradient>
+    <linearGradient id="pxSilverTypeD" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" /><stop offset="45%" stop-color="#EDF2F7" /><stop offset="70%" stop-color="#CBD5E1" /><stop offset="100%" stop-color="#94A3B8" />
+    </linearGradient>
+    <linearGradient id="pxCyanBeaconD" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#80EAFF" /><stop offset="40%" stop-color="#00CFFF" /><stop offset="100%" stop-color="#168BFF" />
+    </linearGradient>
+    <filter id="pxNodeGlowHD" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur1" />
+      <feMerge><feMergeNode in="blur1" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+  </defs>
+
+  <g transform="translate(15, 10) scale(0.8)">
+    <circle cx="160" cy="155" r="120" fill="url(#pxHLogoAuraD)" />
+    <path d="M 126 96 L 196 66 L 246 112 L 246 172 L 204 208 L 132 168 Z" fill="url(#pxGradBackdropD)" />
+    <g stroke="#00CFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+      <line x1="124" y1="142" x2="164" y2="114" />
+      <line x1="164" y1="114" x2="208" y2="182" />
+      <line x1="124" y1="142" x2="208" y2="182" />
+      <line x1="124" y1="142" x2="108" y2="204" stroke-opacity="0.45" stroke-dasharray="2 3" />
+      <line x1="164" y1="114" x2="228" y2="118" stroke-opacity="0.45" stroke-dasharray="2 3" />
+      <line x1="208" y1="182" x2="152" y2="236" stroke-opacity="0.45" stroke-dasharray="2 3" />
+    </g>
+    <path d="M 88 126 L 126 96 L 126 238 L 88 206 Z" fill="url(#pxGradLeftInnerD)" opacity="0.85" />
+    <path d="M 88 126 L 126 96 L 126 142 L 108 204 L 88 206 Z" fill="url(#pxGradStemD)" />
+    <path d="M 108 142 L 132 168 L 132 238 L 108 204 Z" fill="url(#pxGradStemD)" />
+    <path d="M 88 126 L 160 62 L 196 66 L 126 96 Z" fill="url(#pxGradTopRibbonD)" />
+    <path d="M 160 62 L 232 94 L 196 66 Z" fill="url(#pxGradTopRibbonD)" />
+    <path d="M 232 94 L 254 118 L 246 112 L 196 66 Z" fill="url(#pxGradRightBevelD)" />
+    <path d="M 254 118 L 254 168 L 246 172 L 246 112 Z" fill="url(#pxGradRightBevelD)" />
+    <path d="M 254 168 L 216 204 L 204 208 L 246 172 Z" fill="url(#pxGradInnerReturnD)" />
+    <path d="M 216 204 L 152 236 L 132 238 L 204 208 Z" fill="url(#pxGradInnerReturnD)" />
+    <path d="M 152 236 L 152 202 L 132 168 L 132 238 Z" fill="url(#pxGradTopRibbonD)" />
+    <path d="M 88 126 L 160 62 L 232 94 L 254 118" stroke="#FFFFFF" stroke-width="1.8" stroke-linecap="round" opacity="0.9" />
+    <path d="M 88 126 L 88 206" stroke="#80EAFF" stroke-width="1.5" stroke-linecap="round" opacity="0.75" />
+
+    <g transform="translate(124, 142)" filter="url(#pxNodeGlowHD)">
+      <circle cx="0" cy="0" r="10" fill="#00CFFF" fill-opacity="0.35" />
+      <circle cx="0" cy="0" r="7" fill="#168BFF" /><circle cx="0" cy="0" r="5" fill="#80EAFF" /><circle cx="-1.5" cy="-1.5" r="2" fill="#FFFFFF" />
+    </g>
+    <g transform="translate(164, 114)" filter="url(#pxNodeGlowHD)">
+      <circle cx="0" cy="0" r="11" fill="#00CFFF" fill-opacity="0.35" />
+      <circle cx="0" cy="0" r="7.5" fill="#168BFF" /><circle cx="0" cy="0" r="5.5" fill="#80EAFF" /><circle cx="-1.5" cy="-1.5" r="2.2" fill="#FFFFFF" />
+    </g>
+    <g transform="translate(208, 182)" filter="url(#pxNodeGlowHD)">
+      <circle cx="0" cy="0" r="12" fill="#00CFFF" fill-opacity="0.4" />
+      <circle cx="0" cy="0" r="8.5" fill="#168BFF" /><circle cx="0" cy="0" r="6" fill="#80EAFF" /><circle cx="-2" cy="-2" r="2.5" fill="#FFFFFF" />
+    </g>
+  </g>
+
+  <g transform="translate(260, 68)">
+    <path d="M 0 102 L 0 0 L 38 0 C 56 0 68 8 68 28 C 68 46 56 54 38 54 L 18 54 L 18 102 L 0 102 Z M 18 38 L 36 38 C 45 38 50 34 50 27 C 50 20 45 16 36 16 L 18 16 L 18 38 Z" fill="url(#pxSilverTypeD)" />
+    <path d="M 84 102 L 84 0 L 102 0 L 102 42 L 138 42 L 138 0 L 156 0 L 156 102 L 138 102 L 138 58 L 102 58 L 102 102 L 84 102 Z" fill="url(#pxSilverTypeD)" />
+    <path d="M 174 102 L 174 0 L 192 0 L 192 102 L 174 102 Z" fill="url(#pxSilverTypeD)" />
+    <path d="M 208 0 L 227 0 L 246 72 L 265 0 L 284 0 L 256 102 L 236 102 L 208 0 Z" fill="url(#pxSilverTypeD)" />
+    <g transform="translate(300, 0)">
+      <rect x="-4" y="-4" width="76" height="110" rx="14" fill="#00CFFF" fill-opacity="0.12" filter="url(#pxNodeGlowHD)" />
+      <path d="M 12 0 L 56 0 C 64 0 68 6 68 14 L 68 88 C 68 96 64 102 56 102 L 12 102 C 4 102 0 96 0 88 L 0 14 C 0 6 4 0 12 0 Z M 18 86 L 50 86 C 52 86 54 84 54 82 L 54 20 C 54 18 52 16 50 16 L 18 16 C 16 16 14 18 14 20 L 14 82 C 14 84 16 86 18 86 Z" fill="url(#pxCyanBeaconD)" />
+      <rect x="24" y="24" width="20" height="54" rx="4" fill="#00CFFF" fill-opacity="0.35" />
+      <rect x="29" y="30" width="10" height="42" rx="2" fill="#80EAFF" fill-opacity="0.8" />
+    </g>
+    <g transform="translate(386, 0)">
+      <path d="M 0 102 L 0 0 L 18 0 L 52 64 L 52 0 L 70 0 L 70 102 L 52 102 L 18 38 L 18 102 L 0 102 Z" fill="url(#pxSilverTypeD)" />
+    </g>
+    <g transform="translate(472, 0)">
+      <path d="M 0 102 L 0 0 L 60 0 L 60 16 L 18 16 L 18 42 L 54 42 L 54 58 L 18 58 L 18 86 L 62 86 L 62 102 L 0 102 Z" fill="url(#pxSilverTypeD)" />
+    </g>
+    <g transform="translate(550, 0)">
+      <path d="M 0 0 L 22 0 L 40 46 L 58 0 L 80 0 L 52 50 L 82 102 L 60 102 L 40 56 L 20 102 L 0 102 L 28 50 L 0 0 Z" fill="url(#pxSilverTypeD)" />
+    </g>
+  </g>
+</svg>

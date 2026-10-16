@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" fill="none" width="100%" height="100%">
+  <!-- Facet: Back Depth -->
+  <path d="M 126 96 L 196 66 L 246 112 L 246 172 L 204 208 L 132 168 Z" fill="#FFFFFF" fill-opacity="0.15" />
+
+  <!-- Constellation Lines -->
+  <g stroke="#FFFFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.6">
+    <line x1="124" y1="142" x2="164" y2="114" />
+    <line x1="164" y1="114" x2="208" y2="182" />
+    <line x1="124" y1="142" x2="208" y2="182" />
+    <line x1="124" y1="142" x2="108" y2="204" stroke-opacity="0.3" stroke-dasharray="2 3" />
+    <line x1="164" y1="114" x2="228" y2="118" stroke-opacity="0.3" stroke-dasharray="2 3" />
+    <line x1="208" y1="182" x2="152" y2="236" stroke-opacity="0.3" stroke-dasharray="2 3" />
+  </g>
+
+  <!-- Left Stem & Wing -->
+  <path d="M 88 126 L 126 96 L 126 238 L 88 206 Z" fill="#FFFFFF" fill-opacity="0.35" />
+  <path d="M 88 126 L 126 96 L 126 142 L 108 204 L 88 206 Z" fill="#FFFFFF" fill-opacity="0.75" />
+  <path d="M 108 142 L 132 168 L 132 238 L 108 204 Z" fill="#FFFFFF" fill-opacity="0.9" />
+
+  <!-- Top Hexagonal Arch Ribbon -->
+  <path d="M 88 126 L 160 62 L 196 66 L 126 96 Z" fill="#FFFFFF" fill-opacity="0.95" />
+  <path d="M 160 62 L 232 94 L 196 66 Z" fill="#FFFFFF" fill-opacity="0.85" />
+  <path d="M 232 94 L 254 118 L 246 112 L 196 66 Z" fill="#FFFFFF" fill-opacity="0.65" />
+
+  <!-- Right Outer Facet & Inward Loop -->
+  <path d="M 254 118 L 254 168 L 246 172 L 246 112 Z" fill="#FFFFFF" fill-opacity="0.5" />
+  <path d="M 254 168 L 216 204 L 204 208 L 246 172 Z" fill="#FFFFFF" fill-opacity="0.7" />
+  <path d="M 216 204 L 152 236 L 132 238 L 204 208 Z" fill="#FFFFFF" fill-opacity="0.8" />
+  <path d="M 152 236 L 152 202 L 132 168 L 132 238 Z" fill="#FFFFFF" fill-opacity="0.95" />
+
+  <!-- Outer Outlines -->
+  <path d="M 88 126 L 160 62 L 232 94 L 254 118 L 254 168 L 216 204 L 152 236 L 132 238 L 88 206 Z" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.95" />
+
+  <!-- Three Constellation Nodes -->
+  <circle cx="124" cy="142" r="6" fill="#FFFFFF" />
+  <circle cx="164" cy="114" r="6.5" fill="#FFFFFF" />
+  <circle cx="208" cy="182" r="7" fill="#FFFFFF" />
+</svg>

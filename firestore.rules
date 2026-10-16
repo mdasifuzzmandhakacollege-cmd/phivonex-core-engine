@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128;
+    }
+
+    function isValidUserSession(data) {
+      return data.userId == request.auth.uid
+        && data.createdAt is string
+        && data.active is bool;
+    }
+
+    function isValidAdminAuditLog(data) {
+      return data.id is string
+        && data.action is string
+        && data.category is string
+        && data.actorId is string
+        && data.details is string
+        && data.createdAt is string;
+    }
+
+    function isValidSystemAuditLog(data) {
+      return data.id is string
+        && data.userUid is string
+        && data.timestamp is string
+        && data.actionType is string;
+    }
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || resource.data.uid == request.auth.uid);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    match /sessions/{sessionId} {
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(sessionId) && isValidUserSession(request.resource.data);
+      allow update: if isSignedIn() && isValidId(sessionId) && isValidUserSession(request.resource.data)
+        && request.resource.data.userId == resource.data.userId;
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /admin_audit_logs/{logId} {
+      allow read: if true;
+      allow create: if isValidId(logId) && isValidAdminAuditLog(request.resource.data);
+      allow update, delete: if false; // Immutable audit log trail
+    }
+
+    match /system_audit_logs/{logId} {
+      allow read: if true;
+      allow create: if isValidId(logId) && isValidSystemAuditLog(request.resource.data);
+      allow update, delete: if false; // Immutable audit log trail
+    }
+
+    match /system_settings/{settingId} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

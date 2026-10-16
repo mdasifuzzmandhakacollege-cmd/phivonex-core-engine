@@ -1,0 +1,69 @@
+{
+  "entities": {
+    "UserSession": {
+      "title": "User Session",
+      "description": "Transient user session metadata cache",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Unique identifier of the user" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["userId", "createdAt", "active"]
+    },
+    "AdminAuditLog": {
+      "title": "Admin Audit Log",
+      "description": "Immutable administrative audit log recording sensitive configuration updates, treasury movements, and settlements in Firestore",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique UUID of the audit log" },
+        "action": { "type": "string", "description": "Action performed by admin", "maxLength": 100 },
+        "category": { "type": "string", "enum": ["CONFIG_UPDATE", "TREASURY_MOVEMENT", "FINANCIAL_SETTLEMENT", "SECURITY"], "description": "Category of the audit event" },
+        "actorId": { "type": "string", "description": "User ID of the administrator", "maxLength": 100 },
+        "actorEmail": { "type": "string", "description": "Email address of the administrator", "maxLength": 200 },
+        "actorRole": { "type": "string", "description": "Role of the administrator", "maxLength": 50 },
+        "targetType": { "type": "string", "description": "Target entity or configuration category", "maxLength": 100 },
+        "targetId": { "type": "string", "description": "Target identifier", "maxLength": 100 },
+        "details": { "type": "string", "description": "Detailed human-readable audit narrative", "maxLength": 1000 },
+        "previousState": { "type": "string", "description": "Serialized previous configuration or value", "maxLength": 2000 },
+        "newState": { "type": "string", "description": "Serialized new configuration or value", "maxLength": 2000 },
+        "ipAddress": { "type": "string", "description": "IP or origin reference of the admin client", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time", "description": "ISO timestamp of when the event occurred" }
+      },
+      "required": ["id", "action", "category", "actorId", "details", "createdAt"]
+    },
+    "SystemAuditLog": {
+      "title": "System Audit Log",
+      "description": "Reusable administrative audit log capturing user UID, timestamp, action type, and metadata for tracking administrative operations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique UUID of the audit event" },
+        "userUid": { "type": "string", "description": "User UID of the administrator or system actor", "maxLength": 128 },
+        "timestamp": { "type": "string", "format": "date-time", "description": "ISO timestamp of when the action was recorded" },
+        "actionType": { "type": "string", "description": "Action type identifier", "maxLength": 100 },
+        "category": { "type": "string", "description": "Classification category", "maxLength": 50 },
+        "details": { "type": "string", "description": "Descriptive narrative of the action", "maxLength": 2000 },
+        "targetType": { "type": "string", "description": "Target entity category", "maxLength": 100 },
+        "targetId": { "type": "string", "description": "Target resource ID", "maxLength": 100 },
+        "actorEmail": { "type": "string", "description": "Email of the actor", "maxLength": 200 },
+        "actorRole": { "type": "string", "description": "Role of the actor", "maxLength": 50 },
+        "ipAddress": { "type": "string", "description": "Client IP address or origin", "maxLength": 100 }
+      },
+      "required": ["id", "userUid", "timestamp", "actionType"]
+    }
+  },
+  "firestore": {
+    "/sessions/{sessionId}": {
+      "schema": "UserSession",
+      "description": "Collection storing transient user session logs"
+    },
+    "/admin_audit_logs/{logId}": {
+      "schema": "AdminAuditLog",
+      "description": "Immutable administrative audit log collection recording sensitive config updates and treasury movements"
+    },
+    "/system_audit_logs/{logId}": {
+      "schema": "SystemAuditLog",
+      "description": "System audit logs collection capturing user UID, timestamp, action type, and metadata for administrative operations"
+    }
+  }
+}

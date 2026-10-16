@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --color-brand-bg-deep: #05070B;
+  --color-brand-bg-navy: #07101D;
+  --color-brand-bg-surface: #0A1224;
+  --color-brand-cyan: #00CFFF;
+  --color-brand-blue: #168BFF;
+  --color-brand-deep-blue: #1760E8;
+  --color-brand-violet: #7057FF;
+  --color-brand-text: #F7FAFC;
+  --color-brand-text-muted: #98A2B3;
+  --color-state-success: #32D583;
+  --color-state-warning: #FDB022;
+  --color-state-error: #F04438;
+}
+
+@layer base {
+  * {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+  
+  html {
+    color-scheme: dark;
+  }
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #05070B;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 200, 255, 0.3);
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Animations for PHIVONEX Landing Page */
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes spin-reverse-slow {
+  from {
+    transform: rotate(360deg);
+  }
+  to {
+    transform: rotate(0deg);
+  }
+}
+
+@keyframes float-gentle {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes breathing-glow {
+  0%, 100% {
+    opacity: 0.4;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.8;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes pulse-line {
+  0% {
+    stroke-dashoffset: 100;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes radar-sweep {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 35s linear infinite;
+}
+
+.animate-spin-medium {
+  animation: spin-slow 14s linear infinite;
+}
+
+.animate-spin-reverse-slow {
+  animation: spin-reverse-slow 45s linear infinite;
+}
+
+.animate-spin-reverse-medium {
+  animation: spin-reverse-slow 10s linear infinite;
+}
+
+.animate-float-gentle {
+  animation: float-gentle 6s ease-in-out infinite;
+}
+
+.animate-breathing-glow {
+  animation: breathing-glow 8s ease-in-out infinite;
+}
+
+.animate-pulse-slow {
+  animation: breathing-glow 3.5s ease-in-out infinite;
+}
+
+.animate-radar-sweep {
+  animation: radar-sweep 12s linear infinite;
+}
+
+/* Background grid overlay */
+.bg-grid-pattern {
+  background-image: radial-gradient(rgba(0, 207, 255, 0.12) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Glass card styling */
+.glass-card {
+  background: rgba(7, 16, 29, 0.7);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-card-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (hover: hover) {
+  .glass-card-hover:hover {
+    transform: translateY(-4px);
+    border-color: rgba(0, 207, 255, 0.35);
+    box-shadow: 0 12px 30px -10px rgba(0, 207, 255, 0.15);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin-slow,
+  .animate-spin-reverse-slow,
+  .animate-float-gentle,
+  .animate-breathing-glow,
+  .animate-radar-sweep {
+    animation: none !important;
+  }
+}

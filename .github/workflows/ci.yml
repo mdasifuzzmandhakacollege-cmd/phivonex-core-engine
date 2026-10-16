@@ -1,0 +1,45 @@
+name: PHIVONEX Production CI Gate
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  production-ci-gate:
+    name: Production CI Security & Regression Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js Runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Deterministic Dependency Installation
+        run: npm ci
+
+      - name: Typecheck & Static Analysis
+        run: npm run lint
+
+      - name: Secret Leak & Environment Contract Audit
+        run: npx tsx scripts/audit-secrets-env.ts
+
+      - name: Full Regression & E2E Test Suite (PF-03 to PF-09)
+        run: npm run test:ci
+
+      - name: Production Client & Server Build
+        run: npm run build
