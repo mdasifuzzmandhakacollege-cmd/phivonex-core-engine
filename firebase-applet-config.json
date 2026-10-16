@@ -1,13 +1,13 @@
 {
   "projectId": "phivonex-core-engine",
-  "appId": "1:812162791451:web:5a7080d8adbbae062860be",
-  "apiKey": "AIzaSyDNhDHo4gRRjrrH8r7u6IHDqf9euPGtmX8",
+  "appId": "1:812162791451:web:5c6f5bf0d5ace51f2860be",
+  "apiKey": "AIzaSyDNHdDho4gRRjrrH8r7u6IHDqf9euPGtmX8",
   "authDomain": "phivonex-core-engine.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-phivonex-fed0bbbd-87e6-4cf5-baa9-e4b72873cc9a",
   "storageBucket": "phivonex-core-engine.firebasestorage.app",
   "messagingSenderId": "812162791451",
-  "measurementId": "",
+  "measurementId": "G-HZ2G7M9G1P",
   "oAuthClientId": "812162791451-2gt6ce4599bck3320heji3itu4ku5j12.apps.googleusercontent.com",
-  "vapidKey": "BNeL3a358h7juM_T8y58vQHoFatZS2FGVttAEtrVl-_HpqmsiQ9t-g7FsDdbmCwkca_5pI2k1IlBPoqoDHKkLRM",
+  "vapidKey": "BHifp2JFXi7RXu9zpuR_yID71wg7kSdc3yOpBAFTYUvonskijqL-tLNoRZCuoPvQIAc6Jcj4snycGGy8SugpPB8",
   "recaptchaSiteKey": ""
 }

@@ -8,17 +8,40 @@ runConfig:
 env:
   - variable: NODE_ENV
     value: "production"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: APP_ENV
     value: "production"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: BSC_CHAIN_ID
     value: "56"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: BSC_RPC_URL_PRIMARY
     value: "https://bsc-dataseed.binance.org"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: BSC_RPC_URL_SECONDARY
     value: "https://bsc-dataseed1.defibit.io"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: USDT_CONTRACT_ADDRESS
     value: "0x55d398326f99059ff775485246999027b3197955"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: DEPOSIT_CONFIRMATIONS
     value: "3"
-  - variable: DATABASE_URL
-    secret: DATABASE_URL
+    availability:
+      - BUILD
+      - RUNTIME
+  # Uncomment once you create the secret 'DATABASE_URL' in Google Cloud Secret Manager
+  # - variable: DATABASE_URL
+  #   secret: DATABASE_URL
+
