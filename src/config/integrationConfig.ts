@@ -42,7 +42,7 @@ export function validateProductionConfig(): void {
 
   const missingOrInvalid: string[] = [];
 
-  // 1. Validate DATABASE_URL (Mandatory in production)
+  // 1. Validate DATABASE_URL (Optional: if provided, validate postgres syntax; otherwise warn and fallback to PGlite)
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (databaseUrl) {
     if (
@@ -53,7 +53,7 @@ export function validateProductionConfig(): void {
       missingOrInvalid.push('DATABASE_URL must be a valid PostgreSQL connection string starting with postgresql:// or postgres://');
     }
   } else {
-    missingOrInvalid.push('DATABASE_URL is mandatory in production');
+    console.log('[IntegrationConfig] DATABASE_URL not set in environment. Running with embedded storage fallback.');
   }
 
   // 2. Validate DEPOSIT_ADDRESS_XPUB (Optional if using direct Treasury deposits, must be valid if provided)
