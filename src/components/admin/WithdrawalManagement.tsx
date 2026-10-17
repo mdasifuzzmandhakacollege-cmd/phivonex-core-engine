@@ -90,6 +90,8 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
 
   // Automated Payout Switch & Min Withdrawal State
   const [autoWithdrawalEnabled, setAutoWithdrawalEnabled] = useState<boolean>(false);
+  const [isSignerConfigured, setIsSignerConfigured] = useState<boolean>(false);
+  const [payoutWalletAddress, setPayoutWalletAddress] = useState<string | null>(null);
   const [minWithdrawalInput, setMinWithdrawalInput] = useState<string>('0.10');
   const [savingMinAmount, setSavingMinAmount] = useState<boolean>(false);
   const [togglingMode, setTogglingMode] = useState<boolean>(false);
@@ -102,6 +104,8 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
       if (res.ok) {
         const data = await res.json();
         setAutoWithdrawalEnabled(Boolean(data.autoWithdrawalEnabled));
+        setIsSignerConfigured(Boolean(data.isSignerConfigured));
+        setPayoutWalletAddress(data.payoutWalletAddress || null);
         if (typeof data.minWithdrawalAmount === 'number') {
           setMinWithdrawalInput(String(data.minWithdrawalAmount));
         }
@@ -186,8 +190,6 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
           type: 'success',
           text: data.message || `Instant payout broadcasted successfully! TxHash: ${data.data?.txHash}`,
         });
-        fetchWithdrawals();
-        if (onRefreshSummary) onRefreshSummary();
       } else {
         throw new Error(data.message || 'Failed to execute instant payout');
       }
@@ -198,6 +200,8 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
       });
     } finally {
       setInstantPayoutLoadingId(null);
+      fetchWithdrawals();
+      if (onRefreshSummary) onRefreshSummary();
     }
   };
 
@@ -419,55 +423,82 @@ export const WithdrawalManagement: React.FC<WithdrawalManagementProps> = ({
         autoWithdrawalEnabled 
           ? 'bg-gradient-to-r from-[#07101D] via-[#052e16]/30 to-[#07101D] border-emerald-500/40 shadow-emerald-500/10' 
           : 'bg-gradient-to-r from-[#07101D] via-[#2d1b00]/30 to-[#07101D] border-amber-500/40 shadow-amber-500/10'
-      } shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4`}>
-        <div className="flex items-center gap-3.5">
-          <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
-            autoWithdrawalEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-          }`}>
-            <Zap className={`w-6 h-6 ${autoWithdrawalEnabled ? 'fill-emerald-400' : ''}`} />
-          </div>
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="text-base font-bold text-white">Automated Blockchain Payout Engine</h3>
-              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
-                autoWithdrawalEnabled
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-              }`}>
-                {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (24/7 ACTIVE)' : '⏸️ MANUAL APPROVAL MODE'}
-              </span>
+      } shadow-xl flex flex-col gap-4`}>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className={`w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0 ${
+              autoWithdrawalEnabled ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+            }`}>
+              <Zap className={`w-6 h-6 ${autoWithdrawalEnabled ? 'fill-emerald-400' : ''}`} />
             </div>
-            <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
-              {autoWithdrawalEnabled ? (
-                <span>
-                  <strong className="text-emerald-400">Full Automatic Mode Active:</strong> Public withdrawal requests trigger backend smart contract calls directly to the user's wallet without delay.
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-base font-bold text-white">Automated Blockchain Payout Engine</h3>
+                <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border ${
+                  autoWithdrawalEnabled
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                }`}>
+                  {autoWithdrawalEnabled ? '🟢 FULL AUTOMATIC (24/7 ACTIVE)' : '⏸️ MANUAL APPROVAL MODE'}
                 </span>
+              </div>
+              <p className="text-xs text-[#98A2B3] mt-1 max-w-2xl leading-relaxed">
+                {autoWithdrawalEnabled ? (
+                  <span>
+                    <strong className="text-emerald-400">Full Automatic Mode Active:</strong> Public withdrawal requests trigger backend smart contract calls directly to the user's wallet without delay.
+                  </span>
+                ) : (
+                  <span>
+                    <strong className="text-amber-400">Manual Approval Mode Active:</strong> Public withdrawal requests enter the queue below for administrator 1-click review and payout execution.
+                  </span>
+                )}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <button
+              onClick={handleToggleMode}
+              disabled={togglingMode}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap ${
+                autoWithdrawalEnabled
+                  ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                  : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+              }`}
+            >
+              {togglingMode ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                <span>
-                  <strong className="text-amber-400">Manual Approval Mode Active:</strong> Public withdrawal requests enter the queue below for administrator 1-click review and payout execution.
-                </span>
+                <Power className="w-4 h-4" />
               )}
-            </p>
+              <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
+            </button>
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
-          <button
-            onClick={handleToggleMode}
-            disabled={togglingMode}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer shadow-lg active:scale-95 whitespace-nowrap ${
-              autoWithdrawalEnabled
-                ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                : 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
-            }`}
-          >
-            {togglingMode ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
+        {/* Mother Payout Wallet Signer Status Bar */}
+        <div className={`px-4 py-2.5 rounded-xl border text-xs font-mono flex flex-wrap items-center justify-between gap-2 ${
+          isSignerConfigured
+            ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+            : 'bg-amber-950/30 border-amber-500/30 text-amber-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            <ShieldCheck className={`w-4 h-4 shrink-0 ${isSignerConfigured ? 'text-emerald-400' : 'text-amber-400'}`} />
+            {isSignerConfigured ? (
+              <span>
+                <strong>Mother Payout Signer Connected:</strong> {payoutWalletAddress}
+              </span>
             ) : (
-              <Power className="w-4 h-4" />
+              <span>
+                <strong>Mother Wallet Signer (`PAYOUT_PRIVATE_KEY`):</strong> Not configured in Server Secrets. Set <code className="px-1.5 py-0.5 rounded bg-black/40 text-amber-300">PAYOUT_PRIVATE_KEY</code> in <strong>AI Studio Settings → Secrets</strong> (or Cloud Run Env) for 1-click auto broadcast, or use <strong>Complete</strong> below with a manual TxHash.
+              </span>
             )}
-            <span>{autoWithdrawalEnabled ? 'Switch to Manual Approval' : 'Switch to Full Automatic'}</span>
-          </button>
+          </div>
+          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+            isSignerConfigured ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
+          }`}>
+            {isSignerConfigured ? 'SIGNER READY' : 'MANUAL / AWAITING SECRET'}
+          </span>
         </div>
       </div>
 

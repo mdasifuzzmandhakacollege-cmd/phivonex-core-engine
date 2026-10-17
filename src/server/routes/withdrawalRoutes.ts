@@ -523,11 +523,33 @@ withdrawalRouter.get('/admin/mode', requireAdmin, async (req: AuthRequest, res: 
       }
     }
 
+    const rawKey = (process.env.PAYOUT_PRIVATE_KEY || process.env.TREASURY_PRIVATE_KEY || '').trim();
+    const isValidKey =
+      rawKey.length > 0 &&
+      !rawKey.includes('YOUR_MOTHER_PAYOUT_WALLET') &&
+      !rawKey.includes('PLACEHOLDER');
+    let payoutWalletAddress: string | null = null;
+    let isSignerConfigured = false;
+
+    if (isValidKey) {
+      try {
+        const { ethers } = await import('ethers');
+        const cleanKey = rawKey.startsWith('0x') ? rawKey : `0x${rawKey}`;
+        const w = new ethers.Wallet(cleanKey);
+        payoutWalletAddress = w.address;
+        isSignerConfigured = true;
+      } catch {
+        isSignerConfigured = false;
+      }
+    }
+
     return res.status(200).json({
       success: true,
       minWithdrawalAmount: minRes,
       autoWithdrawalEnabled: autoEnabled,
       mode: autoEnabled ? 'FULL_AUTOMATIC' : 'MANUAL_APPROVAL',
+      isSignerConfigured,
+      payoutWalletAddress,
     });
   } catch (err: any) {
     console.error('[Withdrawal API] Error fetching mode:', err);
