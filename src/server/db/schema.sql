@@ -628,5 +628,31 @@ CREATE INDEX IF NOT EXISTS idx_support_tickets_user_id ON support_tickets (user_
 CREATE INDEX IF NOT EXISTS idx_support_tickets_status ON support_tickets (status);
 CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket_id ON support_ticket_messages (ticket_id);
 
+-- Binance-Grade KYC Verifications Table
+CREATE TABLE IF NOT EXISTS kyc_verifications (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  full_legal_name VARCHAR(255) NOT NULL,
+  dob VARCHAR(50) NOT NULL,
+  country VARCHAR(100) NOT NULL,
+  residential_address TEXT NOT NULL,
+  city VARCHAR(100) NOT NULL,
+  postal_code VARCHAR(50) NOT NULL,
+  document_type VARCHAR(50) NOT NULL,
+  document_number VARCHAR(100) NOT NULL,
+  document_front_url TEXT NOT NULL,
+  document_back_url TEXT NULL,
+  selfie_photo_url TEXT NOT NULL,
+  status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+  rejection_reason TEXT NULL,
+  reviewer_id UUID NULL,
+  reviewed_at TIMESTAMP WITH TIME ZONE NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_kyc_verifications_user_id ON kyc_verifications (user_id);
+CREATE INDEX IF NOT EXISTS idx_kyc_verifications_status ON kyc_verifications (status);
+
 
 

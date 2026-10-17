@@ -13,6 +13,9 @@ export interface AuthenticatedUser {
   role: string;
   emailVerified: boolean;
   emailVerifiedAt: string | null;
+  kycStatus?: 'UNVERIFIED' | 'PENDING' | 'VERIFIED' | 'REJECTED';
+  kycRejectReason?: string | null;
+  kycVerifiedAt?: string | null;
   created_at?: string;
   last_login_at?: string;
 }
@@ -70,6 +73,9 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
         u.status,
         COALESCE(u.role, 'USER') AS role,
         u.email_verified_at,
+        COALESCE(u.kyc_status, 'UNVERIFIED') AS kyc_status,
+        u.kyc_reject_reason,
+        u.kyc_verified_at,
         u.created_at,
         u.last_login_at
       FROM sessions s
@@ -161,6 +167,9 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
       role: resolvedRole,
       emailVerified: !!row.email_verified_at,
       emailVerifiedAt: row.email_verified_at,
+      kycStatus: row.kyc_status || 'UNVERIFIED',
+      kycRejectReason: row.kyc_reject_reason || null,
+      kycVerifiedAt: row.kyc_verified_at || null,
       created_at: row.created_at,
       last_login_at: row.last_login_at,
     };

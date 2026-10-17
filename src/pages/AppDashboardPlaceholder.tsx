@@ -12,11 +12,13 @@ import {
   Share2,
   Tag,
   UserCheck,
-  Loader2
+  Loader2,
+  QrCode,
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { useAuth } from '../context/AuthContext';
 import { buildPublicReferralUrl } from '../utils/referralUrl';
+import { ReferralShareModal } from '../components/modals/ReferralShareModal';
 
 interface AppDashboardPlaceholderProps {
   onNavigate: (route: string) => void;
@@ -38,6 +40,7 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
   const [loadingReferral, setLoadingReferral] = useState(true);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -202,10 +205,18 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
                     />
                     <button
                       onClick={handleCopyLink}
-                      className="px-4 py-2 rounded-lg bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-[#00CFFF]/20"
+                      className="px-3.5 py-2 rounded-lg bg-white/[0.08] hover:bg-white/[0.14] text-white border border-white/[0.1] font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0"
                     >
-                      {copiedLink ? <Check className="w-3.5 h-3.5 text-[#05070B]" /> : <Share2 className="w-3.5 h-3.5" />}
-                      <span>{copiedLink ? 'Link Copied!' : 'Copy Link'}</span>
+                      {copiedLink ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedLink ? 'Link Copied!' : 'Copy'}</span>
+                    </button>
+                    <button
+                      onClick={() => setShareModalOpen(true)}
+                      className="px-4 py-2 rounded-lg bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer shrink-0 shadow-md shadow-[#00CFFF]/20"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <Share2 className="w-3.5 h-3.5" />
+                      <span>Share & QR</span>
                     </button>
                   </div>
                 </div>
@@ -290,6 +301,15 @@ export const AppDashboardPlaceholder: React.FC<AppDashboardPlaceholderProps> = (
       <footer className="py-4 border-t border-white/[0.06] text-center text-[11px] text-[#98A2B3] font-mono">
         © 2026 PHIVONEX. All rights reserved.
       </footer>
+
+      {/* Referral Share Modal */}
+      <ReferralShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        referralCode={referralInfo?.referralCode || user?.referralCode || 'PHX-MEMBER'}
+        referralUrl={effectiveReferralUrl}
+        userName={user?.fullName || referralInfo?.sponsor?.displayName}
+      />
     </div>
   );
 };

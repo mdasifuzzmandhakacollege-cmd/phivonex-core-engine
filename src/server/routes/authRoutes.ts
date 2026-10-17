@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/db';
 import { hashPassword, verifyPassword, generateRandomToken, hashToken } from '../utils/crypto';
-import { generatePublicId, generateReferralCode, normalizeReferralCode } from '../utils/idGenerator';
+import { generatePublicId, generateReferralCode, normalizeReferralCode, resolveSponsorUserId } from '../utils/idGenerator';
 import { requireAuth, AuthRequest, isUserAdmin } from '../middleware/authMiddleware';
 import { authLimiter, loginLimiter, registrationLimiter, passwordResetLimiter } from '../middleware/rateLimiter';
 import { logSecurityEvent, parseUserAgentSummary } from '../utils/securityLogger';
@@ -182,21 +182,14 @@ router.post('/register/request-verification', registrationLimiter, async (req: R
       }
     }
 
-    // 4. Resolve sponsor user ID if referralCode provided
+    // 4. Resolve sponsor user ID if referralCode provided (supports code, publicId, or email)
     let sponsorUserId: string | null = null;
     let pendingCodeToStore: string | null = null;
 
     if (referralCode && typeof referralCode === 'string' && referralCode.trim() !== '') {
-      const normalizedCode = normalizeReferralCode(referralCode);
-      const sponsorResult = await db.query<{ user_id: string }>(
-        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-        [normalizedCode]
-      );
-
-      if (sponsorResult.rowCount > 0) {
-        sponsorUserId = sponsorResult.rows[0].user_id;
-      } else {
-        pendingCodeToStore = normalizedCode;
+      sponsorUserId = await resolveSponsorUserId(db, referralCode);
+      if (!sponsorUserId) {
+        pendingCodeToStore = normalizeReferralCode(referralCode);
       }
     }
 
@@ -591,21 +584,14 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       }
     }
 
-    // 4. Resolve sponsor user ID if referralCode provided
+    // 4. Resolve sponsor user ID if referralCode provided (supports code, publicId, or email)
     let sponsorUserId: string | null = null;
     let pendingCodeToStore: string | null = null;
 
     if (referralCode && typeof referralCode === 'string' && referralCode.trim() !== '') {
-      const normalizedCode = normalizeReferralCode(referralCode);
-      const sponsorResult = await db.query<{ user_id: string }>(
-        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-        [normalizedCode]
-      );
-
-      if (sponsorResult.rowCount > 0) {
-        sponsorUserId = sponsorResult.rows[0].user_id;
-      } else {
-        pendingCodeToStore = normalizedCode;
+      sponsorUserId = await resolveSponsorUserId(db, referralCode);
+      if (!sponsorUserId) {
+        pendingCodeToStore = normalizeReferralCode(referralCode);
       }
     }
 
@@ -756,19 +742,13 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
       const publicId = await getUniquePublicId(db);
       const newReferralCode = await getUniqueReferralCode(db);
 
-      // Resolve sponsor
+      // Resolve sponsor (supports code, publicId, or email)
       let sponsorUserId: string | null = null;
       let pendingCodeToStore: string | null = null;
       if (referralCode && typeof referralCode === 'string' && referralCode.trim() !== '') {
-        const normalizedCode = normalizeReferralCode(referralCode);
-        const sponsorResult = await db.query<{ user_id: string }>(
-          `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-          [normalizedCode]
-        );
-        if (sponsorResult.rowCount > 0) {
-          sponsorUserId = sponsorResult.rows[0].user_id;
-        } else {
-          pendingCodeToStore = normalizedCode;
+        sponsorUserId = await resolveSponsorUserId(db, referralCode);
+        if (!sponsorUserId) {
+          pendingCodeToStore = normalizeReferralCode(referralCode);
         }
       }
 
@@ -1106,6 +1086,9 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
         role: user.role,
         isAdmin: isUserAdmin(user),
         emailVerified: user.emailVerified,
+        kycStatus: user.kycStatus || 'UNVERIFIED',
+        kycRejectReason: user.kycRejectReason || null,
+        kycVerifiedAt: user.kycVerifiedAt || null,
         createdAt: user.created_at,
         lastLoginAt: user.last_login_at,
       },

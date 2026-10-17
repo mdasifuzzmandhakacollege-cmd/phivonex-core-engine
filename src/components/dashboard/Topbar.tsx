@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ExternalLink,
   Shield,
+  ShieldAlert,
   Bell,
   CheckCheck,
   Check,
@@ -22,6 +23,7 @@ import { UserProfile } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { DashboardTab } from './Sidebar';
+import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 
 interface TopbarProps {
   user: UserProfile | null;
@@ -43,6 +45,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   const { isConnected } = useSystemConfig();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isKycModalOpen, setIsKycModalOpen] = useState(false);
   const [availableBalance, setAvailableBalance] = useState<number | null>(null);
 
   // Poll available wallet balance for real-time header display
@@ -316,6 +319,44 @@ export const Topbar: React.FC<TopbarProps> = ({
           )}
         </div>
 
+        {/* Binance-grade KYC Verification Badge & Modal Trigger */}
+        <button
+          type="button"
+          onClick={() => setIsKycModalOpen(true)}
+          className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer min-h-[42px] active:scale-95 ${
+            user?.kycStatus === 'VERIFIED'
+              ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+              : user?.kycStatus === 'PENDING'
+              ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30 animate-pulse'
+              : user?.kycStatus === 'REJECTED'
+              ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+              : 'bg-gradient-to-r from-amber-500/15 to-yellow-500/15 hover:from-amber-500/25 hover:to-yellow-500/25 text-amber-300 border-amber-500/40 shadow-sm'
+          }`}
+          title="Binance-grade Identity Verification (KYC)"
+        >
+          {user?.kycStatus === 'VERIFIED' ? (
+            <>
+              <ShieldCheck className="w-4 h-4 text-emerald-400" />
+              <span>Verified Level 1</span>
+            </>
+          ) : user?.kycStatus === 'PENDING' ? (
+            <>
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span>KYC Under Review</span>
+            </>
+          ) : user?.kycStatus === 'REJECTED' ? (
+            <>
+              <ShieldAlert className="w-4 h-4 text-rose-400" />
+              <span>KYC Attention</span>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-4 h-4 text-amber-400" />
+              <span>Verify KYC</span>
+            </>
+          )}
+        </button>
+
         {/* User Avatar / Dropdown Trigger */}
         <div className="relative" ref={userMenuRef}>
           <button
@@ -392,6 +433,29 @@ export const Topbar: React.FC<TopbarProps> = ({
                   <span>Account Profile</span>
                 </button>
 
+                {/* KYC Identity Verification Menu Item */}
+                <button
+                  onClick={() => {
+                    setIsUserMenuOpen(false);
+                    setIsKycModalOpen(true);
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <ShieldCheck className="w-4 h-4 text-amber-400" />
+                    <span>Identity Verification (KYC)</span>
+                  </div>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                    user?.kycStatus === 'VERIFIED'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : user?.kycStatus === 'PENDING'
+                      ? 'bg-amber-500/20 text-amber-300'
+                      : 'bg-white/[0.06] text-slate-300'
+                  }`}>
+                    {user?.kycStatus || 'Unverified'}
+                  </span>
+                </button>
+
                 <button
                   onClick={() => {
                     onSelectTab('security');
@@ -435,6 +499,12 @@ export const Topbar: React.FC<TopbarProps> = ({
           )}
         </div>
       </div>
+
+      {/* Binance-Grade KYC Modal */}
+      <BinanceKYCModal
+        isOpen={isKycModalOpen}
+        onClose={() => setIsKycModalOpen(false)}
+      />
     </header>
   );
 };

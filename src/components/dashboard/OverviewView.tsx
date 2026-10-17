@@ -20,9 +20,13 @@ import {
   Trophy,
   Zap,
   ShieldCheck,
+  ShieldAlert,
+  QrCode,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
+import { ReferralShareModal } from '../modals/ReferralShareModal';
+import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
@@ -145,6 +149,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
   const [copiedId, setCopiedId] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [isKycModalOpen, setIsKycModalOpen] = useState(false);
 
   // Fetch all authoritative dashboard data in parallel
   const fetchDashboardData = useCallback(async (isManual = false) => {
@@ -371,6 +377,79 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
+      {/* ========================================================
+          0. BINANCE-GRADE KYC STATUS BANNER (REAL-TIME SYNC)
+         ======================================================== */}
+      {user?.kycStatus !== 'VERIFIED' && (
+        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg transition-all animate-fadeIn ${
+          user?.kycStatus === 'PENDING'
+            ? 'bg-amber-950/30 border-amber-500/30 text-amber-200'
+            : user?.kycStatus === 'REJECTED'
+            ? 'bg-rose-950/30 border-rose-500/30 text-rose-200'
+            : 'bg-gradient-to-r from-amber-950/40 via-[#0A162B] to-[#07101E] border-amber-500/30 text-amber-100'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center shrink-0 ${
+              user?.kycStatus === 'PENDING'
+                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300 animate-pulse'
+                : user?.kycStatus === 'REJECTED'
+                ? 'bg-rose-500/20 border-rose-500/30 text-rose-300'
+                : 'bg-amber-500/20 border-amber-400/30 text-amber-300'
+            }`}>
+              {user?.kycStatus === 'PENDING' ? (
+                <Clock className="w-5 h-5 text-amber-400 animate-spin" />
+              ) : user?.kycStatus === 'REJECTED' ? (
+                <ShieldAlert className="w-5 h-5 text-rose-400" />
+              ) : (
+                <ShieldCheck className="w-5 h-5 text-amber-400" />
+              )}
+            </div>
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <span className="text-xs sm:text-sm font-bold text-white font-mono">
+                  {user?.kycStatus === 'PENDING'
+                    ? 'Identity Verification Under Review'
+                    : user?.kycStatus === 'REJECTED'
+                    ? 'Identity Verification Attention Required'
+                    : 'Level 1 Identity Verification (KYC)'}
+                </span>
+                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
+                  user?.kycStatus === 'PENDING'
+                    ? 'bg-amber-500/20 text-amber-300'
+                    : user?.kycStatus === 'REJECTED'
+                    ? 'bg-rose-500/20 text-rose-300'
+                    : 'bg-amber-500/20 text-amber-300'
+                }`}>
+                  {user?.kycStatus || 'Action Required'}
+                </span>
+              </div>
+              <p className="text-[11px] text-[#98A2B3]">
+                {user?.kycStatus === 'PENDING'
+                  ? 'Your identity documents and biometric facial scan are undergoing real-time review. Estimated completion: 2-10 mins.'
+                  : user?.kycStatus === 'REJECTED'
+                  ? `Previous submission note: "${user?.kycRejectReason || 'Please resubmit sharp document images'}". Click below to resubmit.`
+                  : 'Unlock up to 100,000 USDT daily withdrawal capacity and unrestricted Genesis Node privileges.'}
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsKycModalOpen(true)}
+            className={`px-4 py-2 rounded-xl font-bold text-xs font-mono shrink-0 flex items-center gap-1.5 transition-all shadow-md cursor-pointer ${
+              user?.kycStatus === 'PENDING'
+                ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
+                : user?.kycStatus === 'REJECTED'
+                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
+                : 'bg-amber-400 hover:bg-amber-300 text-black shadow-amber-400/20'
+            }`}
+          >
+            <span>{user?.kycStatus === 'PENDING' ? 'View Review Status' : user?.kycStatus === 'REJECTED' ? 'Resubmit Documents' : 'Verify Identity Now'}</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* ========================================================
           0. DYNAMIC PROMOTIONAL & PROTOCOL NOTICES
          ======================================================== */}
@@ -913,14 +992,28 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
                 <button
                   onClick={handleCopyLink}
                   disabled={isReferralPending}
-                  className={`px-4 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] ${
+                  className={`px-3 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] ${
+                    isReferralPending
+                      ? 'bg-white/[0.04] border border-white/[0.08] text-[#667085] cursor-not-allowed'
+                      : 'bg-white/[0.08] hover:bg-white/[0.15] text-white border border-white/[0.1] cursor-pointer'
+                  }`}
+                >
+                  {copiedLink ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedLink ? 'Copied' : 'Copy'}</span>
+                </button>
+                <button
+                  onClick={() => setShareModalOpen(true)}
+                  disabled={isReferralPending}
+                  className={`px-3.5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] shadow-[0_0_20px_rgba(0,207,255,0.25)] ${
                     isReferralPending
                       ? 'bg-white/[0.04] border border-white/[0.08] text-[#667085] cursor-not-allowed'
                       : 'bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] cursor-pointer'
                   }`}
+                  title="Open QR Code & Social Share"
                 >
-                  {copiedLink ? <Check className="w-3.5 h-3.5 text-[#05070B]" /> : <Share2 className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
+                  <QrCode className="w-3.5 h-3.5" />
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Share & QR</span>
                 </button>
               </div>
             </div>
@@ -1147,6 +1240,21 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           </div>
         </div>
       </div>
+
+      {/* Branded Referral Share & QR Code Modal */}
+      <ReferralShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        referralCode={displayReferralCode}
+        referralUrl={effectiveReferralUrl}
+        userName={user?.fullName || referralData?.sponsor?.displayName}
+      />
+
+      {/* Binance-Grade KYC Modal */}
+      <BinanceKYCModal
+        isOpen={isKycModalOpen}
+        onClose={() => setIsKycModalOpen(false)}
+      />
     </div>
   );
 };

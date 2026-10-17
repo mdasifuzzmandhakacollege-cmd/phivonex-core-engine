@@ -14,6 +14,7 @@ import {
   createPromotionalOffer,
   updatePromotionalOffer,
   deletePromotionalOffer,
+  claimAndPayPromotionalOffer,
   getPromotionalBanners,
   createPromotionalBanner,
   updatePromotionalBanner,
@@ -205,6 +206,28 @@ promotionRouter.get('/offers', requireAuth, async (req: AuthRequest, res: Respon
   } catch (err: any) {
     console.error('[Promotion API] Error fetching offers:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve promotional offers.' });
+  }
+});
+
+/**
+ * POST /api/promotions/offers/:id/claim-and-pay
+ * Claim and pay for an active promotional offer using user's available deposit or wallet balance.
+ */
+promotionRouter.post('/offers/:id/claim-and-pay', requireAuth, async (req: AuthRequest, res: Response) => {
+  try {
+    const user = req.user!;
+    const offerId = req.params.id;
+    const preferredAsset = (req.body?.preferredAsset === 'BNB' ? 'BNB' : 'USDT') as 'USDT' | 'BNB';
+
+    const result = await claimAndPayPromotionalOffer(user.id, offerId, preferredAsset);
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Promotion API] Error claiming offer:', err);
+    return res.status(400).json({
+      success: false,
+      error: 'CLAIM_FAILED',
+      message: err.message || 'Failed to claim and pay for promotional offer.',
+    });
   }
 });
 

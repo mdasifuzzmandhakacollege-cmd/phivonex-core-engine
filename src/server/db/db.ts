@@ -744,6 +744,15 @@ async function initSchema(client: DatabaseClient) {
       // Column may already exist or table empty
     }
 
+    // Ensure KYC columns exist on users
+    try {
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(50) NOT NULL DEFAULT 'UNVERIFIED';`);
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_reject_reason TEXT NULL;`);
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_verified_at TIMESTAMP WITH TIME ZONE NULL;`);
+    } catch {
+      // Columns may already exist
+    }
+
     // Ensure reward_epochs allows NULL reward_per_node when rate is not finalized
     try {
       await client.exec(`ALTER TABLE reward_epochs ALTER COLUMN reward_per_node DROP NOT NULL;`);
@@ -1343,11 +1352,17 @@ async function initSchema(client: DatabaseClient) {
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_mining_rewards BOOLEAN NOT NULL DEFAULT TRUE;
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_matching_enabled BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_referral_commission BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS promotional_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS badge_tag VARCHAR(50) NOT NULL DEFAULT 'HOT_DEAL';
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS total_allocated_slots INTEGER NOT NULL DEFAULT 100;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS claimed_slots INTEGER NOT NULL DEFAULT 18;
 
         -- Seed BOGO offer if none exists
         INSERT INTO promotional_offers (
           id, title, description, banner_image, offer_type, bonus_nodes_count,
           bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+          promotional_price_usd, discount_percent, badge_tag, total_allocated_slots, claimed_slots,
           start_date, end_date, status, target_audience, priority_order
         )
         SELECT
@@ -1360,6 +1375,11 @@ async function initSchema(client: DatabaseClient) {
           TRUE,
           FALSE,
           FALSE,
+          1000.00,
+          0.00,
+          'HOT_DEAL',
+          100,
+          24,
           CURRENT_TIMESTAMP - INTERVAL '1 day',
           CURRENT_TIMESTAMP + INTERVAL '90 days',
           'ACTIVE',
@@ -1392,9 +1412,34 @@ async function initSchema(client: DatabaseClient) {
           ('leaderboard_metric', '"DIRECT_REFERRALS"'),
           ('performance_popup', '{"enabled":true,"metric":"DIRECT_REFERRALS","topCount":3,"durationSeconds":5}')
         ON CONFLICT (key) DO NOTHING;
+
+        -- Binance-Grade KYC Verifications Table
+        CREATE TABLE IF NOT EXISTS kyc_verifications (
+          id UUID PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          full_legal_name VARCHAR(255) NOT NULL,
+          dob VARCHAR(50) NOT NULL,
+          country VARCHAR(100) NOT NULL,
+          residential_address TEXT NOT NULL,
+          city VARCHAR(100) NOT NULL,
+          postal_code VARCHAR(50) NOT NULL,
+          document_type VARCHAR(50) NOT NULL,
+          document_number VARCHAR(100) NOT NULL,
+          document_front_url TEXT NOT NULL,
+          document_back_url TEXT NULL,
+          selfie_photo_url TEXT NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+          rejection_reason TEXT NULL,
+          reviewer_id UUID NULL,
+          reviewed_at TIMESTAMP WITH TIME ZONE NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_kyc_verifications_user_id ON kyc_verifications (user_id);
+        CREATE INDEX IF NOT EXISTS idx_kyc_verifications_status ON kyc_verifications (status);
       `);
     } catch (task233BErr) {
-      console.warn('[DB Migration] Task #23.3B Promotional schema migration warning:', task233BErr);
+      console.warn('[DB Migration] Task #23.3B Promotional and KYC schema migration warning:', task233BErr);
     }
 
     // Task #23.4: Dynamic Email & Automation Engine Tables

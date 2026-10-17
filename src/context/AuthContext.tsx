@@ -7,7 +7,7 @@ import {
   signOut as fbSignOut,
   updateProfile,
 } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
 export interface UserProfile {
   id: string;
@@ -21,6 +21,9 @@ export interface UserProfile {
   role?: string;
   isAdmin?: boolean;
   emailVerified: boolean;
+  kycStatus?: 'UNVERIFIED' | 'PENDING' | 'VERIFIED' | 'REJECTED';
+  kycRejectReason?: string | null;
+  kycVerifiedAt?: string | null;
   createdAt?: string;
   lastLoginAt?: string;
 }
@@ -127,6 +130,68 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
   }, [refreshUser]);
+
+  // Real-time Firestore sync for user KYC status & instant admin updates (< seconds)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    // Listen to custom window events triggered on KYC submit/review
+    const handleKycEvent = (e: any) => {
+      const status = e?.detail?.status;
+      if (status) {
+        setUser((prev) => (prev ? { ...prev, kycStatus: status } : null));
+      }
+      refreshUser();
+    };
+    window.addEventListener('phivonex:kyc-updated', handleKycEvent);
+
+    let unsubUserDoc: (() => void) | undefined;
+    let unsubKycDoc: (() => void) | undefined;
+
+    try {
+      // 1. Listen to user profile document
+      unsubUserDoc = onSnapshot(doc(db, 'users', user.id), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          setUser((prev) => {
+            if (!prev) return null;
+            return {
+              ...prev,
+              kycStatus: data.kycStatus || prev.kycStatus,
+              kycRejectReason: data.kycRejectReason !== undefined ? data.kycRejectReason : prev.kycRejectReason,
+              status: data.status || prev.status,
+              role: data.role || prev.role,
+            };
+          });
+        }
+      }, () => {});
+
+      // 2. Listen to user's KYC verification document
+      unsubKycDoc = onSnapshot(doc(db, 'kyc_verifications', user.id), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.status) {
+            setUser((prev) => {
+              if (!prev) return null;
+              return {
+                ...prev,
+                kycStatus: data.status,
+                kycRejectReason: data.rejection_reason || null,
+              };
+            });
+          }
+        }
+      }, () => {});
+    } catch {
+      // fallback to polling gracefully
+    }
+
+    return () => {
+      window.removeEventListener('phivonex:kyc-updated', handleKycEvent);
+      if (unsubUserDoc) unsubUserDoc();
+      if (unsubKycDoc) unsubKycDoc();
+    };
+  }, [user?.id, refreshUser]);
 
   // 1. Register with backend API & Firebase
   const register = async (data: {

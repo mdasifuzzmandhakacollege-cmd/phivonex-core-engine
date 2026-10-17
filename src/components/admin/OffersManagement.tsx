@@ -33,6 +33,11 @@ export interface PromotionalOffer {
   bonusMiningRewards: boolean;
   bonusMatchingEnabled: boolean;
   bonusReferralCommission: boolean;
+  promotionalPriceUsd?: number;
+  discountPercent?: number;
+  badgeTag?: string;
+  totalAllocatedSlots?: number;
+  claimedSlots?: number;
   startDate: string;
   endDate: string;
   status: 'ACTIVE' | 'INACTIVE';
@@ -90,6 +95,10 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
     bonusMiningRewards: boolean;
     bonusMatchingEnabled: boolean;
     bonusReferralCommission: boolean;
+    promotionalPriceUsd: number;
+    discountPercent: number;
+    badgeTag: string;
+    totalAllocatedSlots: number;
     startDate: string;
     endDate: string;
     status: 'ACTIVE' | 'INACTIVE';
@@ -104,6 +113,10 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
     bonusMiningRewards: true, // Free bonus node earns daily coin mining rewards
     bonusMatchingEnabled: false, // Free bonus node does NOT generate binary matching spots/volume
     bonusReferralCommission: false, // Free bonus node does NOT generate direct referral spot commissions
+    promotionalPriceUsd: 1000.00,
+    discountPercent: 0.00,
+    badgeTag: '🔥 HOT_DEAL',
+    totalAllocatedSlots: 100,
     startDate: new Date().toISOString().slice(0, 16),
     endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
     status: 'ACTIVE',
@@ -142,6 +155,10 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
       bonusMiningRewards: true,
       bonusMatchingEnabled: false,
       bonusReferralCommission: false,
+      promotionalPriceUsd: 1000.00,
+      discountPercent: 0.00,
+      badgeTag: '🔥 HOT_DEAL',
+      totalAllocatedSlots: 100,
       startDate: new Date().toISOString().slice(0, 16),
       endDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16),
       status: 'ACTIVE',
@@ -163,6 +180,10 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
       bonusMiningRewards: offer.bonusMiningRewards,
       bonusMatchingEnabled: offer.bonusMatchingEnabled,
       bonusReferralCommission: offer.bonusReferralCommission,
+      promotionalPriceUsd: offer.promotionalPriceUsd ?? 1000.00,
+      discountPercent: offer.discountPercent ?? 0.00,
+      badgeTag: offer.badgeTag || '🔥 HOT_DEAL',
+      totalAllocatedSlots: offer.totalAllocatedSlots ?? 100,
       startDate: new Date(offer.startDate).toISOString().slice(0, 16),
       endDate: new Date(offer.endDate).toISOString().slice(0, 16),
       status: offer.status,
@@ -610,6 +631,56 @@ export const OffersManagement: React.FC<OffersManagementProps> = ({ adminEmail, 
                     value={formData.bonusNodesCount}
                     onChange={(e) => setFormData({ ...formData, bonusNodesCount: parseInt(e.target.value, 10) || 1 })}
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs focus:outline-none focus:border-purple-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Pricing, Discount, Badge Tag, and Allocation Slots */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Price (USDT)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.promotionalPriceUsd}
+                    onChange={(e) => setFormData({ ...formData, promotionalPriceUsd: parseFloat(e.target.value) || 1000 })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Discount %</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    value={formData.discountPercent}
+                    onChange={(e) => setFormData({ ...formData, discountPercent: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Badge Tag</label>
+                  <input
+                    type="text"
+                    value={formData.badgeTag}
+                    onChange={(e) => setFormData({ ...formData, badgeTag: e.target.value })}
+                    placeholder="🔥 HOT_DEAL"
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1">Total Slots</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={formData.totalAllocatedSlots}
+                    onChange={(e) => setFormData({ ...formData, totalAllocatedSlots: parseInt(e.target.value, 10) || 100 })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono focus:outline-none focus:border-purple-500"
                   />
                 </div>
               </div>

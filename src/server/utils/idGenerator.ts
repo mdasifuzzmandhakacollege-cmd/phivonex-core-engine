@@ -137,3 +137,36 @@ export function formatSafeDisplayName(fullName: string): string {
   const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
   return `${firstName} ${lastInitial}.`;
 }
+
+/**
+ * Robustly resolves a sponsor's internal user ID from:
+ * 1. Referral Code (e.g. PHX-REF-XXXXXX or custom code)
+ * 2. Public ID (e.g. PHX-XXXXXX)
+ * 3. Sponsor Email address
+ */
+export async function resolveSponsorUserId(
+  db: any,
+  rawInput: string
+): Promise<string | null> {
+  const clean = (rawInput || '').trim();
+  if (!clean || clean.length < 3) return null;
+
+  try {
+    const res = await db.query(
+      `SELECT r.user_id 
+       FROM user_referrals r
+       JOIN users u ON r.user_id = u.id
+       WHERE UPPER(TRIM(r.referral_code)) = UPPER(TRIM($1))
+          OR UPPER(TRIM(u.public_id)) = UPPER(TRIM($1))
+          OR LOWER(TRIM(u.email)) = LOWER(TRIM($1))
+       LIMIT 1`,
+      [clean]
+    );
+
+    return res.rows[0]?.user_id || null;
+  } catch (err) {
+    console.warn('[ReferralResolution] Error resolving sponsor input:', err);
+    return null;
+  }
+}
+

@@ -77,6 +77,26 @@ function formatSafeDisplayName(fullName) {
   const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
   return `${firstName} ${lastInitial}.`;
 }
+async function resolveSponsorUserId(db, rawInput) {
+  const clean = (rawInput || "").trim();
+  if (!clean || clean.length < 3) return null;
+  try {
+    const res = await db.query(
+      `SELECT r.user_id 
+       FROM user_referrals r
+       JOIN users u ON r.user_id = u.id
+       WHERE UPPER(TRIM(r.referral_code)) = UPPER(TRIM($1))
+          OR UPPER(TRIM(u.public_id)) = UPPER(TRIM($1))
+          OR LOWER(TRIM(u.email)) = LOWER(TRIM($1))
+       LIMIT 1`,
+      [clean]
+    );
+    return res.rows[0]?.user_id || null;
+  } catch (err) {
+    console.warn("[ReferralResolution] Error resolving sponsor input:", err);
+    return null;
+  }
+}
 var CHARS;
 var init_idGenerator = __esm({
   "src/server/utils/idGenerator.ts"() {
@@ -3073,6 +3093,12 @@ async function initSchema(client) {
     } catch {
     }
     try {
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(50) NOT NULL DEFAULT 'UNVERIFIED';`);
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_reject_reason TEXT NULL;`);
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_verified_at TIMESTAMP WITH TIME ZONE NULL;`);
+    } catch {
+    }
+    try {
       await client.exec(`ALTER TABLE reward_epochs ALTER COLUMN reward_per_node DROP NOT NULL;`);
       await client.exec(`ALTER TABLE reward_epochs DROP CONSTRAINT IF EXISTS chk_epoch_reward;`);
       await client.exec(`ALTER TABLE reward_epochs ADD CONSTRAINT chk_epoch_reward CHECK (reward_per_node IS NULL OR reward_per_node > 0);`);
@@ -3633,11 +3659,17 @@ async function initSchema(client) {
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_mining_rewards BOOLEAN NOT NULL DEFAULT TRUE;
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_matching_enabled BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS bonus_referral_commission BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS promotional_price_usd NUMERIC(12, 2) NOT NULL DEFAULT 1000.00;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS badge_tag VARCHAR(50) NOT NULL DEFAULT 'HOT_DEAL';
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS total_allocated_slots INTEGER NOT NULL DEFAULT 100;
+        ALTER TABLE promotional_offers ADD COLUMN IF NOT EXISTS claimed_slots INTEGER NOT NULL DEFAULT 18;
 
         -- Seed BOGO offer if none exists
         INSERT INTO promotional_offers (
           id, title, description, banner_image, offer_type, bonus_nodes_count,
           bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+          promotional_price_usd, discount_percent, badge_tag, total_allocated_slots, claimed_slots,
           start_date, end_date, status, target_audience, priority_order
         )
         SELECT
@@ -3650,6 +3682,11 @@ async function initSchema(client) {
           TRUE,
           FALSE,
           FALSE,
+          1000.00,
+          0.00,
+          'HOT_DEAL',
+          100,
+          24,
           CURRENT_TIMESTAMP - INTERVAL '1 day',
           CURRENT_TIMESTAMP + INTERVAL '90 days',
           'ACTIVE',
@@ -3682,9 +3719,34 @@ async function initSchema(client) {
           ('leaderboard_metric', '"DIRECT_REFERRALS"'),
           ('performance_popup', '{"enabled":true,"metric":"DIRECT_REFERRALS","topCount":3,"durationSeconds":5}')
         ON CONFLICT (key) DO NOTHING;
+
+        -- Binance-Grade KYC Verifications Table
+        CREATE TABLE IF NOT EXISTS kyc_verifications (
+          id UUID PRIMARY KEY,
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          full_legal_name VARCHAR(255) NOT NULL,
+          dob VARCHAR(50) NOT NULL,
+          country VARCHAR(100) NOT NULL,
+          residential_address TEXT NOT NULL,
+          city VARCHAR(100) NOT NULL,
+          postal_code VARCHAR(50) NOT NULL,
+          document_type VARCHAR(50) NOT NULL,
+          document_number VARCHAR(100) NOT NULL,
+          document_front_url TEXT NOT NULL,
+          document_back_url TEXT NULL,
+          selfie_photo_url TEXT NOT NULL,
+          status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
+          rejection_reason TEXT NULL,
+          reviewer_id UUID NULL,
+          reviewed_at TIMESTAMP WITH TIME ZONE NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_kyc_verifications_user_id ON kyc_verifications (user_id);
+        CREATE INDEX IF NOT EXISTS idx_kyc_verifications_status ON kyc_verifications (status);
       `);
     } catch (task233BErr) {
-      console.warn("[DB Migration] Task #23.3B Promotional schema migration warning:", task233BErr);
+      console.warn("[DB Migration] Task #23.3B Promotional and KYC schema migration warning:", task233BErr);
     }
     try {
       await client.exec(`
@@ -5310,7 +5372,8 @@ async function getAdminSummaryMetrics() {
     matchingRes,
     promotionsRes,
     ledgerRes,
-    withdrawalsRes
+    withdrawalsRes,
+    kycRes
   ] = await Promise.all([
     db.query(`
       SELECT 
@@ -5363,7 +5426,12 @@ async function getAdminSummaryMetrics() {
         COALESCE(SUM(CASE WHEN status = 'REJECTED' THEN amount ELSE 0 END), 0)::float AS rejected_amount,
         COALESCE(SUM(CASE WHEN status = 'FAILED' THEN amount ELSE 0 END), 0)::float AS failed_amount
       FROM withdrawals
-    `)
+    `),
+    db.query(`
+      SELECT 
+        COUNT(CASE WHEN status = 'PENDING' THEN 1 END)::int AS pending_kyc
+      FROM kyc_verifications
+    `).catch(() => ({ rows: [{ pending_kyc: 0 }] }))
   ]);
   const uRow = usersRes.rows[0] || {};
   const nRow = nodesRes.rows[0] || {};
@@ -5396,6 +5464,7 @@ async function getAdminSummaryMetrics() {
     failedWithdrawalsCount: Number(wRow.failed_count || 0),
     failedWithdrawalsAmount: Number(wRow.failed_amount || 0),
     totalWithdrawalsAmount: Number(wRow.total_withdrawal_amount || 0),
+    pendingKycCount: Number(kycRes.rows[0]?.pending_kyc || 0),
     updatedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
@@ -7125,17 +7194,17 @@ var init_emailService = __esm({
       }
       async sendEmail(to, subject, html) {
         try {
-          const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || "phivonex.com";
+          const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || "phivonex.online";
           const fromAddress = process.env.EMAIL_FROM_ADDRESS || `support@${defaultDomain}`;
           const fromName = process.env.EMAIL_FROM_NAME || "PHIVONEX";
-          const from = `${fromName} <${fromAddress}>`;
-          const response = await fetch("https://api.resend.com/emails", {
+          let from = `${fromName} <${fromAddress}>`;
+          let response = await fetch("https://api.resend.com/emails", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "Authorization": `Bearer ${this.apiKey}`
             },
-            signal: AbortSignal.timeout(6e3),
+            signal: AbortSignal.timeout(8e3),
             body: JSON.stringify({
               from,
               to,
@@ -7143,13 +7212,36 @@ var init_emailService = __esm({
               html
             })
           });
-          const data = await response.json();
+          let data = await response.json();
+          if (!response.ok && (response.status === 403 || data?.name === "validation_error" || data?.message?.toLowerCase().includes("domain") || data?.error?.toLowerCase().includes("domain"))) {
+            console.warn(`[Resend Provider] Primary domain send from "${from}" failed domain check (${data?.message || data?.error}). Retrying with onboarding@resend.dev sandbox...`);
+            const fallbackFrom = `${fromName} <onboarding@resend.dev>`;
+            response = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${this.apiKey}`
+              },
+              signal: AbortSignal.timeout(8e3),
+              body: JSON.stringify({
+                from: fallbackFrom,
+                to,
+                subject,
+                html
+              })
+            });
+            data = await response.json();
+            if (response.ok) {
+              console.log(`[Resend Provider] Live email delivered via sandbox from ${fallbackFrom} to ${to}, ID: ${data?.id}`);
+              return { providerMessageId: data?.id };
+            }
+          }
           if (!response.ok) {
             console.warn("[Resend Provider] API response error:", data);
-            return { error: data.message || data.error || "Resend provider error" };
+            return { error: data?.message || data?.error || "Resend provider error" };
           }
-          console.log(`[Resend Provider] Live email sent successfully to ${to} from ${from}, ID: ${data.id}`);
-          return { providerMessageId: data.id };
+          console.log(`[Resend Provider] Live email sent successfully to ${to} from ${from}, ID: ${data?.id}`);
+          return { providerMessageId: data?.id };
         } catch (err) {
           console.warn("[Resend Provider] Network error communicating with Resend:", err);
           return { error: err.message || "Network error communicating with Resend" };
@@ -7159,9 +7251,584 @@ var init_emailService = __esm({
   }
 });
 
+// src/config/referralConfig.ts
+function formatPublicCommissionId(seq) {
+  const clean = typeof seq === "string" ? seq.replace(/\D/g, "") : seq;
+  const num = typeof clean === "number" ? clean : parseInt(clean, 10) || Math.floor(1e5 + Math.random() * 9e5);
+  return `PHX-COM-${String(num).padStart(6, "0")}`;
+}
+var init_referralConfig = __esm({
+  "src/config/referralConfig.ts"() {
+  }
+});
+
+// src/server/services/referralCommissionService.ts
+import { v4 as uuidv412 } from "uuid";
+async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId) {
+  const sponsorRes = await db.query(
+    `
+    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id
+    FROM users u
+    LEFT JOIN user_referrals ur ON u.id = ur.user_id
+    WHERE u.id = $1
+    `,
+    [buyerUserId]
+  );
+  if (sponsorRes.rows.length === 0) {
+    return null;
+  }
+  const { sponsor_user_id: sponsorUserId, buyer_public_id: buyerPublicId } = sponsorRes.rows[0];
+  if (!sponsorUserId || sponsorUserId === buyerUserId) {
+    return null;
+  }
+  const sponsorUserRes = await db.query(
+    `SELECT id, public_id, status FROM users WHERE id = $1`,
+    [sponsorUserId]
+  );
+  if (sponsorUserRes.rows.length === 0) {
+    return null;
+  }
+  const sponsorUser = sponsorUserRes.rows[0];
+  const sponsorNodeRes = await db.query(
+    `
+    SELECT COUNT(*)::int AS count 
+    FROM nodes 
+    WHERE owner_user_id = $1 AND status = 'ACTIVE'
+    `,
+    [sponsorUserId]
+  );
+  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
+  if (sponsorActiveNodes === 0) {
+    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
+    return null;
+  }
+  const existingRes = await db.query(
+    `
+    SELECT 
+      rc.id, rc.public_commission_id, rc.amount_usd, rc.status, rc.earned_at,
+      n.public_node_id, u.public_id AS buyer_public_id
+    FROM referral_commissions rc
+    JOIN nodes n ON rc.node_id = n.id
+    JOIN users u ON rc.referred_user_id = u.id
+    WHERE rc.node_id = $1
+    `,
+    [nodeId]
+  );
+  if (existingRes.rows.length > 0) {
+    const existing = existingRes.rows[0];
+    return {
+      publicCommissionId: existing.public_commission_id,
+      referredUserPublicId: existing.buyer_public_id,
+      nodePublicId: existing.public_node_id,
+      amountUsd: Number(existing.amount_usd),
+      status: existing.status,
+      earnedAt: existing.earned_at.toISOString(),
+      reversedAt: null
+    };
+  }
+  const nodeRes = await db.query(
+    `SELECT public_node_id, node_number FROM nodes WHERE id = $1`,
+    [nodeId]
+  );
+  const nodeInfo = nodeRes.rows[0];
+  const nodePublicId = nodeInfo?.public_node_id || "PHX-NODE-UNKNOWN";
+  const countRes = await db.query(`SELECT COUNT(*)::int AS count FROM referral_commissions`);
+  const seq = parseInt(countRes.rows[0].count, 10) + 1;
+  let publicCommissionId = formatPublicCommissionId(seq);
+  let collisionCheck = await db.query(`SELECT id FROM referral_commissions WHERE public_commission_id = $1`, [publicCommissionId]);
+  if (collisionCheck.rows.length > 0) {
+    publicCommissionId = `PHX-COM-${Math.floor(1e5 + Math.random() * 9e5)}`;
+  }
+  const commissionId = uuidv412();
+  const commissionRate = await getDirectReferralCommissionRate();
+  const insertRes = await db.query(
+    `
+    INSERT INTO referral_commissions (
+      id, public_commission_id, sponsor_user_id, referred_user_id,
+      node_id, node_order_id, amount_usd, status, earned_at, created_at
+    ) VALUES (
+      $1, $2, $3, $4,
+      $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )
+    RETURNING id, public_commission_id, amount_usd, status, earned_at, created_at
+    `,
+    [
+      commissionId,
+      publicCommissionId,
+      sponsorUserId,
+      buyerUserId,
+      nodeId,
+      orderId,
+      commissionRate.toFixed(2)
+    ]
+  );
+  const row = insertRes.rows[0];
+  try {
+    await postLedgerCredit({
+      userId: sponsorUserId,
+      sourceType: "REFERRAL_COMMISSION",
+      sourceId: row.id,
+      sourceRef: row.public_commission_id,
+      amount: Number(row.amount_usd),
+      description: `Direct Referral Commission - Node ${nodePublicId} Activation`,
+      createdAt: new Date(row.earned_at),
+      dbClient: db
+    });
+  } catch (ledgErr) {
+    console.warn("[WalletLedger] Error posting referral commission to ledger:", ledgErr);
+  }
+  try {
+    await db.query(
+      `
+      INSERT INTO security_events (id, user_id, event_type, description, created_at)
+      VALUES ($1, $2, 'DIRECT_REFERRAL_COMMISSION_EARNED', $3, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv412(),
+        sponsorUserId,
+        `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
+      ]
+    );
+  } catch (secErr) {
+    console.warn("[SecurityEvent] Could not log referral commission event:", secErr);
+  }
+  try {
+    await notifyReferralEarned({
+      userId: sponsorUserId,
+      amountUsd: Number(row.amount_usd),
+      buyerPublicId,
+      commissionId: row.id
+    });
+  } catch (notifErr) {
+    console.warn("[Notification] Could not trigger referral earned notification:", notifErr);
+  }
+  return {
+    publicCommissionId: row.public_commission_id,
+    referredUserPublicId: buyerPublicId,
+    nodePublicId,
+    amountUsd: Number(row.amount_usd),
+    status: row.status,
+    earnedAt: row.earned_at.toISOString(),
+    reversedAt: null
+  };
+}
+async function getUserCommissions(sponsorUserId) {
+  const db = await getDb();
+  const result = await db.query(
+    `
+    SELECT 
+      rc.public_commission_id,
+      u.public_id AS referred_public_id,
+      n.public_node_id,
+      rc.amount_usd,
+      rc.status,
+      rc.earned_at,
+      rc.reversed_at
+    FROM referral_commissions rc
+    JOIN users u ON rc.referred_user_id = u.id
+    JOIN nodes n ON rc.node_id = n.id
+    WHERE rc.sponsor_user_id = $1
+    ORDER BY rc.earned_at DESC
+    `,
+    [sponsorUserId]
+  );
+  let totalEarnedUsd = 0;
+  const commissions = [];
+  for (const row of result.rows) {
+    const amount = Number(row.amount_usd);
+    if (row.status === "EARNED") {
+      totalEarnedUsd += amount;
+    }
+    commissions.push({
+      publicCommissionId: row.public_commission_id,
+      referredUserPublicId: row.referred_public_id,
+      nodePublicId: row.public_node_id,
+      amountUsd: amount,
+      status: row.status,
+      earnedAt: row.earned_at.toISOString(),
+      reversedAt: row.reversed_at ? row.reversed_at.toISOString() : null
+    });
+  }
+  return {
+    totalEarnedUsd,
+    commissions
+  };
+}
+var init_referralCommissionService = __esm({
+  "src/server/services/referralCommissionService.ts"() {
+    init_db();
+    init_referralConfig();
+    init_idGenerator();
+    init_walletLedgerService();
+    init_economicService();
+    init_notificationService();
+  }
+});
+
+// src/server/utils/timezone.ts
+function getDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PHIVONEX_BUSINESS_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+function getUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PHIVONEX_UTC_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(date);
+}
+function getPreviousDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const currentDhakaStr = getDhakaBusinessDate(date);
+  const [year, month, day] = currentDhakaStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split("T")[0];
+}
+function getPreviousUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
+  const currentUtcStr = getUtcBusinessDate(date);
+  const [year, month, day] = currentUtcStr.split("-").map(Number);
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().split("T")[0];
+}
+function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
+  const currentDhakaStr = getDhakaBusinessDate(from);
+  const [year, month, day] = currentDhakaStr.split("-").map(Number);
+  const tomorrow = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  const nextDhakaDateStr = tomorrow.toISOString().split("T")[0];
+  const [nextYear, nextMonth, nextDay] = nextDhakaDateStr.split("-").map(Number);
+  const nextMidnightUtcMs = Date.UTC(nextYear, nextMonth - 1, nextDay, 0, 0, 0) - 6 * 60 * 60 * 1e3;
+  const nextMidnightDate = new Date(nextMidnightUtcMs);
+  const diffMs = Math.max(0, nextMidnightDate.getTime() - from.getTime());
+  return {
+    nextMidnightIso: nextMidnightDate.toISOString(),
+    msUntilMidnight: diffMs
+  };
+}
+function getNextUtc0600Time(from = /* @__PURE__ */ new Date()) {
+  const now = from.getTime();
+  const d = new Date(now);
+  const targetToday = new Date(Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth(),
+    d.getUTCDate(),
+    6,
+    0,
+    0,
+    0
+  ));
+  if (now >= targetToday.getTime()) {
+    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
+  }
+  return {
+    nextRunIso: targetToday.toISOString(),
+    msUntilRun: Math.max(0, targetToday.getTime() - now)
+  };
+}
+var PHIVONEX_BUSINESS_TIMEZONE, PHIVONEX_UTC_TIMEZONE;
+var init_timezone = __esm({
+  "src/server/utils/timezone.ts"() {
+    PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
+    PHIVONEX_UTC_TIMEZONE = "UTC";
+  }
+});
+
+// src/server/services/binaryVolumeService.ts
+import { v4 as uuidv413 } from "uuid";
+async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occurredAtDate) {
+  const db = dbClient || await getDb();
+  const nodeRes = await db.query(
+    `SELECT id, status, owner_user_id, activated_at FROM nodes WHERE id = $1`,
+    [sourceNodeId]
+  );
+  if (nodeRes.rows.length === 0) {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: "NODE_NOT_FOUND"
+    };
+  }
+  const node = nodeRes.rows[0];
+  if (node.status !== "ACTIVE") {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: `NODE_NOT_ACTIVE (status=${node.status})`
+    };
+  }
+  if (node.owner_user_id !== buyerUserId) {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: "BUYER_MISMATCH"
+    };
+  }
+  const buyerPlacementRes = await db.query(
+    `SELECT parent_user_id, side, status FROM binary_placements WHERE user_id = $1`,
+    [buyerUserId]
+  );
+  const buyerPlacement = buyerPlacementRes.rows[0];
+  if (!buyerPlacement || buyerPlacement.status !== "PLACED" || !buyerPlacement.parent_user_id) {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: "BUYER_NOT_PLACED"
+    };
+  }
+  const ancestors = [];
+  let currentUserId = buyerUserId;
+  const visited = /* @__PURE__ */ new Set([buyerUserId]);
+  while (true) {
+    const stepRes = await db.query(
+      `SELECT parent_user_id, side, status FROM binary_placements WHERE user_id = $1`,
+      [currentUserId]
+    );
+    const step = stepRes.rows[0];
+    if (!step || step.status !== "PLACED" || !step.parent_user_id || !step.side) {
+      break;
+    }
+    const parentId = step.parent_user_id;
+    const legSide = step.side;
+    if (visited.has(parentId)) {
+      console.warn(`[BinaryVolume] Cycle detected in ancestry traversal at ancestor ${parentId}`);
+      break;
+    }
+    visited.add(parentId);
+    ancestors.push({
+      ancestorUserId: parentId,
+      side: legSide
+    });
+    currentUserId = parentId;
+  }
+  if (ancestors.length === 0) {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: "NO_ANCESTORS"
+    };
+  }
+  const effectiveTimestamp = occurredAtDate || (node.activated_at ? new Date(node.activated_at) : /* @__PURE__ */ new Date());
+  const businessDate = getDhakaBusinessDate(effectiveTimestamp);
+  let eventsCreated = 0;
+  for (const step of ancestors) {
+    const eventId = uuidv413();
+    const publicEventId = generateVolumeEventPublicId();
+    const insertRes = await db.query(
+      `
+      INSERT INTO binary_volume_events (
+        id, public_event_id, beneficiary_user_id, source_user_id, source_node_id,
+        side, volume_units, status, business_date, occurred_at, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 1, 'ACTIVE', $7, $8, CURRENT_TIMESTAMP)
+      ON CONFLICT (beneficiary_user_id, source_node_id) DO NOTHING
+      RETURNING id
+      `,
+      [
+        eventId,
+        publicEventId,
+        step.ancestorUserId,
+        buyerUserId,
+        sourceNodeId,
+        step.side,
+        businessDate,
+        effectiveTimestamp
+      ]
+    );
+    if (insertRes.rows.length > 0) {
+      eventsCreated++;
+      const dailyId = uuidv413();
+      await db.query(
+        `
+        INSERT INTO binary_daily_volumes (
+          id, user_id, business_date, left_units, right_units, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3,
+          CASE WHEN $4 = 'LEFT' THEN 1 ELSE 0 END,
+          CASE WHEN $4 = 'RIGHT' THEN 1 ELSE 0 END,
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT (user_id, business_date) DO UPDATE SET
+          left_units = binary_daily_volumes.left_units + (CASE WHEN EXCLUDED.left_units = 1 THEN 1 ELSE 0 END),
+          right_units = binary_daily_volumes.right_units + (CASE WHEN EXCLUDED.right_units = 1 THEN 1 ELSE 0 END),
+          updated_at = CURRENT_TIMESTAMP
+        `,
+        [dailyId, step.ancestorUserId, businessDate, step.side]
+      );
+      await db.query(
+        `
+        INSERT INTO binary_volume_balances (user_id, carry_left_units, carry_right_units, updated_at)
+        VALUES ($1, 0, 0, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id) DO NOTHING
+        `,
+        [step.ancestorUserId]
+      );
+    }
+  }
+  return {
+    sourceNodeId,
+    buyerUserId,
+    eventsCreated,
+    ancestorsProcessed: ancestors.length
+  };
+}
+async function backfillNodeSalesVolumeForPlacedMember(dbClient, memberUserId) {
+  const db = dbClient || await getDb();
+  const activeNodesRes = await db.query(
+    `
+    SELECT id, activated_at 
+    FROM nodes 
+    WHERE owner_user_id = $1 AND status = 'ACTIVE'
+    ORDER BY activated_at ASC
+    `,
+    [memberUserId]
+  );
+  if (activeNodesRes.rows.length === 0) {
+    return 0;
+  }
+  let totalEventsCreated = 0;
+  for (const node of activeNodesRes.rows) {
+    const result = await propagateNodeSalesVolume(
+      db,
+      node.id,
+      memberUserId,
+      node.activated_at ? new Date(node.activated_at) : void 0
+    );
+    totalEventsCreated += result.eventsCreated;
+  }
+  return totalEventsCreated;
+}
+async function getVolumeSummary(userId) {
+  const db = await getDb();
+  const currentDhakaDate = getDhakaBusinessDate();
+  const todayRes = await db.query(
+    `
+    SELECT left_units, right_units
+    FROM binary_daily_volumes
+    WHERE user_id = $1 AND business_date = $2
+    `,
+    [userId, currentDhakaDate]
+  );
+  const todayLeft = todayRes.rows[0] ? Number(todayRes.rows[0].left_units) : 0;
+  const todayRight = todayRes.rows[0] ? Number(todayRes.rows[0].right_units) : 0;
+  const balanceRes = await db.query(
+    `
+    SELECT carry_left_units, carry_right_units, last_settled_business_date
+    FROM binary_volume_balances
+    WHERE user_id = $1
+    `,
+    [userId]
+  );
+  const carryLeft = balanceRes.rows[0] ? Number(balanceRes.rows[0].carry_left_units) : 0;
+  const carryRight = balanceRes.rows[0] ? Number(balanceRes.rows[0].carry_right_units) : 0;
+  const lastSettled = balanceRes.rows[0]?.last_settled_business_date || null;
+  let unsettledQuery;
+  let unsettledParams;
+  if (lastSettled) {
+    unsettledQuery = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_left,
+        COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_right
+      FROM binary_volume_events
+      WHERE beneficiary_user_id = $1 AND status = 'ACTIVE' AND business_date > $2
+    `;
+    unsettledParams = [userId, lastSettled];
+  } else {
+    unsettledQuery = `
+      SELECT 
+        COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_left,
+        COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_right
+      FROM binary_volume_events
+      WHERE beneficiary_user_id = $1 AND status = 'ACTIVE'
+    `;
+    unsettledParams = [userId];
+  }
+  const unsettledRes = await db.query(unsettledQuery, unsettledParams);
+  const unsettledLeft = unsettledRes.rows[0] ? Number(unsettledRes.rows[0].unsettled_left) : 0;
+  const unsettledRight = unsettledRes.rows[0] ? Number(unsettledRes.rows[0].unsettled_right) : 0;
+  const availableLeft = carryLeft + unsettledLeft;
+  const availableRight = carryRight + unsettledRight;
+  return {
+    businessDate: currentDhakaDate,
+    today: {
+      left: todayLeft,
+      right: todayRight
+    },
+    carry: {
+      left: carryLeft,
+      right: carryRight
+    },
+    availableForFutureMatching: {
+      left: availableLeft,
+      right: availableRight
+    }
+  };
+}
+async function getVolumeHistory(userId, page = 1, limit = 20) {
+  const db = await getDb();
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const offset = (safePage - 1) * safeLimit;
+  const countRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM binary_daily_volumes WHERE user_id = $1`,
+    [userId]
+  );
+  const totalCount = Number(countRes.rows[0]?.count || 0);
+  const rowsRes = await db.query(
+    `
+    SELECT business_date, left_units, right_units
+    FROM binary_daily_volumes
+    WHERE user_id = $1
+    ORDER BY business_date DESC
+    LIMIT $2 OFFSET $3
+    `,
+    [userId, safeLimit, offset]
+  );
+  const history = rowsRes.rows.map((r) => ({
+    businessDate: typeof r.business_date === "string" ? r.business_date.split("T")[0] : new Date(r.business_date).toISOString().split("T")[0],
+    leftUnits: Number(r.left_units),
+    rightUnits: Number(r.right_units)
+  }));
+  return {
+    history,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      totalCount,
+      totalPages: Math.max(1, Math.ceil(totalCount / safeLimit))
+    }
+  };
+}
+var init_binaryVolumeService = __esm({
+  "src/server/services/binaryVolumeService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_timezone();
+  }
+});
+
 // src/server/services/promotionalService.ts
 var promotionalService_exports = {};
 __export(promotionalService_exports, {
+  claimAndPayPromotionalOffer: () => claimAndPayPromotionalOffer,
   createPromotionalBanner: () => createPromotionalBanner,
   createPromotionalOffer: () => createPromotionalOffer,
   deletePromotionalBanner: () => deletePromotionalBanner,
@@ -7183,6 +7850,11 @@ async function getPromotionalOffers(adminOnly = false) {
   let query = `
     SELECT id, title, description, banner_image, offer_type, bonus_nodes_count,
            bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+           COALESCE(promotional_price_usd, 1000.00) AS promotional_price_usd,
+           COALESCE(discount_percent, 0.00) AS discount_percent,
+           COALESCE(badge_tag, 'HOT_DEAL') AS badge_tag,
+           COALESCE(total_allocated_slots, 100) AS total_allocated_slots,
+           COALESCE(claimed_slots, 18) AS claimed_slots,
            start_date, end_date, status, target_audience, priority_order, created_at 
     FROM promotional_offers
   `;
@@ -7202,6 +7874,11 @@ async function getPromotionalOffers(adminOnly = false) {
     bonusMiningRewards: r.bonus_mining_rewards ?? true,
     bonusMatchingEnabled: r.bonus_matching_enabled ?? false,
     bonusReferralCommission: r.bonus_referral_commission ?? false,
+    promotionalPriceUsd: Number(r.promotional_price_usd ?? 1e3),
+    discountPercent: Number(r.discount_percent ?? 0),
+    badgeTag: r.badge_tag || "HOT_DEAL",
+    totalAllocatedSlots: Number(r.total_allocated_slots ?? 100),
+    claimedSlots: Number(r.claimed_slots ?? 18),
     startDate: r.start_date,
     endDate: r.end_date,
     status: r.status,
@@ -7213,14 +7890,16 @@ async function getPromotionalOffers(adminOnly = false) {
 async function createPromotionalOffer(adminUserId, adminPublicId, offer) {
   const db = await getDb();
   const id = uuidv414();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
   await db.query(
     `
     INSERT INTO promotional_offers (
       id, title, description, banner_image, offer_type, bonus_nodes_count,
       bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+      promotional_price_usd, discount_percent, badge_tag, total_allocated_slots, claimed_slots,
       start_date, end_date, status, target_audience, priority_order
     )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
     `,
     [
       id,
@@ -7232,6 +7911,11 @@ async function createPromotionalOffer(adminUserId, adminPublicId, offer) {
       offer.bonusMiningRewards ?? true,
       offer.bonusMatchingEnabled ?? false,
       offer.bonusReferralCommission ?? false,
+      offer.promotionalPriceUsd ?? 1e3,
+      offer.discountPercent ?? 0,
+      offer.badgeTag || "HOT_DEAL",
+      offer.totalAllocatedSlots ?? 100,
+      offer.claimedSlots ?? 0,
       offer.startDate,
       offer.endDate,
       offer.status,
@@ -7242,8 +7926,22 @@ async function createPromotionalOffer(adminUserId, adminPublicId, offer) {
   const created = {
     id,
     ...offer,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    promotionalPriceUsd: offer.promotionalPriceUsd ?? 1e3,
+    discountPercent: offer.discountPercent ?? 0,
+    badgeTag: offer.badgeTag || "HOT_DEAL",
+    totalAllocatedSlots: offer.totalAllocatedSlots ?? 100,
+    claimedSlots: offer.claimedSlots ?? 0,
+    createdAt: now
   };
+  try {
+    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+    await adminFirestore2.collection("promotional_offers").doc(id).set({
+      ...created,
+      updatedAt: now
+    });
+  } catch (fsErr) {
+    console.warn("[PromotionalService] Firestore real-time offer sync warning:", fsErr);
+  }
   await logAdminAction({
     adminUserId,
     adminPublicId,
@@ -7265,8 +7963,9 @@ async function updatePromotionalOffer(adminUserId, adminPublicId, id, offer) {
     UPDATE promotional_offers
     SET title = $1, description = $2, banner_image = $3, offer_type = $4, bonus_nodes_count = $5,
         bonus_mining_rewards = $6, bonus_matching_enabled = $7, bonus_referral_commission = $8,
-        start_date = $9, end_date = $10, status = $11, target_audience = $12, priority_order = $13
-    WHERE id = $14
+        promotional_price_usd = $9, discount_percent = $10, badge_tag = $11, total_allocated_slots = $12, claimed_slots = $13,
+        start_date = $14, end_date = $15, status = $16, target_audience = $17, priority_order = $18
+    WHERE id = $19
     `,
     [
       offer.title,
@@ -7277,6 +7976,11 @@ async function updatePromotionalOffer(adminUserId, adminPublicId, id, offer) {
       offer.bonusMiningRewards ?? true,
       offer.bonusMatchingEnabled ?? false,
       offer.bonusReferralCommission ?? false,
+      offer.promotionalPriceUsd ?? 1e3,
+      offer.discountPercent ?? 0,
+      offer.badgeTag || "HOT_DEAL",
+      offer.totalAllocatedSlots ?? 100,
+      offer.claimedSlots ?? (oldRes.rows[0].claimed_slots || 0),
       offer.startDate,
       offer.endDate,
       offer.status,
@@ -7285,11 +7989,26 @@ async function updatePromotionalOffer(adminUserId, adminPublicId, id, offer) {
       id
     ]
   );
+  const now = (/* @__PURE__ */ new Date()).toISOString();
   const updated = {
     id,
     ...offer,
+    promotionalPriceUsd: offer.promotionalPriceUsd ?? 1e3,
+    discountPercent: offer.discountPercent ?? 0,
+    badgeTag: offer.badgeTag || "HOT_DEAL",
+    totalAllocatedSlots: offer.totalAllocatedSlots ?? 100,
+    claimedSlots: offer.claimedSlots ?? (oldRes.rows[0].claimed_slots || 0),
     createdAt: oldRes.rows[0].created_at
   };
+  try {
+    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+    await adminFirestore2.collection("promotional_offers").doc(id).set({
+      ...updated,
+      updatedAt: now
+    });
+  } catch (fsErr) {
+    console.warn("[PromotionalService] Firestore real-time update sync warning:", fsErr);
+  }
   await logAdminAction({
     adminUserId,
     adminPublicId,
@@ -7307,6 +8026,12 @@ async function deletePromotionalOffer(adminUserId, adminPublicId, id) {
     return false;
   }
   await db.query(`DELETE FROM promotional_offers WHERE id = $1`, [id]);
+  try {
+    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+    await adminFirestore2.collection("promotional_offers").doc(id).delete();
+  } catch (fsErr) {
+    console.warn("[PromotionalService] Firestore real-time delete sync warning:", fsErr);
+  }
   await logAdminAction({
     adminUserId,
     adminPublicId,
@@ -7316,6 +8041,65 @@ async function deletePromotionalOffer(adminUserId, adminPublicId, id) {
     details: `Deleted promotional offer: "${oldRes.rows[0].title}"`
   });
   return true;
+}
+async function claimAndPayPromotionalOffer(userId, offerId, preferredAsset = "USDT") {
+  const db = await getDb();
+  const offerRes = await db.query(
+    `SELECT * FROM promotional_offers WHERE id = $1 AND status = 'ACTIVE'`,
+    [offerId]
+  );
+  if (offerRes.rows.length === 0) {
+    throw new Error("Promotional offer is no longer active or available.");
+  }
+  const offerRow = offerRes.rows[0];
+  const { purchaseNodeWithDepositBalance: purchaseNodeWithDepositBalance2 } = await Promise.resolve().then(() => (init_nodeOrderService(), nodeOrderService_exports));
+  const purchaseResult = await purchaseNodeWithDepositBalance2(userId, preferredAsset);
+  await db.query(
+    `UPDATE promotional_offers SET claimed_slots = COALESCE(claimed_slots, 0) + 1 WHERE id = $1`,
+    [offerId]
+  );
+  try {
+    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+    await adminFirestore2.collection("promotional_offers").doc(offerId).set(
+      {
+        claimedSlots: (Number(offerRow.claimed_slots) || 0) + 1,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      { merge: true }
+    );
+  } catch {
+  }
+  const offer = {
+    id: offerRow.id,
+    title: offerRow.title,
+    description: offerRow.description,
+    bannerImage: offerRow.banner_image,
+    offerType: offerRow.offer_type,
+    bonusNodesCount: Number(offerRow.bonus_nodes_count || 1),
+    bonusMiningRewards: offerRow.bonus_mining_rewards ?? true,
+    bonusMatchingEnabled: offerRow.bonus_matching_enabled ?? false,
+    bonusReferralCommission: offerRow.bonus_referral_commission ?? false,
+    promotionalPriceUsd: Number(offerRow.promotional_price_usd || 1e3),
+    discountPercent: Number(offerRow.discount_percent || 0),
+    badgeTag: offerRow.badge_tag || "HOT_DEAL",
+    totalAllocatedSlots: Number(offerRow.total_allocated_slots || 100),
+    claimedSlots: (Number(offerRow.claimed_slots) || 0) + 1,
+    startDate: offerRow.start_date,
+    endDate: offerRow.end_date,
+    status: offerRow.status,
+    targetAudience: offerRow.target_audience,
+    priorityOrder: offerRow.priority_order,
+    createdAt: offerRow.created_at
+  };
+  return {
+    success: true,
+    order: purchaseResult.order,
+    node: purchaseResult.node,
+    bonusNodes: [],
+    offer,
+    depositDeducted: purchaseResult.depositDeducted,
+    message: `Promotional package "${offer.title}" successfully claimed and provisioned!`
+  };
 }
 async function getPromotionalBanners(adminOnly = false) {
   const db = await getDb();
@@ -7580,6 +8364,802 @@ var init_promotionalService = __esm({
   "src/server/services/promotionalService.ts"() {
     init_db();
     init_adminService();
+  }
+});
+
+// src/server/services/nodeOrderService.ts
+var nodeOrderService_exports = {};
+__export(nodeOrderService_exports, {
+  cancelNodeOrder: () => cancelNodeOrder,
+  cleanupExpiredReservations: () => cleanupExpiredReservations,
+  createNodeReservation: () => createNodeReservation,
+  getUserOrderById: () => getUserOrderById,
+  getUserOrders: () => getUserOrders,
+  purchaseNodeWithDepositBalance: () => purchaseNodeWithDepositBalance,
+  settleNodeOrder: () => settleNodeOrder
+});
+import { v4 as uuidv415 } from "uuid";
+async function cleanupExpiredReservations(dbClient) {
+  const db = dbClient || await getDb();
+  try {
+    const expiredOrdersRes = await db.query(
+      `
+      SELECT id, node_id, user_id, public_order_id
+      FROM node_orders
+      WHERE status = 'PENDING' AND expires_at <= CURRENT_TIMESTAMP
+      `
+    );
+    if (expiredOrdersRes.rows.length === 0) {
+      return 0;
+    }
+    let cleanedCount = 0;
+    for (const ord of expiredOrdersRes.rows) {
+      await db.query(
+        `
+        UPDATE node_orders
+        SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND status = 'PENDING'
+        `,
+        [ord.id]
+      );
+      await db.query(
+        `
+        UPDATE nodes
+        SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND status = 'RESERVED'
+        `,
+        [ord.node_id]
+      );
+      cleanedCount++;
+    }
+    return cleanedCount;
+  } catch (err) {
+    console.error("[NodeOrderService] Error during cleanupExpiredReservations:", err);
+    return 0;
+  }
+}
+async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT", dbClient) {
+  const db = dbClient || await getDb();
+  if (dbClient) {
+    return executeReservation(dbClient, userId, idempotencyKey, paymentMethod);
+  }
+  try {
+    return await db.transaction(async (trx) => {
+      return executeReservation(trx, userId, idempotencyKey, paymentMethod);
+    });
+  } catch (err) {
+    console.error("[CreateNodeReservation Error]", err);
+    throw err;
+  }
+}
+async function executeReservation(db, userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT") {
+  const salesEnabled = await isNodeSalesEnabled(db);
+  if (!salesEnabled) {
+    const error = new Error("NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.");
+    error.code = "NODE_SALES_PAUSED";
+    error.statusCode = 403;
+    throw error;
+  }
+  await db.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+  try {
+    await cleanupExpiredReservations(db);
+  } catch {
+  }
+  if (idempotencyKey && idempotencyKey.trim().length > 0) {
+    const existingByIdempotency = await db.query(
+      `
+      SELECT 
+        o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
+        o.currency, o.status, o.payment_method, o.payment_reference,
+        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+        n.public_node_id
+      FROM node_orders o
+      JOIN nodes n ON o.node_id = n.id
+      WHERE o.idempotency_key = $1
+      `,
+      [idempotencyKey.trim()]
+    );
+    if (existingByIdempotency.rows.length > 0) {
+      const row = existingByIdempotency.rows[0];
+      const nowMs = Date.now();
+      const expiresMs = new Date(row.expires_at).getTime();
+      const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
+      return {
+        order: {
+          id: row.id,
+          publicOrderId: row.public_order_id,
+          publicNodeId: row.public_node_id,
+          nodeNumber: row.node_number,
+          amountUsd: Number(row.amount_usd),
+          currency: row.currency,
+          status: row.status,
+          paymentMethod: row.payment_method,
+          paymentReference: row.payment_reference,
+          reservedAt: row.reserved_at.toISOString(),
+          expiresAt: row.expires_at.toISOString(),
+          completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+          cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
+          createdAt: row.created_at.toISOString(),
+          secondsRemaining
+        },
+        isExisting: true
+      };
+    }
+  }
+  const activePendingRes = await db.query(
+    `
+    SELECT 
+      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
+      o.currency, o.status, o.payment_method, o.payment_reference,
+      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+      n.public_node_id
+    FROM node_orders o
+    JOIN nodes n ON o.node_id = n.id
+    WHERE o.user_id = $1 AND o.status = 'PENDING' AND o.expires_at > CURRENT_TIMESTAMP
+    ORDER BY o.created_at DESC
+    LIMIT 1
+    FOR UPDATE
+    `,
+    [userId]
+  );
+  if (activePendingRes.rows.length > 0) {
+    const row = activePendingRes.rows[0];
+    const nowMs = Date.now();
+    const expiresMs = new Date(row.expires_at).getTime();
+    const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
+    return {
+      order: {
+        id: row.id,
+        publicOrderId: row.public_order_id,
+        publicNodeId: row.public_node_id,
+        nodeNumber: row.node_number,
+        amountUsd: Number(row.amount_usd),
+        currency: row.currency,
+        status: row.status,
+        paymentMethod: row.payment_method,
+        paymentReference: row.payment_reference,
+        reservedAt: row.reserved_at.toISOString(),
+        expiresAt: row.expires_at.toISOString(),
+        completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+        cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
+        createdAt: row.created_at.toISOString(),
+        secondsRemaining
+      },
+      isExisting: true
+    };
+  }
+  const maxRetries = 3;
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    const candidateRes = await db.query(
+      `
+      SELECT id, node_number, public_node_id
+      FROM nodes
+      WHERE status = 'AVAILABLE'
+      ORDER BY node_number ASC
+      LIMIT 1
+      FOR UPDATE
+      `
+    );
+    if (candidateRes.rows.length === 0) {
+      const error = new Error("All 10,000 Genesis Nodes have been allocated or reserved.");
+      error.code = "SOLD_OUT";
+      error.statusCode = 409;
+      throw error;
+    }
+    const candidateNode = candidateRes.rows[0];
+    const reserveNodeRes = await db.query(
+      `
+      UPDATE nodes
+      SET 
+        status = 'RESERVED',
+        reserved_by_user_id = $1,
+        reserved_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2 AND status = 'AVAILABLE'
+      RETURNING id
+      `,
+      [userId, candidateNode.id]
+    );
+    if (reserveNodeRes.rows.length === 0) {
+      continue;
+    }
+    const orderId = uuidv415();
+    const publicOrderId = generateOrderPublicId();
+    const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
+    const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1e3);
+    const nodePrice = await getNodeBasePrice(db);
+    const orderInsertRes = await db.query(
+      `
+      INSERT INTO node_orders (
+        id, public_order_id, user_id, node_id, node_number,
+        amount_usd, currency, status, payment_method, idempotency_key,
+        reserved_at, expires_at, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      RETURNING 
+        id, public_order_id, node_id, node_number, amount_usd,
+        currency, status, payment_method, payment_reference,
+        reserved_at, expires_at, created_at
+      `,
+      [
+        orderId,
+        publicOrderId,
+        userId,
+        candidateNode.id,
+        candidateNode.node_number,
+        nodePrice,
+        // Server-authoritative Node Price
+        "USD",
+        "PENDING",
+        paymentMethod,
+        cleanIdempotencyKey,
+        expiresAt
+      ]
+    );
+    const insertedOrder = orderInsertRes.rows[0];
+    const nowMs = Date.now();
+    const expiresMs = new Date(insertedOrder.expires_at).getTime();
+    const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
+    return {
+      order: {
+        id: insertedOrder.id,
+        publicOrderId: insertedOrder.public_order_id,
+        publicNodeId: candidateNode.public_node_id,
+        nodeNumber: insertedOrder.node_number,
+        amountUsd: Number(insertedOrder.amount_usd),
+        currency: insertedOrder.currency,
+        status: insertedOrder.status,
+        paymentMethod: insertedOrder.payment_method,
+        paymentReference: insertedOrder.payment_reference,
+        reservedAt: insertedOrder.reserved_at.toISOString(),
+        expiresAt: insertedOrder.expires_at.toISOString(),
+        completedAt: null,
+        cancelledAt: null,
+        createdAt: insertedOrder.created_at.toISOString(),
+        secondsRemaining
+      },
+      isExisting: false
+    };
+  }
+  const conflictErr = new Error("High concurrency conflict allocating node. Please retry.");
+  conflictErr.code = "CONCURRENCY_RETRY";
+  conflictErr.statusCode = 409;
+  throw conflictErr;
+}
+async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClient) {
+  const db = dbClient || await getDb();
+  await cleanupExpiredReservations(db);
+  const querySql = userId ? `
+      SELECT 
+        o.id, o.public_order_id, o.user_id, o.node_id, o.node_number, o.amount_usd,
+        o.currency, o.status, o.payment_method, o.payment_reference,
+        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+        n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
+      FROM node_orders o
+      JOIN nodes n ON o.node_id = n.id
+      WHERE (o.id::text = $1 OR o.public_order_id = $1) AND o.user_id = $2
+      ` : `
+      SELECT 
+        o.id, o.public_order_id, o.user_id, o.node_id, o.node_number, o.amount_usd,
+        o.currency, o.status, o.payment_method, o.payment_reference,
+        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+        n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
+      FROM node_orders o
+      JOIN nodes n ON o.node_id = n.id
+      WHERE (o.id::text = $1 OR o.public_order_id = $1)
+      `;
+  const queryParams = userId ? [orderIdentifier.trim(), userId] : [orderIdentifier.trim()];
+  const orderRes = await db.query(querySql, queryParams);
+  if (orderRes.rows.length === 0) {
+    const error = new Error("Order not found or unauthorized.");
+    error.code = "ORDER_NOT_FOUND";
+    error.statusCode = 404;
+    throw error;
+  }
+  const order = orderRes.rows[0];
+  if (order.status === "COMPLETED") {
+    return {
+      order: {
+        publicOrderId: order.public_order_id,
+        publicNodeId: order.public_node_id,
+        nodeNumber: order.node_number,
+        amountUsd: Number(order.amount_usd),
+        currency: order.currency,
+        status: order.status,
+        paymentMethod: order.payment_method,
+        paymentReference: order.payment_reference,
+        reservedAt: order.reserved_at.toISOString(),
+        expiresAt: order.expires_at.toISOString(),
+        completedAt: order.completed_at ? order.completed_at.toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+        cancelledAt: null,
+        createdAt: order.created_at.toISOString(),
+        secondsRemaining: 0
+      },
+      node: {
+        publicNodeId: order.public_node_id,
+        nodeNumber: order.node_number,
+        status: order.node_status || "ACTIVE",
+        activatedAt: order.node_activated_at ? order.node_activated_at.toISOString() : order.completed_at ? order.completed_at.toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+      },
+      isDuplicate: true
+    };
+  }
+  if (order.status !== "PENDING") {
+    const error = new Error(`Cannot settle order in ${order.status} state.`);
+    error.code = "INVALID_ORDER_STATE";
+    error.statusCode = 400;
+    throw error;
+  }
+  if (new Date(order.expires_at).getTime() <= Date.now()) {
+    await db.query(`UPDATE node_orders SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [order.id]);
+    await db.query(`UPDATE nodes SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL WHERE id = $1`, [order.node_id]);
+    const error = new Error("The 15-minute reservation window for this node has expired.");
+    error.code = "ORDER_EXPIRED";
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isValidOrderStateTransition("PENDING", "COMPLETED")) {
+    const error = new Error("Invalid order transition.");
+    error.code = "INVALID_TRANSITION";
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!isValidNodeStateTransition("RESERVED", "ACTIVE")) {
+    const error = new Error("Invalid node transition.");
+    error.code = "INVALID_TRANSITION";
+    error.statusCode = 400;
+    throw error;
+  }
+  const effectiveRef = paymentReference || `SETTLE_VERIFIED_${Date.now()}_${order.public_order_id}`;
+  const currentRewardRate = await getNodeRewardRatePerEpoch(db);
+  const internalCoin = await getInternalCoinPrice().catch(() => ({ priceUsdt: 0.1 }));
+  const refCoinPrice = internalCoin.priceUsdt || 0.1;
+  const basePrice = await getNodeBasePrice(db).catch(() => 1e3);
+  const activatedNodeRes = await db.query(
+    `
+    UPDATE nodes
+    SET 
+      status = 'ACTIVE',
+      owner_user_id = $1,
+      reserved_by_user_id = NULL,
+      purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
+      activated_at = CURRENT_TIMESTAMP,
+      maturity_timestamp = NULL,
+      product_version = COALESCE(product_version, 'GENESIS_V1'),
+      purchase_price_usd = COALESCE(purchase_price_usd, $3),
+      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, $4),
+      lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
+      term_days = term_days,
+      daily_phivo_emission = COALESCE($5, daily_phivo_emission),
+      distributed_phivo = COALESCE(distributed_phivo, 0.00),
+      remaining_phivo = COALESCE(remaining_phivo, 10000.00),
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2 AND status = 'RESERVED'
+    RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
+    `,
+    [order.user_id, order.node_id, basePrice, refCoinPrice, currentRewardRate]
+  );
+  if (activatedNodeRes.rows.length === 0) {
+    const error = new Error("Failed to activate node. Reservation state changed.");
+    error.code = "NODE_STATE_MISMATCH";
+    error.statusCode = 409;
+    throw error;
+  }
+  const updatedOrderRes = await db.query(
+    `
+    UPDATE node_orders
+    SET 
+      status = 'COMPLETED',
+      payment_reference = $1,
+      completed_at = CURRENT_TIMESTAMP,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = $2
+    RETURNING *
+    `,
+    [effectiveRef, order.id]
+  );
+  const finalOrder = updatedOrderRes.rows[0];
+  const finalNode = activatedNodeRes.rows[0];
+  let referralCommission = null;
+  try {
+    referralCommission = await processNodeActivationCommission(
+      db,
+      finalOrder.id,
+      finalNode.id,
+      order.user_id
+    );
+  } catch (commErr) {
+    console.warn("[ReferralCommission] Error processing referral commission for node activation:", commErr);
+  }
+  try {
+    await propagateNodeSalesVolume(db, finalNode.id, order.user_id);
+  } catch (volErr) {
+    console.warn("[BinaryVolume] Error propagating node sales volume:", volErr);
+  }
+  try {
+    const { getPromotionalOffers: getPromotionalOffers2 } = await Promise.resolve().then(() => (init_promotionalService(), promotionalService_exports));
+    const promoOffers = await getPromotionalOffers2(false);
+    const bogoOffer = promoOffers.find((o) => o.offerType === "BOGO_FREE_NODE" || o.title.toLowerCase().includes("bogo") || o.title.toLowerCase().includes("free promo node"));
+    if (bogoOffer && bogoOffer.bonusNodesCount > 0) {
+      const bonusCount = bogoOffer.bonusNodesCount || 1;
+      for (let i = 0; i < bonusCount; i++) {
+        const availNodeRes = await db.query(
+          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`
+        );
+        if (availNodeRes.rows.length > 0) {
+          const bonusNode = availNodeRes.rows[0];
+          await db.query(
+            `
+            UPDATE nodes
+            SET 
+              owner_user_id = $1,
+              status = 'ACTIVE',
+              activated_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE id = $2
+            `,
+            [order.user_id, bonusNode.id]
+          );
+          await db.query(
+            `
+            INSERT INTO node_owners (id, node_id, user_id, acquired_via, acquired_at, is_current_owner)
+            VALUES ($1, $2, $3, 'PROMOTIONAL_BONUS', CURRENT_TIMESTAMP, TRUE)
+            ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE, acquired_via = 'PROMOTIONAL_BONUS'
+            `,
+            [uuidv415(), bonusNode.id, order.user_id]
+          );
+          console.log(`[PromotionEngine] Allocated Free Bonus Promo Node #${bonusNode.node_number} (${bonusNode.public_node_id}) to user ${order.user_id} under offer "${bogoOffer.title}"`);
+        }
+      }
+    }
+  } catch (promoErr) {
+    console.warn("[PromotionEngine] Notice checking promotional node bonus:", promoErr);
+  }
+  try {
+    await db.query(
+      `
+      INSERT INTO security_events (id, user_id, event_type, description, created_at)
+      VALUES ($1, $2, 'NODE_PURCHASE_COMPLETED', $3, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv415(),
+        order.user_id,
+        `Acquired Genesis Node ${finalNode.public_node_id} (Node #${finalNode.node_number}) for $1,000 USD via order ${finalOrder.public_order_id}.`
+      ]
+    );
+  } catch (secErr) {
+    console.warn("[SecurityEvent] Could not log purchase event:", secErr);
+  }
+  const executePostCommit = async () => {
+    try {
+      await notifyNodeActivated({
+        userId: order.user_id,
+        nodeNumber: finalNode.node_number,
+        orderPublicId: finalOrder.public_order_id,
+        sourceId: finalOrder.id
+      });
+    } catch (notifErr) {
+      console.warn("[Notification] Could not trigger node activated notification:", notifErr);
+    }
+    try {
+      broadcastPublicEvent({
+        id: `evt-node-${finalNode.public_node_id}`,
+        type: "node.activated",
+        title: `${finalNode.public_node_id} Activated`,
+        description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        publicId: finalNode.public_node_id
+      });
+    } catch (pubErr) {
+      console.warn("[PublicEvent] Could not broadcast public node activation event:", pubErr);
+    }
+    try {
+      const topDb = await getDb();
+      const userRes = await topDb.query(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [order.user_id]
+      );
+      if (userRes.rowCount > 0) {
+        const user = userRes.rows[0];
+        const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
+        await queueEventEmail2(user.email, "NODE_ACTIVATION", {
+          displayName: user.full_name,
+          publicId: user.public_id,
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+        await triggerAutomationRule2(order.user_id, "NODE_SALES", {
+          nodeNumber: String(finalNode.node_number),
+          publicNodeId: finalNode.public_node_id,
+          amount: String(finalOrder.amount_usd)
+        });
+      }
+    } catch (emailErr) {
+      console.warn("[EmailEngine] Failed to send Node Activation email/automation trigger:", emailErr);
+    }
+  };
+  if (!dbClient) {
+    executePostCommit().catch((err) => {
+      console.warn("[NodeOrderService] Post-commit execution warning:", err);
+    });
+  }
+  return {
+    order: {
+      id: finalOrder.id,
+      publicOrderId: finalOrder.public_order_id,
+      publicNodeId: finalNode.public_node_id,
+      nodeNumber: finalOrder.node_number,
+      amountUsd: Number(finalOrder.amount_usd),
+      currency: finalOrder.currency,
+      status: finalOrder.status,
+      paymentMethod: finalOrder.payment_method,
+      paymentReference: finalOrder.payment_reference,
+      reservedAt: finalOrder.reserved_at.toISOString(),
+      expiresAt: finalOrder.expires_at.toISOString(),
+      completedAt: finalOrder.completed_at.toISOString(),
+      cancelledAt: null,
+      createdAt: finalOrder.created_at.toISOString(),
+      secondsRemaining: 0
+    },
+    node: {
+      publicNodeId: finalNode.public_node_id,
+      nodeNumber: finalNode.node_number,
+      status: finalNode.status,
+      activatedAt: finalNode.activated_at.toISOString()
+    },
+    referralCommission,
+    isDuplicate: false,
+    runPostCommit: executePostCommit
+  };
+}
+async function cancelNodeOrder(userId, orderIdentifier) {
+  const db = await getDb();
+  const orderRes = await db.query(
+    `
+    SELECT id, node_id, status
+    FROM node_orders
+    WHERE (id::text = $1 OR public_order_id = $1) AND user_id = $2
+    `,
+    [orderIdentifier.trim(), userId]
+  );
+  if (orderRes.rows.length === 0) {
+    const error = new Error("Order not found.");
+    error.code = "ORDER_NOT_FOUND";
+    error.statusCode = 404;
+    throw error;
+  }
+  const order = orderRes.rows[0];
+  if (order.status !== "PENDING") {
+    const error = new Error(`Cannot cancel order in ${order.status} state.`);
+    error.code = "INVALID_ORDER_STATE";
+    error.statusCode = 400;
+    throw error;
+  }
+  await db.query(
+    `
+    UPDATE node_orders
+    SET status = 'CANCELLED', cancelled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+    `,
+    [order.id]
+  );
+  await db.query(
+    `
+    UPDATE nodes
+    SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $1 AND status = 'RESERVED'
+    `,
+    [order.node_id]
+  );
+  return {
+    success: true,
+    message: "Node reservation cancelled successfully and released back to available inventory."
+  };
+}
+async function getUserOrders(userId, dbClient) {
+  const db = dbClient || await getDb();
+  await cleanupExpiredReservations(db);
+  const ordersRes = await db.query(
+    `
+    SELECT 
+      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
+      o.currency, o.status, o.payment_method, o.payment_reference,
+      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+      n.public_node_id
+    FROM node_orders o
+    JOIN nodes n ON o.node_id = n.id
+    WHERE o.user_id = $1
+    ORDER BY o.created_at DESC
+    `,
+    [userId]
+  );
+  const nowMs = Date.now();
+  return ordersRes.rows.map((row) => {
+    const expiresMs = new Date(row.expires_at).getTime();
+    const secondsRemaining = row.status === "PENDING" ? Math.max(0, Math.floor((expiresMs - nowMs) / 1e3)) : 0;
+    return {
+      publicOrderId: row.public_order_id,
+      publicNodeId: row.public_node_id,
+      nodeNumber: row.node_number,
+      amountUsd: Number(row.amount_usd),
+      currency: row.currency,
+      status: row.status,
+      paymentMethod: row.payment_method,
+      paymentReference: row.payment_reference,
+      reservedAt: row.reserved_at.toISOString(),
+      expiresAt: row.expires_at.toISOString(),
+      completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+      cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
+      createdAt: row.created_at.toISOString(),
+      secondsRemaining
+    };
+  });
+}
+async function getUserOrderById(userId, orderIdentifier) {
+  const db = await getDb();
+  await cleanupExpiredReservations(db);
+  const orderRes = await db.query(
+    `
+    SELECT 
+      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
+      o.currency, o.status, o.payment_method, o.payment_reference,
+      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
+      n.public_node_id
+    FROM node_orders o
+    JOIN nodes n ON o.node_id = n.id
+    WHERE (o.id::text = $1 OR o.public_order_id = $1) AND o.user_id = $2
+    `,
+    [orderIdentifier.trim(), userId]
+  );
+  if (orderRes.rows.length === 0) {
+    return null;
+  }
+  const row = orderRes.rows[0];
+  const nowMs = Date.now();
+  const expiresMs = new Date(row.expires_at).getTime();
+  const secondsRemaining = row.status === "PENDING" ? Math.max(0, Math.floor((expiresMs - nowMs) / 1e3)) : 0;
+  return {
+    publicOrderId: row.public_order_id,
+    publicNodeId: row.public_node_id,
+    nodeNumber: row.node_number,
+    amountUsd: Number(row.amount_usd),
+    currency: row.currency,
+    status: row.status,
+    paymentMethod: row.payment_method,
+    paymentReference: row.payment_reference,
+    reservedAt: row.reserved_at.toISOString(),
+    expiresAt: row.expires_at.toISOString(),
+    completedAt: row.completed_at ? row.completed_at.toISOString() : null,
+    cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
+    createdAt: row.created_at.toISOString(),
+    secondsRemaining
+  };
+}
+async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
+  const db = await getDb();
+  return await db.transaction(async (trx) => {
+    try {
+      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
+      const nodePrice = await getNodeBasePrice(trx);
+      const { syncUserLedger: syncUserLedger2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
+      await syncUserLedger2(userId, trx);
+      let availableDepositBalance = 0;
+      if (preferredAsset === "USDT") {
+        const balRes = await trx.query(
+          `
+          SELECT 
+            COALESCE(SUM(CASE 
+              WHEN entry_type = 'CREDIT' THEN amount 
+              WHEN entry_type = 'DEBIT' THEN -amount 
+              WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
+              WHEN entry_type = 'REVERSAL' THEN -amount 
+              ELSE 0 
+            END), 0) AS available_balance
+          FROM financial_ledger_entries
+          WHERE user_id = $1 
+            AND status = 'SETTLED' 
+            AND (currency = 'USDT' OR currency = 'USD') 
+          `,
+          [userId]
+        );
+        availableDepositBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
+      } else {
+        const depositRes = await trx.query(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_credited
+          FROM blockchain_deposits
+          WHERE user_id = $1 AND status = 'CREDITED' AND asset = 'BNB'
+          `,
+          [userId]
+        );
+        const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
+        const debitsRes = await trx.query(
+          `
+          SELECT COALESCE(SUM(amount), 0) AS total_debits
+          FROM financial_ledger_entries
+          WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE' AND currency = 'BNB'
+          `,
+          [userId]
+        );
+        const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
+        availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
+      }
+      if (availableDepositBalance < nodePrice) {
+        const error = new Error(
+          `Your current available balance is $${availableDepositBalance.toFixed(2)} ${preferredAsset}. You need $${nodePrice.toFixed(2)} ${preferredAsset} to activate a Genesis Node. Please deposit or add funds first.`
+        );
+        error.code = "INSUFFICIENT_DEPOSIT_BALANCE";
+        error.statusCode = 400;
+        error.currentBalance = availableDepositBalance;
+        error.requiredAmount = nodePrice;
+        error.redirectToDeposit = true;
+        throw error;
+      }
+      let reservation;
+      try {
+        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv415()}`, `DEPOSIT_${preferredAsset}`, trx);
+      } catch (err) {
+        const existingOrders = await getUserOrders(userId, trx);
+        const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
+        if (pending) {
+          reservation = { order: pending, isExisting: true };
+        } else {
+          throw err;
+        }
+      }
+      const debitTxnId = uuidv415();
+      const publicTxnId = generateLedgerTransactionPublicId();
+      await trx.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        )
+        VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
+        `,
+        [
+          debitTxnId,
+          publicTxnId,
+          userId,
+          reservation.order.id,
+          reservation.order.publicNodeId,
+          `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
+          nodePrice,
+          preferredAsset
+        ]
+      );
+      const settlement = await settleNodeOrder(
+        userId,
+        reservation.order.publicOrderId,
+        `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`,
+        trx
+      );
+      const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
+      return {
+        order: settlement.order,
+        node: settlement.node,
+        depositDeducted: nodePrice,
+        remainingDepositBalance: newRemainingBalance
+      };
+    } catch (innerErr) {
+      console.error("[purchaseNodeWithDepositBalance Inner Error]", innerErr);
+      throw innerErr;
+    }
+  });
+}
+var init_nodeOrderService = __esm({
+  "src/server/services/nodeOrderService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_nodeConfig();
+    init_referralCommissionService();
+    init_binaryVolumeService();
+    init_publicNetworkService();
+    init_economicService();
+    init_notificationService();
   }
 });
 
@@ -9475,6 +11055,9 @@ async function requireAuth(req, res, next) {
         u.status,
         COALESCE(u.role, 'USER') AS role,
         u.email_verified_at,
+        COALESCE(u.kyc_status, 'UNVERIFIED') AS kyc_status,
+        u.kyc_reject_reason,
+        u.kyc_verified_at,
         u.created_at,
         u.last_login_at
       FROM sessions s
@@ -9551,6 +11134,9 @@ async function requireAuth(req, res, next) {
       role: resolvedRole,
       emailVerified: !!row.email_verified_at,
       emailVerifiedAt: row.email_verified_at,
+      kycStatus: row.kyc_status || "UNVERIFIED",
+      kycRejectReason: row.kyc_reject_reason || null,
+      kycVerifiedAt: row.kyc_verified_at || null,
       created_at: row.created_at,
       last_login_at: row.last_login_at
     };
@@ -9869,15 +11455,9 @@ router.post("/register/request-verification", registrationLimiter, async (req, r
     let sponsorUserId = null;
     let pendingCodeToStore = null;
     if (referralCode && typeof referralCode === "string" && referralCode.trim() !== "") {
-      const normalizedCode = normalizeReferralCode(referralCode);
-      const sponsorResult = await db.query(
-        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-        [normalizedCode]
-      );
-      if (sponsorResult.rowCount > 0) {
-        sponsorUserId = sponsorResult.rows[0].user_id;
-      } else {
-        pendingCodeToStore = normalizedCode;
+      sponsorUserId = await resolveSponsorUserId(db, referralCode);
+      if (!sponsorUserId) {
+        pendingCodeToStore = normalizeReferralCode(referralCode);
       }
     }
     const passwordHash = await hashPassword(password);
@@ -9926,18 +11506,13 @@ router.post("/register/request-verification", registrationLimiter, async (req, r
     );
     const { sendVerificationCodeEmail: sendVerificationCodeEmail2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
     const sent = await sendVerificationCodeEmail2(normalizedEmail, rawCode);
-    if (!sent && process.env.NODE_ENV === "production") {
-      res.status(500).json({
-        error: "EMAIL_DELIVERY_FAILED",
-        message: "Unable to send verification email at this time. Please try again later."
-      });
-      return;
+    if (!sent) {
+      console.warn(`[Auth API] Email dispatch for ${normalizedEmail} could not be delivered by email provider (e.g. pending Resend domain DNS verification). Providing code fallback.`);
     }
-    const isProduction = process.env.NODE_ENV === "production";
     res.status(200).json({
-      message: process.env.RESEND_API_KEY || isProduction ? "Verification code sent successfully to your email address." : `Verification code generated: ${rawCode}`,
+      message: sent ? "Verification code sent successfully to your email address." : "Verification code generated. Please check your email or use the code provided below.",
       email: normalizedEmail,
-      code: !process.env.RESEND_API_KEY && !isProduction ? rawCode : void 0
+      code: !sent ? rawCode : void 0
     });
   } catch (err) {
     console.error("[Auth API] Error in /register/request-verification:", err);
@@ -10183,15 +11758,9 @@ router.post("/register", registrationLimiter, async (req, res) => {
     let sponsorUserId = null;
     let pendingCodeToStore = null;
     if (referralCode && typeof referralCode === "string" && referralCode.trim() !== "") {
-      const normalizedCode = normalizeReferralCode(referralCode);
-      const sponsorResult = await db.query(
-        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-        [normalizedCode]
-      );
-      if (sponsorResult.rowCount > 0) {
-        sponsorUserId = sponsorResult.rows[0].user_id;
-      } else {
-        pendingCodeToStore = normalizedCode;
+      sponsorUserId = await resolveSponsorUserId(db, referralCode);
+      if (!sponsorUserId) {
+        pendingCodeToStore = normalizeReferralCode(referralCode);
       }
     }
     const passwordHash = await hashPassword(password);
@@ -10309,15 +11878,9 @@ router.post("/google", authLimiter, async (req, res) => {
       let sponsorUserId = null;
       let pendingCodeToStore = null;
       if (referralCode && typeof referralCode === "string" && referralCode.trim() !== "") {
-        const normalizedCode = normalizeReferralCode(referralCode);
-        const sponsorResult = await db.query(
-          `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
-          [normalizedCode]
-        );
-        if (sponsorResult.rowCount > 0) {
-          sponsorUserId = sponsorResult.rows[0].user_id;
-        } else {
-          pendingCodeToStore = normalizedCode;
+        sponsorUserId = await resolveSponsorUserId(db, referralCode);
+        if (!sponsorUserId) {
+          pendingCodeToStore = normalizeReferralCode(referralCode);
         }
       }
       const randomPass = generateRandomToken(16);
@@ -10586,6 +12149,9 @@ router.get("/me", requireAuth, async (req, res) => {
         role: user.role,
         isAdmin: isUserAdmin(user),
         emailVerified: user.emailVerified,
+        kycStatus: user.kycStatus || "UNVERIFIED",
+        kycRejectReason: user.kycRejectReason || null,
+        kycVerifiedAt: user.kycVerifiedAt || null,
         createdAt: user.created_at,
         lastLoginAt: user.last_login_at
       }
@@ -11086,7 +12652,10 @@ router2.get("/resolve/:code", async (req, res) => {
       `SELECT r.referral_code, u.public_id, u.full_name, u.status
        FROM user_referrals r
        JOIN users u ON r.user_id = u.id
-       WHERE r.referral_code = $1`,
+       WHERE UPPER(TRIM(r.referral_code)) = UPPER(TRIM($1))
+          OR UPPER(TRIM(u.public_id)) = UPPER(TRIM($1))
+          OR LOWER(TRIM(u.email)) = LOWER(TRIM($1))
+       LIMIT 1`,
       [normalizedCode]
     );
     if (result.rowCount === 0) {
@@ -11176,11 +12745,55 @@ router2.get("/direct", requireAuth, async (req, res) => {
   try {
     const user = req.user;
     const db = await getDb();
+    const sponsorIdent = await db.query(
+      `SELECT r.referral_code, u.public_id, u.email
+       FROM users u
+       LEFT JOIN user_referrals r ON u.id = r.user_id
+       WHERE u.id = $1`,
+      [user.id]
+    );
+    if (sponsorIdent.rows.length > 0) {
+      const s = sponsorIdent.rows[0];
+      await db.query(
+        `
+        UPDATE user_referrals ur
+        SET sponsor_user_id = $1
+        FROM users u
+        WHERE ur.user_id = u.id
+          AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+          AND u.id != $1
+          AND (
+            UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
+            OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
+            OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
+          )
+        `,
+        [user.id, s.referral_code || "", s.public_id || "", s.email || ""]
+      );
+      await db.query(
+        `
+        INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+        SELECT ur.user_id, NULL, NULL, 'UNPLACED', NULL, ur.created_at
+        FROM user_referrals ur
+        LEFT JOIN binary_placements bp ON ur.user_id = bp.user_id
+        WHERE ur.sponsor_user_id = $1 AND bp.user_id IS NULL
+        ON CONFLICT (user_id) DO NOTHING
+        `,
+        [user.id]
+      );
+    }
     const result = await db.query(
       `
-      SELECT u.public_id, u.full_name, ur.created_at
+      SELECT 
+        u.public_id, 
+        u.full_name, 
+        ur.created_at,
+        COALESCE(bp.status, 'UNPLACED') as placement_status,
+        bp.side as team_side,
+        bp.placed_at
       FROM user_referrals ur
       JOIN users u ON ur.user_id = u.id
+      LEFT JOIN binary_placements bp ON u.id = bp.user_id
       WHERE ur.sponsor_user_id = $1
       ORDER BY ur.created_at DESC
       `,
@@ -11189,7 +12802,10 @@ router2.get("/direct", requireAuth, async (req, res) => {
     const directReferrals = result.rows.map((row) => ({
       publicId: row.public_id,
       displayName: formatSafeDisplayName(row.full_name),
-      joinedAt: row.created_at.toISOString()
+      joinedAt: row.created_at.toISOString(),
+      placementStatus: row.placement_status || "UNPLACED",
+      teamSide: row.team_side,
+      placedAt: row.placed_at ? row.placed_at.toISOString() : null
     }));
     res.status(200).json({
       count: directReferrals.length,
@@ -11436,1347 +13052,7 @@ var userRoutes_default = router3;
 init_db();
 import { Router as Router4 } from "express";
 init_nodeConfig();
-
-// src/server/services/nodeOrderService.ts
-init_db();
-init_idGenerator();
-init_nodeConfig();
-import { v4 as uuidv415 } from "uuid";
-
-// src/server/services/referralCommissionService.ts
-init_db();
-import { v4 as uuidv412 } from "uuid";
-
-// src/config/referralConfig.ts
-function formatPublicCommissionId(seq) {
-  const clean = typeof seq === "string" ? seq.replace(/\D/g, "") : seq;
-  const num = typeof clean === "number" ? clean : parseInt(clean, 10) || Math.floor(1e5 + Math.random() * 9e5);
-  return `PHX-COM-${String(num).padStart(6, "0")}`;
-}
-
-// src/server/services/referralCommissionService.ts
-init_idGenerator();
-init_walletLedgerService();
-init_economicService();
-init_notificationService();
-async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId) {
-  const sponsorRes = await db.query(
-    `
-    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id
-    FROM users u
-    LEFT JOIN user_referrals ur ON u.id = ur.user_id
-    WHERE u.id = $1
-    `,
-    [buyerUserId]
-  );
-  if (sponsorRes.rows.length === 0) {
-    return null;
-  }
-  const { sponsor_user_id: sponsorUserId, buyer_public_id: buyerPublicId } = sponsorRes.rows[0];
-  if (!sponsorUserId || sponsorUserId === buyerUserId) {
-    return null;
-  }
-  const sponsorUserRes = await db.query(
-    `SELECT id, public_id, status FROM users WHERE id = $1`,
-    [sponsorUserId]
-  );
-  if (sponsorUserRes.rows.length === 0) {
-    return null;
-  }
-  const sponsorUser = sponsorUserRes.rows[0];
-  const sponsorNodeRes = await db.query(
-    `
-    SELECT COUNT(*)::int AS count 
-    FROM nodes 
-    WHERE owner_user_id = $1 AND status = 'ACTIVE'
-    `,
-    [sponsorUserId]
-  );
-  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
-  if (sponsorActiveNodes === 0) {
-    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
-    return null;
-  }
-  const existingRes = await db.query(
-    `
-    SELECT 
-      rc.id, rc.public_commission_id, rc.amount_usd, rc.status, rc.earned_at,
-      n.public_node_id, u.public_id AS buyer_public_id
-    FROM referral_commissions rc
-    JOIN nodes n ON rc.node_id = n.id
-    JOIN users u ON rc.referred_user_id = u.id
-    WHERE rc.node_id = $1
-    `,
-    [nodeId]
-  );
-  if (existingRes.rows.length > 0) {
-    const existing = existingRes.rows[0];
-    return {
-      publicCommissionId: existing.public_commission_id,
-      referredUserPublicId: existing.buyer_public_id,
-      nodePublicId: existing.public_node_id,
-      amountUsd: Number(existing.amount_usd),
-      status: existing.status,
-      earnedAt: existing.earned_at.toISOString(),
-      reversedAt: null
-    };
-  }
-  const nodeRes = await db.query(
-    `SELECT public_node_id, node_number FROM nodes WHERE id = $1`,
-    [nodeId]
-  );
-  const nodeInfo = nodeRes.rows[0];
-  const nodePublicId = nodeInfo?.public_node_id || "PHX-NODE-UNKNOWN";
-  const countRes = await db.query(`SELECT COUNT(*)::int AS count FROM referral_commissions`);
-  const seq = parseInt(countRes.rows[0].count, 10) + 1;
-  let publicCommissionId = formatPublicCommissionId(seq);
-  let collisionCheck = await db.query(`SELECT id FROM referral_commissions WHERE public_commission_id = $1`, [publicCommissionId]);
-  if (collisionCheck.rows.length > 0) {
-    publicCommissionId = `PHX-COM-${Math.floor(1e5 + Math.random() * 9e5)}`;
-  }
-  const commissionId = uuidv412();
-  const commissionRate = await getDirectReferralCommissionRate();
-  const insertRes = await db.query(
-    `
-    INSERT INTO referral_commissions (
-      id, public_commission_id, sponsor_user_id, referred_user_id,
-      node_id, node_order_id, amount_usd, status, earned_at, created_at
-    ) VALUES (
-      $1, $2, $3, $4,
-      $5, $6, $7, 'EARNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-    )
-    RETURNING id, public_commission_id, amount_usd, status, earned_at, created_at
-    `,
-    [
-      commissionId,
-      publicCommissionId,
-      sponsorUserId,
-      buyerUserId,
-      nodeId,
-      orderId,
-      commissionRate.toFixed(2)
-    ]
-  );
-  const row = insertRes.rows[0];
-  try {
-    await postLedgerCredit({
-      userId: sponsorUserId,
-      sourceType: "REFERRAL_COMMISSION",
-      sourceId: row.id,
-      sourceRef: row.public_commission_id,
-      amount: Number(row.amount_usd),
-      description: `Direct Referral Commission - Node ${nodePublicId} Activation`,
-      createdAt: new Date(row.earned_at),
-      dbClient: db
-    });
-  } catch (ledgErr) {
-    console.warn("[WalletLedger] Error posting referral commission to ledger:", ledgErr);
-  }
-  try {
-    await db.query(
-      `
-      INSERT INTO security_events (id, user_id, event_type, description, created_at)
-      VALUES ($1, $2, 'DIRECT_REFERRAL_COMMISSION_EARNED', $3, CURRENT_TIMESTAMP)
-      `,
-      [
-        uuidv412(),
-        sponsorUserId,
-        `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
-      ]
-    );
-  } catch (secErr) {
-    console.warn("[SecurityEvent] Could not log referral commission event:", secErr);
-  }
-  try {
-    await notifyReferralEarned({
-      userId: sponsorUserId,
-      amountUsd: Number(row.amount_usd),
-      buyerPublicId,
-      commissionId: row.id
-    });
-  } catch (notifErr) {
-    console.warn("[Notification] Could not trigger referral earned notification:", notifErr);
-  }
-  return {
-    publicCommissionId: row.public_commission_id,
-    referredUserPublicId: buyerPublicId,
-    nodePublicId,
-    amountUsd: Number(row.amount_usd),
-    status: row.status,
-    earnedAt: row.earned_at.toISOString(),
-    reversedAt: null
-  };
-}
-async function getUserCommissions(sponsorUserId) {
-  const db = await getDb();
-  const result = await db.query(
-    `
-    SELECT 
-      rc.public_commission_id,
-      u.public_id AS referred_public_id,
-      n.public_node_id,
-      rc.amount_usd,
-      rc.status,
-      rc.earned_at,
-      rc.reversed_at
-    FROM referral_commissions rc
-    JOIN users u ON rc.referred_user_id = u.id
-    JOIN nodes n ON rc.node_id = n.id
-    WHERE rc.sponsor_user_id = $1
-    ORDER BY rc.earned_at DESC
-    `,
-    [sponsorUserId]
-  );
-  let totalEarnedUsd = 0;
-  const commissions = [];
-  for (const row of result.rows) {
-    const amount = Number(row.amount_usd);
-    if (row.status === "EARNED") {
-      totalEarnedUsd += amount;
-    }
-    commissions.push({
-      publicCommissionId: row.public_commission_id,
-      referredUserPublicId: row.referred_public_id,
-      nodePublicId: row.public_node_id,
-      amountUsd: amount,
-      status: row.status,
-      earnedAt: row.earned_at.toISOString(),
-      reversedAt: row.reversed_at ? row.reversed_at.toISOString() : null
-    });
-  }
-  return {
-    totalEarnedUsd,
-    commissions
-  };
-}
-
-// src/server/services/binaryVolumeService.ts
-init_db();
-init_idGenerator();
-import { v4 as uuidv413 } from "uuid";
-
-// src/server/utils/timezone.ts
-var PHIVONEX_BUSINESS_TIMEZONE = "Asia/Dhaka";
-var PHIVONEX_UTC_TIMEZONE = "UTC";
-function getDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: PHIVONEX_BUSINESS_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
-  return formatter.format(date);
-}
-function getUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: PHIVONEX_UTC_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  });
-  return formatter.format(date);
-}
-function getPreviousDhakaBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const currentDhakaStr = getDhakaBusinessDate(date);
-  const [year, month, day] = currentDhakaStr.split("-").map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().split("T")[0];
-}
-function getPreviousUtcBusinessDate(date = /* @__PURE__ */ new Date()) {
-  const currentUtcStr = getUtcBusinessDate(date);
-  const [year, month, day] = currentUtcStr.split("-").map(Number);
-  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  d.setUTCDate(d.getUTCDate() - 1);
-  return d.toISOString().split("T")[0];
-}
-function getNextDhakaMidnightTime(from = /* @__PURE__ */ new Date()) {
-  const currentDhakaStr = getDhakaBusinessDate(from);
-  const [year, month, day] = currentDhakaStr.split("-").map(Number);
-  const tomorrow = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
-  const nextDhakaDateStr = tomorrow.toISOString().split("T")[0];
-  const [nextYear, nextMonth, nextDay] = nextDhakaDateStr.split("-").map(Number);
-  const nextMidnightUtcMs = Date.UTC(nextYear, nextMonth - 1, nextDay, 0, 0, 0) - 6 * 60 * 60 * 1e3;
-  const nextMidnightDate = new Date(nextMidnightUtcMs);
-  const diffMs = Math.max(0, nextMidnightDate.getTime() - from.getTime());
-  return {
-    nextMidnightIso: nextMidnightDate.toISOString(),
-    msUntilMidnight: diffMs
-  };
-}
-function getNextUtc0600Time(from = /* @__PURE__ */ new Date()) {
-  const now = from.getTime();
-  const d = new Date(now);
-  const targetToday = new Date(Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth(),
-    d.getUTCDate(),
-    6,
-    0,
-    0,
-    0
-  ));
-  if (now >= targetToday.getTime()) {
-    targetToday.setUTCDate(targetToday.getUTCDate() + 1);
-  }
-  return {
-    nextRunIso: targetToday.toISOString(),
-    msUntilRun: Math.max(0, targetToday.getTime() - now)
-  };
-}
-
-// src/server/services/binaryVolumeService.ts
-async function propagateNodeSalesVolume(dbClient, sourceNodeId, buyerUserId, occurredAtDate) {
-  const db = dbClient || await getDb();
-  const nodeRes = await db.query(
-    `SELECT id, status, owner_user_id, activated_at FROM nodes WHERE id = $1`,
-    [sourceNodeId]
-  );
-  if (nodeRes.rows.length === 0) {
-    return {
-      sourceNodeId,
-      buyerUserId,
-      eventsCreated: 0,
-      ancestorsProcessed: 0,
-      reason: "NODE_NOT_FOUND"
-    };
-  }
-  const node = nodeRes.rows[0];
-  if (node.status !== "ACTIVE") {
-    return {
-      sourceNodeId,
-      buyerUserId,
-      eventsCreated: 0,
-      ancestorsProcessed: 0,
-      reason: `NODE_NOT_ACTIVE (status=${node.status})`
-    };
-  }
-  if (node.owner_user_id !== buyerUserId) {
-    return {
-      sourceNodeId,
-      buyerUserId,
-      eventsCreated: 0,
-      ancestorsProcessed: 0,
-      reason: "BUYER_MISMATCH"
-    };
-  }
-  const buyerPlacementRes = await db.query(
-    `SELECT parent_user_id, side, status FROM binary_placements WHERE user_id = $1`,
-    [buyerUserId]
-  );
-  const buyerPlacement = buyerPlacementRes.rows[0];
-  if (!buyerPlacement || buyerPlacement.status !== "PLACED" || !buyerPlacement.parent_user_id) {
-    return {
-      sourceNodeId,
-      buyerUserId,
-      eventsCreated: 0,
-      ancestorsProcessed: 0,
-      reason: "BUYER_NOT_PLACED"
-    };
-  }
-  const ancestors = [];
-  let currentUserId = buyerUserId;
-  const visited = /* @__PURE__ */ new Set([buyerUserId]);
-  while (true) {
-    const stepRes = await db.query(
-      `SELECT parent_user_id, side, status FROM binary_placements WHERE user_id = $1`,
-      [currentUserId]
-    );
-    const step = stepRes.rows[0];
-    if (!step || step.status !== "PLACED" || !step.parent_user_id || !step.side) {
-      break;
-    }
-    const parentId = step.parent_user_id;
-    const legSide = step.side;
-    if (visited.has(parentId)) {
-      console.warn(`[BinaryVolume] Cycle detected in ancestry traversal at ancestor ${parentId}`);
-      break;
-    }
-    visited.add(parentId);
-    ancestors.push({
-      ancestorUserId: parentId,
-      side: legSide
-    });
-    currentUserId = parentId;
-  }
-  if (ancestors.length === 0) {
-    return {
-      sourceNodeId,
-      buyerUserId,
-      eventsCreated: 0,
-      ancestorsProcessed: 0,
-      reason: "NO_ANCESTORS"
-    };
-  }
-  const effectiveTimestamp = occurredAtDate || (node.activated_at ? new Date(node.activated_at) : /* @__PURE__ */ new Date());
-  const businessDate = getDhakaBusinessDate(effectiveTimestamp);
-  let eventsCreated = 0;
-  for (const step of ancestors) {
-    const eventId = uuidv413();
-    const publicEventId = generateVolumeEventPublicId();
-    const insertRes = await db.query(
-      `
-      INSERT INTO binary_volume_events (
-        id, public_event_id, beneficiary_user_id, source_user_id, source_node_id,
-        side, volume_units, status, business_date, occurred_at, created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 1, 'ACTIVE', $7, $8, CURRENT_TIMESTAMP)
-      ON CONFLICT (beneficiary_user_id, source_node_id) DO NOTHING
-      RETURNING id
-      `,
-      [
-        eventId,
-        publicEventId,
-        step.ancestorUserId,
-        buyerUserId,
-        sourceNodeId,
-        step.side,
-        businessDate,
-        effectiveTimestamp
-      ]
-    );
-    if (insertRes.rows.length > 0) {
-      eventsCreated++;
-      const dailyId = uuidv413();
-      await db.query(
-        `
-        INSERT INTO binary_daily_volumes (
-          id, user_id, business_date, left_units, right_units, created_at, updated_at
-        )
-        VALUES (
-          $1, $2, $3,
-          CASE WHEN $4 = 'LEFT' THEN 1 ELSE 0 END,
-          CASE WHEN $4 = 'RIGHT' THEN 1 ELSE 0 END,
-          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
-        )
-        ON CONFLICT (user_id, business_date) DO UPDATE SET
-          left_units = binary_daily_volumes.left_units + (CASE WHEN EXCLUDED.left_units = 1 THEN 1 ELSE 0 END),
-          right_units = binary_daily_volumes.right_units + (CASE WHEN EXCLUDED.right_units = 1 THEN 1 ELSE 0 END),
-          updated_at = CURRENT_TIMESTAMP
-        `,
-        [dailyId, step.ancestorUserId, businessDate, step.side]
-      );
-      await db.query(
-        `
-        INSERT INTO binary_volume_balances (user_id, carry_left_units, carry_right_units, updated_at)
-        VALUES ($1, 0, 0, CURRENT_TIMESTAMP)
-        ON CONFLICT (user_id) DO NOTHING
-        `,
-        [step.ancestorUserId]
-      );
-    }
-  }
-  return {
-    sourceNodeId,
-    buyerUserId,
-    eventsCreated,
-    ancestorsProcessed: ancestors.length
-  };
-}
-async function backfillNodeSalesVolumeForPlacedMember(dbClient, memberUserId) {
-  const db = dbClient || await getDb();
-  const activeNodesRes = await db.query(
-    `
-    SELECT id, activated_at 
-    FROM nodes 
-    WHERE owner_user_id = $1 AND status = 'ACTIVE'
-    ORDER BY activated_at ASC
-    `,
-    [memberUserId]
-  );
-  if (activeNodesRes.rows.length === 0) {
-    return 0;
-  }
-  let totalEventsCreated = 0;
-  for (const node of activeNodesRes.rows) {
-    const result = await propagateNodeSalesVolume(
-      db,
-      node.id,
-      memberUserId,
-      node.activated_at ? new Date(node.activated_at) : void 0
-    );
-    totalEventsCreated += result.eventsCreated;
-  }
-  return totalEventsCreated;
-}
-async function getVolumeSummary(userId) {
-  const db = await getDb();
-  const currentDhakaDate = getDhakaBusinessDate();
-  const todayRes = await db.query(
-    `
-    SELECT left_units, right_units
-    FROM binary_daily_volumes
-    WHERE user_id = $1 AND business_date = $2
-    `,
-    [userId, currentDhakaDate]
-  );
-  const todayLeft = todayRes.rows[0] ? Number(todayRes.rows[0].left_units) : 0;
-  const todayRight = todayRes.rows[0] ? Number(todayRes.rows[0].right_units) : 0;
-  const balanceRes = await db.query(
-    `
-    SELECT carry_left_units, carry_right_units, last_settled_business_date
-    FROM binary_volume_balances
-    WHERE user_id = $1
-    `,
-    [userId]
-  );
-  const carryLeft = balanceRes.rows[0] ? Number(balanceRes.rows[0].carry_left_units) : 0;
-  const carryRight = balanceRes.rows[0] ? Number(balanceRes.rows[0].carry_right_units) : 0;
-  const lastSettled = balanceRes.rows[0]?.last_settled_business_date || null;
-  let unsettledQuery;
-  let unsettledParams;
-  if (lastSettled) {
-    unsettledQuery = `
-      SELECT 
-        COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_left,
-        COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_right
-      FROM binary_volume_events
-      WHERE beneficiary_user_id = $1 AND status = 'ACTIVE' AND business_date > $2
-    `;
-    unsettledParams = [userId, lastSettled];
-  } else {
-    unsettledQuery = `
-      SELECT 
-        COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_left,
-        COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS unsettled_right
-      FROM binary_volume_events
-      WHERE beneficiary_user_id = $1 AND status = 'ACTIVE'
-    `;
-    unsettledParams = [userId];
-  }
-  const unsettledRes = await db.query(unsettledQuery, unsettledParams);
-  const unsettledLeft = unsettledRes.rows[0] ? Number(unsettledRes.rows[0].unsettled_left) : 0;
-  const unsettledRight = unsettledRes.rows[0] ? Number(unsettledRes.rows[0].unsettled_right) : 0;
-  const availableLeft = carryLeft + unsettledLeft;
-  const availableRight = carryRight + unsettledRight;
-  return {
-    businessDate: currentDhakaDate,
-    today: {
-      left: todayLeft,
-      right: todayRight
-    },
-    carry: {
-      left: carryLeft,
-      right: carryRight
-    },
-    availableForFutureMatching: {
-      left: availableLeft,
-      right: availableRight
-    }
-  };
-}
-async function getVolumeHistory(userId, page = 1, limit = 20) {
-  const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
-  const offset = (safePage - 1) * safeLimit;
-  const countRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM binary_daily_volumes WHERE user_id = $1`,
-    [userId]
-  );
-  const totalCount = Number(countRes.rows[0]?.count || 0);
-  const rowsRes = await db.query(
-    `
-    SELECT business_date, left_units, right_units
-    FROM binary_daily_volumes
-    WHERE user_id = $1
-    ORDER BY business_date DESC
-    LIMIT $2 OFFSET $3
-    `,
-    [userId, safeLimit, offset]
-  );
-  const history = rowsRes.rows.map((r) => ({
-    businessDate: typeof r.business_date === "string" ? r.business_date.split("T")[0] : new Date(r.business_date).toISOString().split("T")[0],
-    leftUnits: Number(r.left_units),
-    rightUnits: Number(r.right_units)
-  }));
-  return {
-    history,
-    pagination: {
-      page: safePage,
-      limit: safeLimit,
-      totalCount,
-      totalPages: Math.max(1, Math.ceil(totalCount / safeLimit))
-    }
-  };
-}
-
-// src/server/services/nodeOrderService.ts
-init_publicNetworkService();
-init_economicService();
-init_notificationService();
-async function cleanupExpiredReservations(dbClient) {
-  const db = dbClient || await getDb();
-  try {
-    const expiredOrdersRes = await db.query(
-      `
-      SELECT id, node_id, user_id, public_order_id
-      FROM node_orders
-      WHERE status = 'PENDING' AND expires_at <= CURRENT_TIMESTAMP
-      `
-    );
-    if (expiredOrdersRes.rows.length === 0) {
-      return 0;
-    }
-    let cleanedCount = 0;
-    for (const ord of expiredOrdersRes.rows) {
-      await db.query(
-        `
-        UPDATE node_orders
-        SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND status = 'PENDING'
-        `,
-        [ord.id]
-      );
-      await db.query(
-        `
-        UPDATE nodes
-        SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND status = 'RESERVED'
-        `,
-        [ord.node_id]
-      );
-      cleanedCount++;
-    }
-    return cleanedCount;
-  } catch (err) {
-    console.error("[NodeOrderService] Error during cleanupExpiredReservations:", err);
-    return 0;
-  }
-}
-async function createNodeReservation(userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT", dbClient) {
-  const db = dbClient || await getDb();
-  if (dbClient) {
-    return executeReservation(dbClient, userId, idempotencyKey, paymentMethod);
-  }
-  try {
-    return await db.transaction(async (trx) => {
-      return executeReservation(trx, userId, idempotencyKey, paymentMethod);
-    });
-  } catch (err) {
-    console.error("[CreateNodeReservation Error]", err);
-    throw err;
-  }
-}
-async function executeReservation(db, userId, idempotencyKey, paymentMethod = "SIMULATED_INSTANT") {
-  const salesEnabled = await isNodeSalesEnabled(db);
-  if (!salesEnabled) {
-    const error = new Error("NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.");
-    error.code = "NODE_SALES_PAUSED";
-    error.statusCode = 403;
-    throw error;
-  }
-  await db.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
-  try {
-    await cleanupExpiredReservations(db);
-  } catch {
-  }
-  if (idempotencyKey && idempotencyKey.trim().length > 0) {
-    const existingByIdempotency = await db.query(
-      `
-      SELECT 
-        o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
-        o.currency, o.status, o.payment_method, o.payment_reference,
-        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-        n.public_node_id
-      FROM node_orders o
-      JOIN nodes n ON o.node_id = n.id
-      WHERE o.idempotency_key = $1
-      `,
-      [idempotencyKey.trim()]
-    );
-    if (existingByIdempotency.rows.length > 0) {
-      const row = existingByIdempotency.rows[0];
-      const nowMs = Date.now();
-      const expiresMs = new Date(row.expires_at).getTime();
-      const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
-      return {
-        order: {
-          id: row.id,
-          publicOrderId: row.public_order_id,
-          publicNodeId: row.public_node_id,
-          nodeNumber: row.node_number,
-          amountUsd: Number(row.amount_usd),
-          currency: row.currency,
-          status: row.status,
-          paymentMethod: row.payment_method,
-          paymentReference: row.payment_reference,
-          reservedAt: row.reserved_at.toISOString(),
-          expiresAt: row.expires_at.toISOString(),
-          completedAt: row.completed_at ? row.completed_at.toISOString() : null,
-          cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
-          createdAt: row.created_at.toISOString(),
-          secondsRemaining
-        },
-        isExisting: true
-      };
-    }
-  }
-  const activePendingRes = await db.query(
-    `
-    SELECT 
-      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
-      o.currency, o.status, o.payment_method, o.payment_reference,
-      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-      n.public_node_id
-    FROM node_orders o
-    JOIN nodes n ON o.node_id = n.id
-    WHERE o.user_id = $1 AND o.status = 'PENDING' AND o.expires_at > CURRENT_TIMESTAMP
-    ORDER BY o.created_at DESC
-    LIMIT 1
-    FOR UPDATE
-    `,
-    [userId]
-  );
-  if (activePendingRes.rows.length > 0) {
-    const row = activePendingRes.rows[0];
-    const nowMs = Date.now();
-    const expiresMs = new Date(row.expires_at).getTime();
-    const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
-    return {
-      order: {
-        id: row.id,
-        publicOrderId: row.public_order_id,
-        publicNodeId: row.public_node_id,
-        nodeNumber: row.node_number,
-        amountUsd: Number(row.amount_usd),
-        currency: row.currency,
-        status: row.status,
-        paymentMethod: row.payment_method,
-        paymentReference: row.payment_reference,
-        reservedAt: row.reserved_at.toISOString(),
-        expiresAt: row.expires_at.toISOString(),
-        completedAt: row.completed_at ? row.completed_at.toISOString() : null,
-        cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
-        createdAt: row.created_at.toISOString(),
-        secondsRemaining
-      },
-      isExisting: true
-    };
-  }
-  const maxRetries = 3;
-  let attempt = 0;
-  while (attempt < maxRetries) {
-    attempt++;
-    const candidateRes = await db.query(
-      `
-      SELECT id, node_number, public_node_id
-      FROM nodes
-      WHERE status = 'AVAILABLE'
-      ORDER BY node_number ASC
-      LIMIT 1
-      FOR UPDATE
-      `
-    );
-    if (candidateRes.rows.length === 0) {
-      const error = new Error("All 10,000 Genesis Nodes have been allocated or reserved.");
-      error.code = "SOLD_OUT";
-      error.statusCode = 409;
-      throw error;
-    }
-    const candidateNode = candidateRes.rows[0];
-    const reserveNodeRes = await db.query(
-      `
-      UPDATE nodes
-      SET 
-        status = 'RESERVED',
-        reserved_by_user_id = $1,
-        reserved_at = CURRENT_TIMESTAMP,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE id = $2 AND status = 'AVAILABLE'
-      RETURNING id
-      `,
-      [userId, candidateNode.id]
-    );
-    if (reserveNodeRes.rows.length === 0) {
-      continue;
-    }
-    const orderId = uuidv415();
-    const publicOrderId = generateOrderPublicId();
-    const cleanIdempotencyKey = idempotencyKey && idempotencyKey.trim().length > 0 ? idempotencyKey.trim() : null;
-    const expiresAt = new Date(Date.now() + RESERVATION_EXPIRY_MINUTES * 60 * 1e3);
-    const nodePrice = await getNodeBasePrice(db);
-    const orderInsertRes = await db.query(
-      `
-      INSERT INTO node_orders (
-        id, public_order_id, user_id, node_id, node_number,
-        amount_usd, currency, status, payment_method, idempotency_key,
-        reserved_at, expires_at, created_at, updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      RETURNING 
-        id, public_order_id, node_id, node_number, amount_usd,
-        currency, status, payment_method, payment_reference,
-        reserved_at, expires_at, created_at
-      `,
-      [
-        orderId,
-        publicOrderId,
-        userId,
-        candidateNode.id,
-        candidateNode.node_number,
-        nodePrice,
-        // Server-authoritative Node Price
-        "USD",
-        "PENDING",
-        paymentMethod,
-        cleanIdempotencyKey,
-        expiresAt
-      ]
-    );
-    const insertedOrder = orderInsertRes.rows[0];
-    const nowMs = Date.now();
-    const expiresMs = new Date(insertedOrder.expires_at).getTime();
-    const secondsRemaining = Math.max(0, Math.floor((expiresMs - nowMs) / 1e3));
-    return {
-      order: {
-        id: insertedOrder.id,
-        publicOrderId: insertedOrder.public_order_id,
-        publicNodeId: candidateNode.public_node_id,
-        nodeNumber: insertedOrder.node_number,
-        amountUsd: Number(insertedOrder.amount_usd),
-        currency: insertedOrder.currency,
-        status: insertedOrder.status,
-        paymentMethod: insertedOrder.payment_method,
-        paymentReference: insertedOrder.payment_reference,
-        reservedAt: insertedOrder.reserved_at.toISOString(),
-        expiresAt: insertedOrder.expires_at.toISOString(),
-        completedAt: null,
-        cancelledAt: null,
-        createdAt: insertedOrder.created_at.toISOString(),
-        secondsRemaining
-      },
-      isExisting: false
-    };
-  }
-  const conflictErr = new Error("High concurrency conflict allocating node. Please retry.");
-  conflictErr.code = "CONCURRENCY_RETRY";
-  conflictErr.statusCode = 409;
-  throw conflictErr;
-}
-async function settleNodeOrder(userId, orderIdentifier, paymentReference, dbClient) {
-  const db = dbClient || await getDb();
-  await cleanupExpiredReservations(db);
-  const querySql = userId ? `
-      SELECT 
-        o.id, o.public_order_id, o.user_id, o.node_id, o.node_number, o.amount_usd,
-        o.currency, o.status, o.payment_method, o.payment_reference,
-        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-        n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
-      FROM node_orders o
-      JOIN nodes n ON o.node_id = n.id
-      WHERE (o.id::text = $1 OR o.public_order_id = $1) AND o.user_id = $2
-      ` : `
-      SELECT 
-        o.id, o.public_order_id, o.user_id, o.node_id, o.node_number, o.amount_usd,
-        o.currency, o.status, o.payment_method, o.payment_reference,
-        o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-        n.public_node_id, n.status AS node_status, n.activated_at AS node_activated_at
-      FROM node_orders o
-      JOIN nodes n ON o.node_id = n.id
-      WHERE (o.id::text = $1 OR o.public_order_id = $1)
-      `;
-  const queryParams = userId ? [orderIdentifier.trim(), userId] : [orderIdentifier.trim()];
-  const orderRes = await db.query(querySql, queryParams);
-  if (orderRes.rows.length === 0) {
-    const error = new Error("Order not found or unauthorized.");
-    error.code = "ORDER_NOT_FOUND";
-    error.statusCode = 404;
-    throw error;
-  }
-  const order = orderRes.rows[0];
-  if (order.status === "COMPLETED") {
-    return {
-      order: {
-        publicOrderId: order.public_order_id,
-        publicNodeId: order.public_node_id,
-        nodeNumber: order.node_number,
-        amountUsd: Number(order.amount_usd),
-        currency: order.currency,
-        status: order.status,
-        paymentMethod: order.payment_method,
-        paymentReference: order.payment_reference,
-        reservedAt: order.reserved_at.toISOString(),
-        expiresAt: order.expires_at.toISOString(),
-        completedAt: order.completed_at ? order.completed_at.toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
-        cancelledAt: null,
-        createdAt: order.created_at.toISOString(),
-        secondsRemaining: 0
-      },
-      node: {
-        publicNodeId: order.public_node_id,
-        nodeNumber: order.node_number,
-        status: order.node_status || "ACTIVE",
-        activatedAt: order.node_activated_at ? order.node_activated_at.toISOString() : order.completed_at ? order.completed_at.toISOString() : (/* @__PURE__ */ new Date()).toISOString()
-      },
-      isDuplicate: true
-    };
-  }
-  if (order.status !== "PENDING") {
-    const error = new Error(`Cannot settle order in ${order.status} state.`);
-    error.code = "INVALID_ORDER_STATE";
-    error.statusCode = 400;
-    throw error;
-  }
-  if (new Date(order.expires_at).getTime() <= Date.now()) {
-    await db.query(`UPDATE node_orders SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [order.id]);
-    await db.query(`UPDATE nodes SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL WHERE id = $1`, [order.node_id]);
-    const error = new Error("The 15-minute reservation window for this node has expired.");
-    error.code = "ORDER_EXPIRED";
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!isValidOrderStateTransition("PENDING", "COMPLETED")) {
-    const error = new Error("Invalid order transition.");
-    error.code = "INVALID_TRANSITION";
-    error.statusCode = 400;
-    throw error;
-  }
-  if (!isValidNodeStateTransition("RESERVED", "ACTIVE")) {
-    const error = new Error("Invalid node transition.");
-    error.code = "INVALID_TRANSITION";
-    error.statusCode = 400;
-    throw error;
-  }
-  const effectiveRef = paymentReference || `SETTLE_VERIFIED_${Date.now()}_${order.public_order_id}`;
-  const currentRewardRate = await getNodeRewardRatePerEpoch(db);
-  const internalCoin = await getInternalCoinPrice().catch(() => ({ priceUsdt: 0.1 }));
-  const refCoinPrice = internalCoin.priceUsdt || 0.1;
-  const basePrice = await getNodeBasePrice(db).catch(() => 1e3);
-  const activatedNodeRes = await db.query(
-    `
-    UPDATE nodes
-    SET 
-      status = 'ACTIVE',
-      owner_user_id = $1,
-      reserved_by_user_id = NULL,
-      purchase_timestamp = COALESCE(purchase_timestamp, CURRENT_TIMESTAMP),
-      activated_at = CURRENT_TIMESTAMP,
-      maturity_timestamp = NULL,
-      product_version = COALESCE(product_version, 'GENESIS_V1'),
-      purchase_price_usd = COALESCE(purchase_price_usd, $3),
-      phivo_reference_price_at_purchase = COALESCE(phivo_reference_price_at_purchase, $4),
-      lifetime_phivo_allocation = COALESCE(lifetime_phivo_allocation, 10000.00),
-      term_days = term_days,
-      daily_phivo_emission = COALESCE($5, daily_phivo_emission),
-      distributed_phivo = COALESCE(distributed_phivo, 0.00),
-      remaining_phivo = COALESCE(remaining_phivo, 10000.00),
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = $2 AND status = 'RESERVED'
-    RETURNING id, public_node_id, node_number, status, activated_at, maturity_timestamp, distributed_phivo, remaining_phivo
-    `,
-    [order.user_id, order.node_id, basePrice, refCoinPrice, currentRewardRate]
-  );
-  if (activatedNodeRes.rows.length === 0) {
-    const error = new Error("Failed to activate node. Reservation state changed.");
-    error.code = "NODE_STATE_MISMATCH";
-    error.statusCode = 409;
-    throw error;
-  }
-  const updatedOrderRes = await db.query(
-    `
-    UPDATE node_orders
-    SET 
-      status = 'COMPLETED',
-      payment_reference = $1,
-      completed_at = CURRENT_TIMESTAMP,
-      updated_at = CURRENT_TIMESTAMP
-    WHERE id = $2
-    RETURNING *
-    `,
-    [effectiveRef, order.id]
-  );
-  const finalOrder = updatedOrderRes.rows[0];
-  const finalNode = activatedNodeRes.rows[0];
-  let referralCommission = null;
-  try {
-    referralCommission = await processNodeActivationCommission(
-      db,
-      finalOrder.id,
-      finalNode.id,
-      order.user_id
-    );
-  } catch (commErr) {
-    console.warn("[ReferralCommission] Error processing referral commission for node activation:", commErr);
-  }
-  try {
-    await propagateNodeSalesVolume(db, finalNode.id, order.user_id);
-  } catch (volErr) {
-    console.warn("[BinaryVolume] Error propagating node sales volume:", volErr);
-  }
-  try {
-    const { getPromotionalOffers: getPromotionalOffers2 } = await Promise.resolve().then(() => (init_promotionalService(), promotionalService_exports));
-    const promoOffers = await getPromotionalOffers2(false);
-    const bogoOffer = promoOffers.find((o) => o.offerType === "BOGO_FREE_NODE" || o.title.toLowerCase().includes("bogo") || o.title.toLowerCase().includes("free promo node"));
-    if (bogoOffer && bogoOffer.bonusNodesCount > 0) {
-      const bonusCount = bogoOffer.bonusNodesCount || 1;
-      for (let i = 0; i < bonusCount; i++) {
-        const availNodeRes = await db.query(
-          `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`
-        );
-        if (availNodeRes.rows.length > 0) {
-          const bonusNode = availNodeRes.rows[0];
-          await db.query(
-            `
-            UPDATE nodes
-            SET 
-              owner_user_id = $1,
-              status = 'ACTIVE',
-              activated_at = CURRENT_TIMESTAMP,
-              updated_at = CURRENT_TIMESTAMP
-            WHERE id = $2
-            `,
-            [order.user_id, bonusNode.id]
-          );
-          await db.query(
-            `
-            INSERT INTO node_owners (id, node_id, user_id, acquired_via, acquired_at, is_current_owner)
-            VALUES ($1, $2, $3, 'PROMOTIONAL_BONUS', CURRENT_TIMESTAMP, TRUE)
-            ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE, acquired_via = 'PROMOTIONAL_BONUS'
-            `,
-            [uuidv415(), bonusNode.id, order.user_id]
-          );
-          console.log(`[PromotionEngine] Allocated Free Bonus Promo Node #${bonusNode.node_number} (${bonusNode.public_node_id}) to user ${order.user_id} under offer "${bogoOffer.title}"`);
-        }
-      }
-    }
-  } catch (promoErr) {
-    console.warn("[PromotionEngine] Notice checking promotional node bonus:", promoErr);
-  }
-  try {
-    await db.query(
-      `
-      INSERT INTO security_events (id, user_id, event_type, description, created_at)
-      VALUES ($1, $2, 'NODE_PURCHASE_COMPLETED', $3, CURRENT_TIMESTAMP)
-      `,
-      [
-        uuidv415(),
-        order.user_id,
-        `Acquired Genesis Node ${finalNode.public_node_id} (Node #${finalNode.node_number}) for $1,000 USD via order ${finalOrder.public_order_id}.`
-      ]
-    );
-  } catch (secErr) {
-    console.warn("[SecurityEvent] Could not log purchase event:", secErr);
-  }
-  const executePostCommit = async () => {
-    try {
-      await notifyNodeActivated({
-        userId: order.user_id,
-        nodeNumber: finalNode.node_number,
-        orderPublicId: finalOrder.public_order_id,
-        sourceId: finalOrder.id
-      });
-    } catch (notifErr) {
-      console.warn("[Notification] Could not trigger node activated notification:", notifErr);
-    }
-    try {
-      broadcastPublicEvent({
-        id: `evt-node-${finalNode.public_node_id}`,
-        type: "node.activated",
-        title: `${finalNode.public_node_id} Activated`,
-        description: `Genesis validator node ${finalNode.public_node_id} successfully activated on-chain.`,
-        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-        publicId: finalNode.public_node_id
-      });
-    } catch (pubErr) {
-      console.warn("[PublicEvent] Could not broadcast public node activation event:", pubErr);
-    }
-    try {
-      const topDb = await getDb();
-      const userRes = await topDb.query(
-        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-        [order.user_id]
-      );
-      if (userRes.rowCount > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail: queueEventEmail2, triggerAutomationRule: triggerAutomationRule2 } = await Promise.resolve().then(() => (init_emailService(), emailService_exports));
-        await queueEventEmail2(user.email, "NODE_ACTIVATION", {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          nodeNumber: String(finalNode.node_number),
-          publicNodeId: finalNode.public_node_id,
-          amount: String(finalOrder.amount_usd)
-        });
-        await triggerAutomationRule2(order.user_id, "NODE_SALES", {
-          nodeNumber: String(finalNode.node_number),
-          publicNodeId: finalNode.public_node_id,
-          amount: String(finalOrder.amount_usd)
-        });
-      }
-    } catch (emailErr) {
-      console.warn("[EmailEngine] Failed to send Node Activation email/automation trigger:", emailErr);
-    }
-  };
-  if (!dbClient) {
-    executePostCommit().catch((err) => {
-      console.warn("[NodeOrderService] Post-commit execution warning:", err);
-    });
-  }
-  return {
-    order: {
-      id: finalOrder.id,
-      publicOrderId: finalOrder.public_order_id,
-      publicNodeId: finalNode.public_node_id,
-      nodeNumber: finalOrder.node_number,
-      amountUsd: Number(finalOrder.amount_usd),
-      currency: finalOrder.currency,
-      status: finalOrder.status,
-      paymentMethod: finalOrder.payment_method,
-      paymentReference: finalOrder.payment_reference,
-      reservedAt: finalOrder.reserved_at.toISOString(),
-      expiresAt: finalOrder.expires_at.toISOString(),
-      completedAt: finalOrder.completed_at.toISOString(),
-      cancelledAt: null,
-      createdAt: finalOrder.created_at.toISOString(),
-      secondsRemaining: 0
-    },
-    node: {
-      publicNodeId: finalNode.public_node_id,
-      nodeNumber: finalNode.node_number,
-      status: finalNode.status,
-      activatedAt: finalNode.activated_at.toISOString()
-    },
-    referralCommission,
-    isDuplicate: false,
-    runPostCommit: executePostCommit
-  };
-}
-async function cancelNodeOrder(userId, orderIdentifier) {
-  const db = await getDb();
-  const orderRes = await db.query(
-    `
-    SELECT id, node_id, status
-    FROM node_orders
-    WHERE (id::text = $1 OR public_order_id = $1) AND user_id = $2
-    `,
-    [orderIdentifier.trim(), userId]
-  );
-  if (orderRes.rows.length === 0) {
-    const error = new Error("Order not found.");
-    error.code = "ORDER_NOT_FOUND";
-    error.statusCode = 404;
-    throw error;
-  }
-  const order = orderRes.rows[0];
-  if (order.status !== "PENDING") {
-    const error = new Error(`Cannot cancel order in ${order.status} state.`);
-    error.code = "INVALID_ORDER_STATE";
-    error.statusCode = 400;
-    throw error;
-  }
-  await db.query(
-    `
-    UPDATE node_orders
-    SET status = 'CANCELLED', cancelled_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1
-    `,
-    [order.id]
-  );
-  await db.query(
-    `
-    UPDATE nodes
-    SET status = 'AVAILABLE', reserved_by_user_id = NULL, reserved_at = NULL, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $1 AND status = 'RESERVED'
-    `,
-    [order.node_id]
-  );
-  return {
-    success: true,
-    message: "Node reservation cancelled successfully and released back to available inventory."
-  };
-}
-async function getUserOrders(userId, dbClient) {
-  const db = dbClient || await getDb();
-  await cleanupExpiredReservations(db);
-  const ordersRes = await db.query(
-    `
-    SELECT 
-      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
-      o.currency, o.status, o.payment_method, o.payment_reference,
-      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-      n.public_node_id
-    FROM node_orders o
-    JOIN nodes n ON o.node_id = n.id
-    WHERE o.user_id = $1
-    ORDER BY o.created_at DESC
-    `,
-    [userId]
-  );
-  const nowMs = Date.now();
-  return ordersRes.rows.map((row) => {
-    const expiresMs = new Date(row.expires_at).getTime();
-    const secondsRemaining = row.status === "PENDING" ? Math.max(0, Math.floor((expiresMs - nowMs) / 1e3)) : 0;
-    return {
-      publicOrderId: row.public_order_id,
-      publicNodeId: row.public_node_id,
-      nodeNumber: row.node_number,
-      amountUsd: Number(row.amount_usd),
-      currency: row.currency,
-      status: row.status,
-      paymentMethod: row.payment_method,
-      paymentReference: row.payment_reference,
-      reservedAt: row.reserved_at.toISOString(),
-      expiresAt: row.expires_at.toISOString(),
-      completedAt: row.completed_at ? row.completed_at.toISOString() : null,
-      cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
-      createdAt: row.created_at.toISOString(),
-      secondsRemaining
-    };
-  });
-}
-async function getUserOrderById(userId, orderIdentifier) {
-  const db = await getDb();
-  await cleanupExpiredReservations(db);
-  const orderRes = await db.query(
-    `
-    SELECT 
-      o.id, o.public_order_id, o.node_id, o.node_number, o.amount_usd,
-      o.currency, o.status, o.payment_method, o.payment_reference,
-      o.reserved_at, o.expires_at, o.completed_at, o.cancelled_at, o.created_at,
-      n.public_node_id
-    FROM node_orders o
-    JOIN nodes n ON o.node_id = n.id
-    WHERE (o.id::text = $1 OR o.public_order_id = $1) AND o.user_id = $2
-    `,
-    [orderIdentifier.trim(), userId]
-  );
-  if (orderRes.rows.length === 0) {
-    return null;
-  }
-  const row = orderRes.rows[0];
-  const nowMs = Date.now();
-  const expiresMs = new Date(row.expires_at).getTime();
-  const secondsRemaining = row.status === "PENDING" ? Math.max(0, Math.floor((expiresMs - nowMs) / 1e3)) : 0;
-  return {
-    publicOrderId: row.public_order_id,
-    publicNodeId: row.public_node_id,
-    nodeNumber: row.node_number,
-    amountUsd: Number(row.amount_usd),
-    currency: row.currency,
-    status: row.status,
-    paymentMethod: row.payment_method,
-    paymentReference: row.payment_reference,
-    reservedAt: row.reserved_at.toISOString(),
-    expiresAt: row.expires_at.toISOString(),
-    completedAt: row.completed_at ? row.completed_at.toISOString() : null,
-    cancelledAt: row.cancelled_at ? row.cancelled_at.toISOString() : null,
-    createdAt: row.created_at.toISOString(),
-    secondsRemaining
-  };
-}
-async function purchaseNodeWithDepositBalance(userId, preferredAsset = "USDT") {
-  const db = await getDb();
-  return await db.transaction(async (trx) => {
-    try {
-      await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
-      const nodePrice = await getNodeBasePrice(trx);
-      const { syncUserLedger: syncUserLedger2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
-      await syncUserLedger2(userId, trx);
-      let availableDepositBalance = 0;
-      if (preferredAsset === "USDT") {
-        const balRes = await trx.query(
-          `
-          SELECT 
-            COALESCE(SUM(CASE 
-              WHEN entry_type = 'CREDIT' THEN amount 
-              WHEN entry_type = 'DEBIT' THEN -amount 
-              WHEN entry_type = 'REVERSAL' AND source_type = 'WITHDRAWAL' THEN amount 
-              WHEN entry_type = 'REVERSAL' THEN -amount 
-              ELSE 0 
-            END), 0) AS available_balance
-          FROM financial_ledger_entries
-          WHERE user_id = $1 
-            AND status = 'SETTLED' 
-            AND (currency = 'USDT' OR currency = 'USD') 
-          `,
-          [userId]
-        );
-        availableDepositBalance = Math.max(0, Number(balRes.rows[0]?.available_balance || 0));
-      } else {
-        const depositRes = await trx.query(
-          `
-          SELECT COALESCE(SUM(amount), 0) AS total_credited
-          FROM blockchain_deposits
-          WHERE user_id = $1 AND status = 'CREDITED' AND asset = 'BNB'
-          `,
-          [userId]
-        );
-        const totalCreditedDeposits = Number(depositRes.rows[0]?.total_credited || 0);
-        const debitsRes = await trx.query(
-          `
-          SELECT COALESCE(SUM(amount), 0) AS total_debits
-          FROM financial_ledger_entries
-          WHERE user_id = $1 AND entry_type = 'DEBIT' AND source_type = 'NODE_PURCHASE' AND currency = 'BNB'
-          `,
-          [userId]
-        );
-        const totalNodeDebits = Number(debitsRes.rows[0]?.total_debits || 0);
-        availableDepositBalance = Math.max(0, totalCreditedDeposits - totalNodeDebits);
-      }
-      if (availableDepositBalance < nodePrice) {
-        const error = new Error(
-          `Your current available balance is $${availableDepositBalance.toFixed(2)} ${preferredAsset}. You need $${nodePrice.toFixed(2)} ${preferredAsset} to activate a Genesis Node. Please deposit or add funds first.`
-        );
-        error.code = "INSUFFICIENT_DEPOSIT_BALANCE";
-        error.statusCode = 400;
-        error.currentBalance = availableDepositBalance;
-        error.requiredAmount = nodePrice;
-        error.redirectToDeposit = true;
-        throw error;
-      }
-      let reservation;
-      try {
-        reservation = await createNodeReservation(userId, `dep_node_${userId}_${uuidv415()}`, `DEPOSIT_${preferredAsset}`, trx);
-      } catch (err) {
-        const existingOrders = await getUserOrders(userId, trx);
-        const pending = existingOrders.find((o) => o.status === "PENDING" && o.secondsRemaining > 0);
-        if (pending) {
-          reservation = { order: pending, isExisting: true };
-        } else {
-          throw err;
-        }
-      }
-      const debitTxnId = uuidv415();
-      const publicTxnId = generateLedgerTransactionPublicId();
-      await trx.query(
-        `
-        INSERT INTO financial_ledger_entries (
-          id, public_txn_id, user_id, entry_type, source_type, source_id,
-          source_ref, description, amount, currency, status, created_at
-        )
-        VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, $8, 'SETTLED', CURRENT_TIMESTAMP)
-        `,
-        [
-          debitTxnId,
-          publicTxnId,
-          userId,
-          reservation.order.id,
-          reservation.order.publicNodeId,
-          `Genesis Node ${reservation.order.publicNodeId} purchase paid via ${preferredAsset} deposit balance`,
-          nodePrice,
-          preferredAsset
-        ]
-      );
-      const settlement = await settleNodeOrder(
-        userId,
-        reservation.order.publicOrderId,
-        `DEPOSIT_BAL_PAYMENT_${preferredAsset}_${publicTxnId}`,
-        trx
-      );
-      const newRemainingBalance = Math.max(0, availableDepositBalance - nodePrice);
-      return {
-        order: settlement.order,
-        node: settlement.node,
-        depositDeducted: nodePrice,
-        remainingDepositBalance: newRemainingBalance
-      };
-    } catch (innerErr) {
-      console.error("[purchaseNodeWithDepositBalance Inner Error]", innerErr);
-      throw innerErr;
-    }
-  });
-}
+init_nodeOrderService();
 
 // src/server/services/nodeRewardService.ts
 init_db();
@@ -12815,6 +13091,7 @@ function getConfiguredRewardPerNode(override) {
 init_walletLedgerService();
 init_economicService();
 init_notificationService();
+init_timezone();
 async function createRewardEpoch(params) {
   const db = await getDb();
   let rewardRate = null;
@@ -13584,13 +13861,15 @@ var nodeRoutes_default = router4;
 
 // src/server/routes/orderRoutes.ts
 import { Router as Router5 } from "express";
+init_nodeOrderService();
 
 // src/server/services/nodePurchaseBalanceService.ts
 init_db();
 init_idGenerator();
 init_economicService();
-import { v4 as uuidv417 } from "uuid";
+init_nodeOrderService();
 init_walletLedgerService();
+import { v4 as uuidv417 } from "uuid";
 var userLocks = /* @__PURE__ */ new Map();
 function withUserLock(userId, fn) {
   const currentLock = userLocks.get(userId) || Promise.resolve();
@@ -14210,6 +14489,7 @@ var orderRoutes_default = router5;
 
 // src/server/routes/commissionRoutes.ts
 import { Router as Router6 } from "express";
+init_referralCommissionService();
 var router6 = Router6();
 router6.get("/me", requireAuth, async (req, res) => {
   try {
@@ -14232,6 +14512,7 @@ import { Router as Router7 } from "express";
 // src/server/services/binaryPlacementService.ts
 init_db();
 init_idGenerator();
+init_binaryVolumeService();
 import { v4 as uuidv418 } from "uuid";
 async function validateNoCycle(db, memberId, targetParentId) {
   if (memberId === targetParentId) {
@@ -14341,10 +14622,31 @@ async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
   }
   const member = memberRes.rows[0];
   if (member.sponsor_user_id !== sponsorUserId) {
-    const error = new Error("You can only place members who you directly sponsored.");
-    error.code = "NOT_DIRECT_SPONSOR";
-    error.statusCode = 403;
-    throw error;
+    const sponsorIdent = await db.query(
+      `SELECT r.referral_code, u.public_id, u.email
+       FROM users u
+       LEFT JOIN user_referrals r ON u.id = r.user_id
+       WHERE u.id = $1`,
+      [sponsorUserId]
+    );
+    const s = sponsorIdent.rows[0];
+    const memberPending = await db.query(
+      `SELECT pending_referral_code FROM users WHERE id = $1`,
+      [member.id]
+    );
+    const pendCode = (memberPending.rows[0]?.pending_referral_code || "").trim().toUpperCase();
+    if (s && pendCode && (pendCode === s.referral_code?.toUpperCase() || pendCode === s.public_id?.toUpperCase() || pendCode.toLowerCase() === s.email?.toLowerCase())) {
+      await db.query(
+        `UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2`,
+        [sponsorUserId, member.id]
+      );
+      member.sponsor_user_id = sponsorUserId;
+    } else {
+      const error = new Error("You can only place members who you directly sponsored.");
+      error.code = "NOT_DIRECT_SPONSOR";
+      error.statusCode = 403;
+      throw error;
+    }
   }
   await db.query(
     `
@@ -14447,6 +14749,32 @@ async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
 }
 async function getUnplacedDirectReferrals(sponsorUserId) {
   const db = await getDb();
+  const sponsorIdent = await db.query(
+    `SELECT r.referral_code, u.public_id, u.email
+     FROM users u
+     LEFT JOIN user_referrals r ON u.id = r.user_id
+     WHERE u.id = $1`,
+    [sponsorUserId]
+  );
+  if (sponsorIdent.rows.length > 0) {
+    const s = sponsorIdent.rows[0];
+    await db.query(
+      `
+      UPDATE user_referrals ur
+      SET sponsor_user_id = $1
+      FROM users u
+      WHERE ur.user_id = u.id
+        AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+        AND u.id != $1
+        AND (
+          UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
+          OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
+          OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
+        )
+      `,
+      [sponsorUserId, s.referral_code || "", s.public_id || "", s.email || ""]
+    );
+  }
   await db.query(
     `
     INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
@@ -14594,6 +14922,7 @@ async function getNetworkSummary(userId) {
 }
 
 // src/server/routes/networkRoutes.ts
+init_binaryVolumeService();
 var router7 = Router7();
 router7.post("/place", requireAuth, async (req, res) => {
   try {
@@ -14708,6 +15037,7 @@ init_db();
 init_idGenerator();
 init_walletLedgerService();
 init_notificationService();
+init_timezone();
 import { v4 as uuidv419 } from "uuid";
 async function getActiveMatchingConfig(dbClient) {
   const db = dbClient || await getDb();
@@ -15854,6 +16184,22 @@ promotionRouter.get("/offers", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[Promotion API] Error fetching offers:", err);
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to retrieve promotional offers." });
+  }
+});
+promotionRouter.post("/offers/:id/claim-and-pay", requireAuth, async (req, res) => {
+  try {
+    const user = req.user;
+    const offerId = req.params.id;
+    const preferredAsset = req.body?.preferredAsset === "BNB" ? "BNB" : "USDT";
+    const result = await claimAndPayPromotionalOffer(user.id, offerId, preferredAsset);
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error("[Promotion API] Error claiming offer:", err);
+    return res.status(400).json({
+      success: false,
+      error: "CLAIM_FAILED",
+      message: err.message || "Failed to claim and pay for promotional offer."
+    });
   }
 });
 promotionRouter.get("/banners", requireAuth, async (req, res) => {
@@ -21079,10 +21425,589 @@ router9.patch("/admin/tickets/:id/status", requireAdmin, async (req, res) => {
 });
 var supportRouter = router9;
 
+// src/server/routes/kycRoutes.ts
+import { Router as Router22 } from "express";
+
+// src/server/services/kycService.ts
+init_db();
+init_adminService();
+import { v4 as uuidv429 } from "uuid";
+async function submitUserKYC(userId, input) {
+  const db = await getDb();
+  if (!input.fullLegalName || input.fullLegalName.trim().length < 2) {
+    throw new Error("Full legal name is required and must match your ID document.");
+  }
+  if (!input.dob || !input.country || !input.residentialAddress || !input.city) {
+    throw new Error("Complete residential address and personal details are mandatory.");
+  }
+  if (!input.documentNumber || input.documentNumber.trim().length < 3) {
+    throw new Error("Valid document number is required.");
+  }
+  if (!input.documentFrontUrl || !input.selfiePhotoUrl) {
+    throw new Error("Front document photo and live facial selfie photo are mandatory.");
+  }
+  const existingRes = await db.query(
+    `SELECT id, status FROM kyc_verifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`,
+    [userId]
+  );
+  let recordId = uuidv429();
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (existingRes.rows.length > 0) {
+    recordId = existingRes.rows[0].id;
+    await db.query(
+      `
+      UPDATE kyc_verifications
+      SET full_legal_name = $1,
+          dob = $2,
+          country = $3,
+          residential_address = $4,
+          city = $5,
+          postal_code = $6,
+          document_type = $7,
+          document_number = $8,
+          document_front_url = $9,
+          document_back_url = $10,
+          selfie_photo_url = $11,
+          status = 'PENDING',
+          rejection_reason = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $12
+      `,
+      [
+        input.fullLegalName.trim(),
+        input.dob.trim(),
+        input.country.trim(),
+        input.residentialAddress.trim(),
+        input.city.trim(),
+        input.postalCode.trim(),
+        input.documentType,
+        input.documentNumber.trim(),
+        input.documentFrontUrl,
+        input.documentBackUrl || null,
+        input.selfiePhotoUrl,
+        recordId
+      ]
+    );
+  } else {
+    await db.query(
+      `
+      INSERT INTO kyc_verifications (
+        id, user_id, full_legal_name, dob, country, residential_address,
+        city, postal_code, document_type, document_number, document_front_url,
+        document_back_url, selfie_photo_url, status, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      `,
+      [
+        recordId,
+        userId,
+        input.fullLegalName.trim(),
+        input.dob.trim(),
+        input.country.trim(),
+        input.residentialAddress.trim(),
+        input.city.trim(),
+        input.postalCode.trim(),
+        input.documentType,
+        input.documentNumber.trim(),
+        input.documentFrontUrl,
+        input.documentBackUrl || null,
+        input.selfiePhotoUrl
+      ]
+    );
+  }
+  await db.query(
+    `UPDATE users SET kyc_status = 'PENDING', kyc_reject_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+    [userId]
+  );
+  try {
+    const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+    await adminFirestore2.collection("kyc_verifications").doc(userId).set(
+      {
+        id: recordId,
+        userId,
+        status: "PENDING",
+        documentType: input.documentType,
+        fullLegalName: input.fullLegalName.trim(),
+        submittedAt: now,
+        updatedAt: now
+      },
+      { merge: true }
+    );
+    await adminFirestore2.collection("users").doc(userId).set(
+      {
+        kycStatus: "PENDING",
+        kycRejectReason: null,
+        updatedAt: now
+      },
+      { merge: true }
+    );
+  } catch (fsErr) {
+    console.warn("[KYC Service] Firestore real-time sync warning:", fsErr);
+  }
+  try {
+    await db.query(
+      `
+      INSERT INTO notifications (id, user_id, type, title, message, created_at)
+      VALUES ($1, $2, 'SECURITY_ALERT', 'Identity Verification Submitted', 
+              'Your KYC documents (Front, Back, and Live Selfie) were received and are under active security verification.', CURRENT_TIMESTAMP)
+      `,
+      [uuidv429(), userId]
+    );
+  } catch {
+  }
+  return {
+    id: recordId,
+    userId,
+    fullLegalName: input.fullLegalName.trim(),
+    dob: input.dob.trim(),
+    country: input.country.trim(),
+    residentialAddress: input.residentialAddress.trim(),
+    city: input.city.trim(),
+    postalCode: input.postalCode.trim(),
+    documentType: input.documentType,
+    documentNumber: input.documentNumber.trim(),
+    documentFrontUrl: input.documentFrontUrl,
+    documentBackUrl: input.documentBackUrl,
+    selfiePhotoUrl: input.selfiePhotoUrl,
+    status: "PENDING",
+    createdAt: now,
+    updatedAt: now
+  };
+}
+async function getUserKYCStatus(userId) {
+  const db = await getDb();
+  const userRes = await db.query(
+    `SELECT kyc_status, kyc_reject_reason, kyc_verified_at FROM users WHERE id = $1`,
+    [userId]
+  );
+  const kycStatus = userRes.rows[0]?.kyc_status || "UNVERIFIED";
+  const rejectionReason = userRes.rows[0]?.kyc_reject_reason || null;
+  const verifiedAt = userRes.rows[0]?.kyc_verified_at || null;
+  const subRes = await db.query(
+    `
+    SELECT id, user_id, full_legal_name, dob, country, residential_address,
+           city, postal_code, document_type, document_number, document_front_url,
+           document_back_url, selfie_photo_url, status, rejection_reason,
+           reviewer_id, reviewed_at, created_at, updated_at
+    FROM kyc_verifications
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+    LIMIT 1
+    `,
+    [userId]
+  );
+  let submission = null;
+  if (subRes.rows.length > 0) {
+    const r = subRes.rows[0];
+    submission = {
+      id: r.id,
+      userId: r.user_id,
+      fullLegalName: r.full_legal_name,
+      dob: r.dob,
+      country: r.country,
+      residentialAddress: r.residential_address,
+      city: r.city,
+      postalCode: r.postal_code,
+      documentType: r.document_type,
+      documentNumber: r.document_number,
+      documentFrontUrl: r.document_front_url,
+      documentBackUrl: r.document_back_url,
+      selfiePhotoUrl: r.selfie_photo_url,
+      status: r.status,
+      rejectionReason: r.rejection_reason,
+      reviewerId: r.reviewer_id,
+      reviewedAt: r.reviewed_at,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    };
+  }
+  return {
+    kycStatus,
+    rejectionReason,
+    verifiedAt,
+    submission
+  };
+}
+async function getAdminKYCSubmissions(params) {
+  const db = await getDb();
+  const limit = params.limit || 50;
+  const offset = params.offset || 0;
+  const countsRes = await db.query(`
+    SELECT 
+      COUNT(*) AS total,
+      COUNT(*) FILTER (WHERE status = 'PENDING') AS pending,
+      COUNT(*) FILTER (WHERE status = 'VERIFIED') AS verified,
+      COUNT(*) FILTER (WHERE status = 'REJECTED') AS rejected
+    FROM kyc_verifications
+  `);
+  const countsRow = countsRes.rows[0] || {};
+  const pendingCount = Number(countsRow.pending || 0);
+  const verifiedCount = Number(countsRow.verified || 0);
+  const rejectedCount = Number(countsRow.rejected || 0);
+  const totalCount = Number(countsRow.total || 0);
+  let query = `
+    SELECT 
+      k.id, k.user_id, k.full_legal_name, k.dob, k.country, k.residential_address,
+      k.city, k.postal_code, k.document_type, k.document_number, k.document_front_url,
+      k.document_back_url, k.selfie_photo_url, k.status, k.rejection_reason,
+      k.reviewer_id, k.reviewed_at, k.created_at, k.updated_at,
+      u.public_id AS user_public_id, u.email AS user_email, u.full_name AS user_full_name
+    FROM kyc_verifications k
+    JOIN users u ON k.user_id = u.id
+    WHERE 1=1
+  `;
+  const queryParams = [];
+  if (params.statusFilter && params.statusFilter !== "ALL") {
+    queryParams.push(params.statusFilter);
+    query += ` AND k.status = $${queryParams.length} `;
+  }
+  if (params.searchQuery && params.searchQuery.trim()) {
+    queryParams.push(`%${params.searchQuery.trim()}%`);
+    const pIdx = queryParams.length;
+    query += ` AND (
+      k.full_legal_name ILIKE $${pIdx} OR 
+      u.email ILIKE $${pIdx} OR 
+      u.public_id ILIKE $${pIdx} OR 
+      k.document_number ILIKE $${pIdx} OR
+      k.country ILIKE $${pIdx}
+    ) `;
+  }
+  query += ` ORDER BY CASE WHEN k.status = 'PENDING' THEN 0 ELSE 1 END, k.created_at DESC `;
+  queryParams.push(limit, offset);
+  query += ` LIMIT $${queryParams.length - 1} OFFSET $${queryParams.length} `;
+  const res = await db.query(query, queryParams);
+  const submissions = res.rows.map((r) => ({
+    id: r.id,
+    userId: r.user_id,
+    userPublicId: r.user_public_id,
+    userEmail: r.user_email,
+    userFullName: r.user_full_name,
+    fullLegalName: r.full_legal_name,
+    dob: r.dob,
+    country: r.country,
+    residentialAddress: r.residential_address,
+    city: r.city,
+    postalCode: r.postal_code,
+    documentType: r.document_type,
+    documentNumber: r.document_number,
+    documentFrontUrl: r.document_front_url,
+    documentBackUrl: r.document_back_url,
+    selfiePhotoUrl: r.selfie_photo_url,
+    status: r.status,
+    rejectionReason: r.rejection_reason,
+    reviewerId: r.reviewer_id,
+    reviewedAt: r.reviewed_at,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }));
+  return {
+    submissions,
+    totalCount,
+    pendingCount,
+    verifiedCount,
+    rejectedCount
+  };
+}
+async function reviewKYCSubmission(adminUserId, adminPublicId, submissionId, decision, reason) {
+  const db = await getDb();
+  const subRes = await db.query(
+    `SELECT k.*, u.public_id, u.email, u.full_name FROM kyc_verifications k JOIN users u ON k.user_id = u.id WHERE k.id = $1`,
+    [submissionId]
+  );
+  if (subRes.rows.length === 0) {
+    throw new Error("KYC submission record not found.");
+  }
+  const record = subRes.rows[0];
+  const targetUserId = record.user_id;
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  if (decision === "APPROVE") {
+    await db.query(
+      `
+      UPDATE kyc_verifications
+      SET status = 'VERIFIED',
+          rejection_reason = NULL,
+          reviewer_id = $1,
+          reviewed_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      `,
+      [adminUserId, submissionId]
+    );
+    await db.query(
+      `
+      UPDATE users
+      SET kyc_status = 'VERIFIED',
+          kyc_reject_reason = NULL,
+          kyc_verified_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $1
+      `,
+      [targetUserId]
+    );
+    try {
+      const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+      await adminFirestore2.collection("kyc_verifications").doc(targetUserId).set(
+        {
+          id: submissionId,
+          userId: targetUserId,
+          status: "VERIFIED",
+          reviewedAt: now,
+          reviewerId: adminPublicId,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+      await adminFirestore2.collection("users").doc(targetUserId).set(
+        {
+          kycStatus: "VERIFIED",
+          kycRejectReason: null,
+          kycVerifiedAt: now,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+    } catch (fsErr) {
+      console.warn("[KYC Service] Firestore real-time review sync warning:", fsErr);
+    }
+    await logAdminAction({
+      adminUserId,
+      adminPublicId,
+      action: "APPROVE_KYC_VERIFICATION",
+      targetType: "kyc_verifications",
+      targetId: submissionId,
+      details: `Approved KYC Level 1 Identity Verification for operator ${record.public_id} (${record.email}) - Legal Name: "${record.full_legal_name}"`
+    });
+    try {
+      await db.query(
+        `
+        INSERT INTO notifications (id, user_id, type, title, message, created_at)
+        VALUES ($1, $2, 'SECURITY_ALERT', 'KYC Verification Approved!', 
+                'Congratulations! Your identity has been verified with Binance-grade Level 1 status. Full withdrawal limits and priority node services are unlocked.', CURRENT_TIMESTAMP)
+        `,
+        [uuidv429(), targetUserId]
+      );
+    } catch {
+    }
+    return {
+      success: true,
+      status: "VERIFIED",
+      message: `User ${record.public_id} identity successfully verified.`
+    };
+  } else {
+    const rejectionReason = reason?.trim() || "Document image unreadable or details mismatch.";
+    await db.query(
+      `
+      UPDATE kyc_verifications
+      SET status = 'REJECTED',
+          rejection_reason = $1,
+          reviewer_id = $2,
+          reviewed_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3
+      `,
+      [rejectionReason, adminUserId, submissionId]
+    );
+    await db.query(
+      `
+      UPDATE users
+      SET kyc_status = 'REJECTED',
+          kyc_reject_reason = $1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      `,
+      [rejectionReason, targetUserId]
+    );
+    try {
+      const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
+      await adminFirestore2.collection("kyc_verifications").doc(targetUserId).set(
+        {
+          id: submissionId,
+          userId: targetUserId,
+          status: "REJECTED",
+          rejection_reason: rejectionReason,
+          reviewedAt: now,
+          reviewerId: adminPublicId,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+      await adminFirestore2.collection("users").doc(targetUserId).set(
+        {
+          kycStatus: "REJECTED",
+          kycRejectReason: rejectionReason,
+          updatedAt: now
+        },
+        { merge: true }
+      );
+    } catch (fsErr) {
+      console.warn("[KYC Service] Firestore real-time rejection sync warning:", fsErr);
+    }
+    await logAdminAction({
+      adminUserId,
+      adminPublicId,
+      action: "REJECT_KYC_VERIFICATION",
+      targetType: "kyc_verifications",
+      targetId: submissionId,
+      details: `Rejected KYC verification for operator ${record.public_id} (${record.email}). Reason: "${rejectionReason}"`
+    });
+    try {
+      await db.query(
+        `
+        INSERT INTO notifications (id, user_id, type, title, message, created_at)
+        VALUES ($1, $2, 'SECURITY_ALERT', 'KYC Verification Needs Attention', 
+                $3, CURRENT_TIMESTAMP)
+        `,
+        [uuidv429(), targetUserId, `Your identity verification was rejected: ${rejectionReason}. Please resubmit with clear photos.`]
+      );
+    } catch {
+    }
+    return {
+      success: true,
+      status: "REJECTED",
+      message: `KYC submission rejected for ${record.public_id}.`
+    };
+  }
+}
+
+// src/server/routes/kycRoutes.ts
+var kycRouter = Router22();
+kycRouter.get("/me", requireAuth, async (req, res) => {
+  try {
+    const user = req.user;
+    const statusData = await getUserKYCStatus(user.id);
+    res.status(200).json({
+      success: true,
+      ...statusData
+    });
+  } catch (err) {
+    console.error("[KYC API] Error getting user KYC status:", err);
+    res.status(500).json({
+      success: false,
+      error: "SERVER_ERROR",
+      message: err.message || "Failed to retrieve KYC status."
+    });
+  }
+});
+kycRouter.post("/submit", requireAuth, async (req, res) => {
+  try {
+    const user = req.user;
+    const {
+      fullLegalName,
+      dob,
+      country,
+      residentialAddress,
+      city,
+      postalCode,
+      documentType,
+      documentNumber,
+      documentFrontUrl,
+      documentBackUrl,
+      selfiePhotoUrl
+    } = req.body;
+    if (!fullLegalName || !dob || !country || !residentialAddress || !city || !documentType || !documentNumber || !documentFrontUrl || !selfiePhotoUrl) {
+      res.status(400).json({
+        success: false,
+        error: "INVALID_INPUT",
+        message: "All identity parameters, front document photo, and live selfie are required."
+      });
+      return;
+    }
+    const submission = await submitUserKYC(user.id, {
+      fullLegalName,
+      dob,
+      country,
+      residentialAddress,
+      city,
+      postalCode: postalCode || "",
+      documentType,
+      documentNumber,
+      documentFrontUrl,
+      documentBackUrl,
+      selfiePhotoUrl
+    });
+    res.status(200).json({
+      success: true,
+      message: "Identity verification submitted successfully. Under active review.",
+      submission
+    });
+  } catch (err) {
+    console.error("[KYC API] Error submitting KYC:", err);
+    res.status(400).json({
+      success: false,
+      error: "SUBMISSION_FAILED",
+      message: err.message || "Failed to submit KYC verification."
+    });
+  }
+});
+kycRouter.get("/admin/submissions", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const statusFilter = req.query.status || "ALL";
+    const searchQuery = req.query.search || "";
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const data = await getAdminKYCSubmissions({
+      statusFilter,
+      searchQuery,
+      limit,
+      offset
+    });
+    res.status(200).json({
+      success: true,
+      ...data
+    });
+  } catch (err) {
+    console.error("[KYC API Admin] Error listing KYC submissions:", err);
+    res.status(500).json({
+      success: false,
+      error: "SERVER_ERROR",
+      message: err.message || "Failed to list KYC submissions."
+    });
+  }
+});
+kycRouter.post("/admin/:id/review", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const admin = req.user;
+    const submissionId = req.params.id;
+    const { decision, reason } = req.body;
+    if (!decision || decision !== "APPROVE" && decision !== "REJECT") {
+      res.status(400).json({
+        success: false,
+        error: "INVALID_DECISION",
+        message: 'Decision must be either "APPROVE" or "REJECT".'
+      });
+      return;
+    }
+    if (decision === "REJECT" && (!reason || reason.trim().length < 3)) {
+      res.status(400).json({
+        success: false,
+        error: "REASON_REQUIRED",
+        message: "A rejection reason is required for the user to remediate."
+      });
+      return;
+    }
+    const result = await reviewKYCSubmission(
+      admin.id,
+      admin.public_id,
+      submissionId,
+      decision,
+      reason
+    );
+    res.status(200).json(result);
+  } catch (err) {
+    console.error("[KYC API Admin] Error reviewing submission:", err);
+    res.status(400).json({
+      success: false,
+      error: "REVIEW_FAILED",
+      message: err.message || "Failed to process KYC review."
+    });
+  }
+});
+
 // server.ts
 init_db();
 
 // src/server/services/binaryMatchingScheduler.ts
+init_timezone();
 var schedulerTimer = null;
 var isRunning = false;
 async function executeDailyCycle() {
@@ -21178,6 +22103,7 @@ async function startServer() {
   app.use("/api/webhooks/email", emailWebhookRouter);
   app.use("/api/diagnostics", diagnosticRouter);
   app.use("/api/support", supportRouter);
+  app.use("/api/kyc", kycRouter);
   app.use("/api/admin", adminRouter);
   app.get("/healthz", (req, res) => {
     res.status(200).send("OK");

@@ -23,6 +23,7 @@ import { notificationRouter } from './src/server/routes/notificationRoutes';
 import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
 import { diagnosticRouter } from './src/server/routes/diagnosticRoutes';
 import { supportRouter } from './src/server/routes/supportRoutes';
+import { kycRouter } from './src/server/routes/kycRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import { executeDailyAutomaticRewardCheck } from './src/server/services/nodeRewardService';
@@ -105,6 +106,7 @@ async function startServer() {
   app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/diagnostics', diagnosticRouter);
   app.use('/api/support', supportRouter);
+  app.use('/api/kyc', kycRouter);
   app.use('/api/admin', adminRouter);
 
   // Health checks

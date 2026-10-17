@@ -17,9 +17,14 @@ import {
   RefreshCw,
   ExternalLink,
   Info,
+  GitFork,
+  ArrowLeft,
+  CheckCircle2,
+  QrCode,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
+import { ReferralShareModal } from '../modals/ReferralShareModal';
 
 interface ReferralProfileData {
   publicId: string;
@@ -35,6 +40,9 @@ interface DirectReferral {
   publicId: string;
   displayName: string;
   joinedAt: string;
+  placementStatus?: 'UNPLACED' | 'PLACED';
+  teamSide?: 'LEFT' | 'RIGHT' | null;
+  placedAt?: string | null;
   nodeActive?: boolean;
 }
 
@@ -69,6 +77,9 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [sharedLink, setSharedLink] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [placingMemberId, setPlacingMemberId] = useState<string | null>(null);
+  const [placementMessage, setPlacementMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const loadData = useCallback(async (isManualRefresh = false) => {
     if (isManualRefresh) setRefreshing(true);
@@ -135,23 +146,9 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const handleShare = async () => {
+  const handleShare = () => {
     if (isPendingCode || !effectiveReferralUrl) return;
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: 'PHIVONEX Invitation',
-          text: 'Join the PHIVONEX network with my referral link:',
-          url: effectiveReferralUrl,
-        });
-        setSharedLink(true);
-        setTimeout(() => setSharedLink(false), 2000);
-      } catch {
-        handleCopyLink();
-      }
-    } else {
-      handleCopyLink();
-    }
+    setShareModalOpen(true);
   };
 
   const formatDate = (iso: string) => {
@@ -181,6 +178,38 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
       });
     } catch {
       return iso;
+    }
+  };
+
+  const handleQuickPlace = async (memberPublicId: string, side: 'LEFT' | 'RIGHT') => {
+    setPlacingMemberId(memberPublicId);
+    setPlacementMessage(null);
+    try {
+      const res = await fetch('/api/network/place', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          memberPublicId,
+          preferredSide: side,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.message || 'Placement failed');
+      }
+      setPlacementMessage({
+        text: `Successfully placed into ${data.side} team!`,
+        type: 'success',
+      });
+      await loadData();
+    } catch (err: any) {
+      setPlacementMessage({
+        text: err.message || 'Failed to place member.',
+        type: 'error',
+      });
+    } finally {
+      setPlacingMemberId(null);
     }
   };
 
@@ -386,19 +415,21 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
               <button
                 onClick={handleCopyLink}
                 disabled={isPendingCode}
-                className="px-4 py-3 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-mono text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] shrink-0"
+                className="px-4 py-3 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-white border border-white/[0.1] font-mono text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] shrink-0"
                 title={isPendingCode ? 'Referral link is generating' : 'Copy invitation link'}
               >
-                {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {copiedLink ? <Check className="w-4 h-4 text-[#32D583]" /> : <Copy className="w-4 h-4" />}
                 <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
               </button>
               <button
                 onClick={handleShare}
                 disabled={isPendingCode}
-                className="px-3 py-3 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-white border border-white/[0.1] text-xs font-medium flex items-center justify-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] shrink-0"
-                title="Share link"
+                className="px-4 py-3 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-mono text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px] shrink-0 shadow-[0_0_20px_rgba(0,207,255,0.25)]"
+                title="Open QR Code with Project Logo & Social Share"
               >
-                {sharedLink ? <Check className="w-4 h-4 text-[#32D583]" /> : <Share2 className="w-4 h-4" />}
+                <QrCode className="w-4 h-4" />
+                <Share2 className="w-4 h-4" />
+                <span className="font-bold">Share & QR</span>
               </button>
             </div>
           </div>
@@ -423,6 +454,23 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
             </span>
           </div>
 
+          {placementMessage && (
+            <div className={`p-3 rounded-xl text-xs flex items-center justify-between gap-2 animate-fadeIn ${
+              placementMessage.type === 'success'
+                ? 'bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583]'
+                : 'bg-[#F04438]/10 border border-[#F04438]/30 text-[#F04438]'
+            }`}>
+              <span>{placementMessage.text}</span>
+              <button
+                type="button"
+                onClick={() => setPlacementMessage(null)}
+                className="text-white hover:underline text-[10px] font-mono cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {directs.length === 0 ? (
             <div className="py-12 px-4 rounded-xl bg-[#05070B] border border-white/[0.04] text-center space-y-3 my-auto">
               <div className="w-12 h-12 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto text-[#667085]">
@@ -444,34 +492,75 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
               </button>
             </div>
           ) : (
-            <div className="divide-y divide-white/[0.06] max-h-[400px] overflow-y-auto custom-scrollbar pr-1">
+            <div className="space-y-2.5 max-h-[440px] overflow-y-auto custom-scrollbar pr-1">
               {directs.map((ref, idx) => (
-                <div key={idx} className="py-3 flex items-center justify-between gap-3">
+                <div
+                  key={idx}
+                  className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] hover:border-white/[0.12] transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-xs font-mono font-bold text-[#00CFFF] shrink-0">
                       #{idx + 1}
                     </div>
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-white truncate">
+                      <div className="text-xs font-bold text-white truncate">
                         {ref.displayName}
                       </div>
                       <div className="text-[11px] font-mono text-[#00CFFF] truncate">
                         {ref.publicId}
                       </div>
+                      <div className="text-[10px] font-mono text-[#667085] flex items-center gap-1 mt-0.5">
+                        <Clock className="w-2.5 h-2.5" />
+                        <span>Joined: {formatDate(ref.joinedAt)}</span>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="text-right shrink-0 space-y-0.5">
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-[#32D583]/10 text-[#32D583] border border-[#32D583]/20">
-                      Registered
-                    </span>
-                    <div className="text-[10px] font-mono text-[#667085] flex items-center justify-end gap-1">
-                      <Clock className="w-2.5 h-2.5" />
-                      {formatDate(ref.joinedAt)}
-                    </div>
+                  <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+                    {ref.placementStatus === 'PLACED' ? (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[10px] font-mono font-semibold bg-[#32D583]/10 text-[#32D583] border border-[#32D583]/20">
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Placed: {ref.teamSide} Team</span>
+                      </span>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          disabled={placingMemberId === ref.publicId}
+                          onClick={() => handleQuickPlace(ref.publicId, 'LEFT')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30 text-[11px] font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 min-h-[32px]"
+                        >
+                          <ArrowLeft className="w-3 h-3" />
+                          <span>Place LEFT</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={placingMemberId === ref.publicId}
+                          onClick={() => handleQuickPlace(ref.publicId, 'RIGHT')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#32D583]/10 hover:bg-[#32D583]/20 text-[#32D583] border border-[#32D583]/30 text-[11px] font-mono font-semibold transition-all cursor-pointer disabled:opacity-50 min-h-[32px]"
+                        >
+                          <span>Place RIGHT</span>
+                          <ArrowRight className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
+
+              {onNavigateTab && (
+                <div className="pt-2 border-t border-white/[0.04]">
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('network')}
+                    className="w-full py-2.5 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] text-xs font-mono text-[#00CFFF] flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[40px]"
+                  >
+                    <GitFork className="w-3.5 h-3.5" />
+                    <span>View Binary Tree & Spillover Network</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -570,6 +659,15 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
           </ul>
         </div>
       </div>
+
+      {/* Branded Referral Share & QR Code Modal */}
+      <ReferralShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        referralCode={displayCode}
+        referralUrl={effectiveReferralUrl}
+        userName={user?.fullName || profileData?.sponsor?.displayName}
+      />
     </div>
   );
 };

@@ -212,12 +212,41 @@ export async function placeMember(
 
   const member = memberRes.rows[0];
 
-  // 2. Validate sponsor relationship
+  // 2. Validate sponsor relationship (with auto-healing if member used sponsor's code/ID/email)
   if (member.sponsor_user_id !== sponsorUserId) {
-    const error: any = new Error('You can only place members who you directly sponsored.');
-    error.code = 'NOT_DIRECT_SPONSOR';
-    error.statusCode = 403;
-    throw error;
+    const sponsorIdent = await db.query<{ referral_code: string; public_id: string; email: string }>(
+      `SELECT r.referral_code, u.public_id, u.email
+       FROM users u
+       LEFT JOIN user_referrals r ON u.id = r.user_id
+       WHERE u.id = $1`,
+      [sponsorUserId]
+    );
+    const s = sponsorIdent.rows[0];
+    const memberPending = await db.query<{ pending_referral_code: string | null }>(
+      `SELECT pending_referral_code FROM users WHERE id = $1`,
+      [member.id]
+    );
+    const pendCode = (memberPending.rows[0]?.pending_referral_code || '').trim().toUpperCase();
+
+    if (
+      s &&
+      pendCode &&
+      (pendCode === s.referral_code?.toUpperCase() ||
+       pendCode === s.public_id?.toUpperCase() ||
+       pendCode.toLowerCase() === s.email?.toLowerCase())
+    ) {
+      // Auto-heal sponsor link
+      await db.query(
+        `UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2`,
+        [sponsorUserId, member.id]
+      );
+      member.sponsor_user_id = sponsorUserId;
+    } else {
+      const error: any = new Error('You can only place members who you directly sponsored.');
+      error.code = 'NOT_DIRECT_SPONSOR';
+      error.statusCode = 403;
+      throw error;
+    }
   }
 
   // 3. Ensure member has an entry in binary_placements
@@ -356,7 +385,36 @@ export async function placeMember(
 export async function getUnplacedDirectReferrals(sponsorUserId: string): Promise<UnplacedMemberItem[]> {
   const db = await getDb();
 
-  // First ensure all direct referrals exist in binary_placements
+  // 1. Reconcile any unlinked referrals that match this sponsor's referral code, public ID, or email
+  const sponsorIdent = await db.query<{ referral_code: string; public_id: string; email: string }>(
+    `SELECT r.referral_code, u.public_id, u.email
+     FROM users u
+     LEFT JOIN user_referrals r ON u.id = r.user_id
+     WHERE u.id = $1`,
+    [sponsorUserId]
+  );
+
+  if (sponsorIdent.rows.length > 0) {
+    const s = sponsorIdent.rows[0];
+    await db.query(
+      `
+      UPDATE user_referrals ur
+      SET sponsor_user_id = $1
+      FROM users u
+      WHERE ur.user_id = u.id
+        AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+        AND u.id != $1
+        AND (
+          UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
+          OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
+          OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
+        )
+      `,
+      [sponsorUserId, s.referral_code || '', s.public_id || '', s.email || '']
+    );
+  }
+
+  // 2. Ensure all direct referrals exist in binary_placements
   await db.query(
     `
     INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)

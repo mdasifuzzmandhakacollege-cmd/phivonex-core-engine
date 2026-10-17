@@ -33,6 +33,7 @@ export interface AdminSummaryMetrics {
   failedWithdrawalsCount: number;
   failedWithdrawalsAmount: number;
   totalWithdrawalsAmount: number;
+  pendingKycCount?: number;
   updatedAt: string;
 }
 
@@ -122,6 +123,7 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
     promotionsRes,
     ledgerRes,
     withdrawalsRes,
+    kycRes,
   ] = await Promise.all([
     db.query(`
       SELECT 
@@ -175,6 +177,11 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
         COALESCE(SUM(CASE WHEN status = 'FAILED' THEN amount ELSE 0 END), 0)::float AS failed_amount
       FROM withdrawals
     `),
+    db.query(`
+      SELECT 
+        COUNT(CASE WHEN status = 'PENDING' THEN 1 END)::int AS pending_kyc
+      FROM kyc_verifications
+    `).catch(() => ({ rows: [{ pending_kyc: 0 }] })),
   ]);
 
   const uRow = usersRes.rows[0] || {};
@@ -209,6 +216,7 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
     failedWithdrawalsCount: Number(wRow.failed_count || 0),
     failedWithdrawalsAmount: Number(wRow.failed_amount || 0),
     totalWithdrawalsAmount: Number(wRow.total_withdrawal_amount || 0),
+    pendingKycCount: Number(kycRes.rows[0]?.pending_kyc || 0),
     updatedAt: new Date().toISOString(),
   };
 }

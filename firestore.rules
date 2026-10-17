@@ -69,5 +69,15 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+
+    match /promotional_offers/{offerId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
+    match /kyc_verifications/{userId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
   }
 }

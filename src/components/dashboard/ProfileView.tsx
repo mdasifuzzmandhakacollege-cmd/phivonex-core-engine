@@ -15,9 +15,11 @@ import {
   Calendar,
   Layers,
   ArrowRight,
-  UserCheck
+  UserCheck,
+  ShieldCheck,
 } from 'lucide-react';
 import { UserProfile, useAuth } from '../../context/AuthContext';
+import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 
 interface ProfileViewProps {
   user: UserProfile;
@@ -41,6 +43,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onNavigateTab })
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [isKycModalOpen, setIsKycModalOpen] = useState(false);
 
   // Sync state when user prop updates
   useEffect(() => {
@@ -374,6 +377,51 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onNavigateTab })
                   )}
                 </div>
               </div>
+
+              {/* Binance-Grade KYC Identity Status Box */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-white flex items-center justify-between">
+                  <span>Identity Verification (KYC)</span>
+                  <span className="text-[10px] font-mono text-[#00CFFF]">
+                    Binance-Standard Level 1
+                  </span>
+                </label>
+                <div className="p-3.5 rounded-xl bg-[#05070B]/70 border border-white/[0.04] text-sm text-[#D0D5DD] flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className={`w-4 h-4 ${
+                      user.kycStatus === 'VERIFIED'
+                        ? 'text-emerald-400'
+                        : user.kycStatus === 'PENDING'
+                        ? 'text-amber-400'
+                        : 'text-slate-400'
+                    }`} />
+                    <span className="text-xs font-mono font-medium">
+                      {user.kycStatus === 'VERIFIED'
+                        ? 'Level 1 Identity Verified'
+                        : user.kycStatus === 'PENDING'
+                        ? 'Under Active Security Review'
+                        : user.kycStatus === 'REJECTED'
+                        ? 'Verification Needs Attention'
+                        : 'Unverified Account'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsKycModalOpen(true)}
+                    className={`text-[10px] font-mono px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer ${
+                      user.kycStatus === 'VERIFIED'
+                        ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/20'
+                        : user.kycStatus === 'PENDING'
+                        ? 'bg-amber-500/10 text-amber-300 border-amber-500/30 hover:bg-amber-500/20'
+                        : user.kycStatus === 'REJECTED'
+                        ? 'bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20'
+                        : 'bg-amber-400 hover:bg-amber-300 text-black border-transparent shadow'
+                    }`}
+                  >
+                    {user.kycStatus === 'VERIFIED' ? 'View Certificate' : user.kycStatus === 'PENDING' ? 'View Status' : 'Verify Now'}
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Save Buttons when Editing */}
@@ -506,6 +554,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onNavigateTab })
           </div>
         </div>
       </form>
+
+      {/* Binance-Grade KYC Modal */}
+      <BinanceKYCModal
+        isOpen={isKycModalOpen}
+        onClose={() => setIsKycModalOpen(false)}
+      />
     </div>
   );
 };

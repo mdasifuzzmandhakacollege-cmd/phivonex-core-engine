@@ -56,6 +56,7 @@ import { WithdrawalStateLogsView } from '../components/admin/WithdrawalStateLogs
 import { LeadershipRankControl } from '../components/admin/LeadershipRankControl';
 import { AdminCommunicationsHub } from '../components/admin/AdminCommunicationsHub';
 import { User360View } from '../components/admin/User360View';
+import { KYCManagement } from '../components/admin/KYCManagement';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -65,6 +66,7 @@ interface AdminPageProps {
 
 export type AdminTab =
   | 'overview'
+  | 'kyc'
   | 'treasury'
   | 'reconciliation'
   | 'economics'
@@ -100,6 +102,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
+    if (clean.includes('/kyc')) return 'kyc';
     if (clean.includes('/communications') || clean.includes('/email')) return 'communications';
     if (clean.includes('/support') || clean.includes('/tickets')) return 'support';
     if (clean.includes('/treasury')) return 'treasury';
@@ -658,6 +661,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   const NAV_ITEMS = [
     { id: 'overview' as AdminTab, label: 'Overview', icon: LayoutDashboard },
+    { id: 'kyc' as AdminTab, label: 'KYC Verification Hub', icon: ShieldCheck, badge: summary?.pendingKycCount },
     { id: 'treasury' as AdminTab, label: 'Treasury & Reserves', icon: Wallet },
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
@@ -1345,6 +1349,24 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                 </div>
               </div>
             </div>
+          )}
+
+          {/* TAB: KYC VERIFICATION HUB */}
+          {activeTab === 'kyc' && (
+            <KYCManagement
+              adminEmail={user?.email}
+              onLogAction={(action, targetType, targetId, details) => {
+                logAction({
+                  userUid: (user as any)?.uid || (user as any)?.publicId || 'ADMIN',
+                  actorEmail: user?.email || 'admin@phivonex.com',
+                  actionType: action,
+                  category: 'KYC_REVIEW',
+                  targetType,
+                  targetId,
+                  details,
+                });
+              }}
+            />
           )}
 
           {/* TAB: FINANCIAL RECONCILIATION */}
