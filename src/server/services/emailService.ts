@@ -26,18 +26,18 @@ export class ResendEmailProvider implements EmailProvider {
 
   async sendEmail(to: string, subject: string, html: string): Promise<{ providerMessageId?: string; error?: string }> {
     try {
-      const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || 'phivonex.com';
+      const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || 'phivonex.online';
       const fromAddress = process.env.EMAIL_FROM_ADDRESS || `support@${defaultDomain}`;
       const fromName = process.env.EMAIL_FROM_NAME || 'PHIVONEX';
-      const from = `${fromName} <${fromAddress}>`;
+      let from = `${fromName} <${fromAddress}>`;
 
-      const response = await fetch('https://api.resend.com/emails', {
+      let response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`
         },
-        signal: AbortSignal.timeout(6000),
+        signal: AbortSignal.timeout(8000),
         body: JSON.stringify({
           from,
           to,
@@ -46,14 +46,45 @@ export class ResendEmailProvider implements EmailProvider {
         })
       });
 
-      const data = await response.json();
-      if (!response.ok) {
-        console.warn('[Resend Provider] API response error:', data);
-        return { error: data.message || data.error || 'Resend provider error' };
+      let data: any = await response.json();
+
+      // If custom domain is not verified yet in Resend, automatically fallback to onboarding@resend.dev
+      if (!response.ok && (
+        response.status === 403 ||
+        data?.name === 'validation_error' ||
+        data?.message?.toLowerCase().includes('domain') ||
+        data?.error?.toLowerCase().includes('domain')
+      )) {
+        console.warn(`[Resend Provider] Primary domain send from "${from}" failed domain check (${data?.message || data?.error}). Retrying with onboarding@resend.dev sandbox...`);
+        const fallbackFrom = `${fromName} <onboarding@resend.dev>`;
+        response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`
+          },
+          signal: AbortSignal.timeout(8000),
+          body: JSON.stringify({
+            from: fallbackFrom,
+            to,
+            subject,
+            html
+          })
+        });
+        data = await response.json();
+        if (response.ok) {
+          console.log(`[Resend Provider] Live email delivered via sandbox from ${fallbackFrom} to ${to}, ID: ${data?.id}`);
+          return { providerMessageId: data?.id };
+        }
       }
 
-      console.log(`[Resend Provider] Live email sent successfully to ${to} from ${from}, ID: ${data.id}`);
-      return { providerMessageId: data.id };
+      if (!response.ok) {
+        console.warn('[Resend Provider] API response error:', data);
+        return { error: data?.message || data?.error || 'Resend provider error' };
+      }
+
+      console.log(`[Resend Provider] Live email sent successfully to ${to} from ${from}, ID: ${data?.id}`);
+      return { providerMessageId: data?.id };
     } catch (err: any) {
       console.warn('[Resend Provider] Network error communicating with Resend:', err);
       return { error: err.message || 'Network error communicating with Resend' };

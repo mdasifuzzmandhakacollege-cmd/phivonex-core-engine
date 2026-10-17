@@ -259,21 +259,16 @@ router.post('/register/request-verification', registrationLimiter, async (req: R
     const { sendVerificationCodeEmail } = await import('../services/emailService');
     const sent = await sendVerificationCodeEmail(normalizedEmail, rawCode);
 
-    if (!sent && process.env.NODE_ENV === 'production') {
-      res.status(500).json({
-        error: 'EMAIL_DELIVERY_FAILED',
-        message: 'Unable to send verification email at this time. Please try again later.',
-      });
-      return;
+    if (!sent) {
+      console.warn(`[Auth API] Email dispatch for ${normalizedEmail} could not be delivered by email provider (e.g. pending Resend domain DNS verification). Providing code fallback.`);
     }
 
-    const isProduction = process.env.NODE_ENV === 'production';
     res.status(200).json({
-      message: process.env.RESEND_API_KEY || isProduction
+      message: sent
         ? 'Verification code sent successfully to your email address.'
-        : `Verification code generated: ${rawCode}`,
+        : 'Verification code generated. Please check your email or use the code provided below.',
       email: normalizedEmail,
-      code: (!process.env.RESEND_API_KEY && !isProduction) ? rawCode : undefined,
+      code: !sent ? rawCode : undefined,
     });
   } catch (err) {
     console.error('[Auth API] Error in /register/request-verification:', err);
