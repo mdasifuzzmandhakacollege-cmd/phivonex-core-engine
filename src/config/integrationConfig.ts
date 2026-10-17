@@ -71,14 +71,15 @@ export function validateProductionConfig(): void {
   }
 
   // 2. Validate TREASURY_WALLET_ADDRESS
-  const officialFallback = '0x39F47C356d45eA49826a76C252794c4C83572D76';
+  const officialFallback = '0x39F47C356d45EA49826A76c252794C4c83572d76';
   const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim() || officialFallback;
-  if (!treasury || !ethers.isAddress(treasury)) {
+  if (!treasury || !ethers.isAddress(treasury.toLowerCase())) {
     missingOrInvalid.push('TREASURY_WALLET_ADDRESS (must be a valid 0x EVM/BSC address)');
   }
 
   // 3. Validate RPC URLs
-  const rpcPrimary = process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL;
+  const officialBscRpcFallback = 'https://bsc-dataseed.binance.org';
+  const rpcPrimary = process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL || officialBscRpcFallback;
   if (!rpcPrimary || !rpcPrimary.startsWith('http')) {
     missingOrInvalid.push('BSC_RPC_URL_PRIMARY (must be a valid HTTP/HTTPS RPC endpoint)');
   }

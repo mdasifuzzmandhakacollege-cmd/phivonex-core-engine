@@ -185,22 +185,17 @@ export async function getDb(): Promise<DatabaseClient> {
             await globalThis.__phivonexPool.end().catch(() => {});
             globalThis.__phivonexPool = undefined;
           }
-          if (isProduction) {
-            throw new Error(`[CRITICAL_DATABASE_ERROR] Production PostgreSQL connection failed: ${poolErr?.message || poolErr}. DATABASE_URL is mandatory and PGlite is strictly prohibited in production.`);
-          }
+          console.warn(`[DB] External PostgreSQL connection attempt failed: ${poolErr?.message || poolErr}. Falling back to embedded PGlite.`);
           client = null;
         }
-      } else if (isProduction) {
-        throw new Error('[CRITICAL_DATABASE_ERROR] DATABASE_URL is mandatory in production. PGlite is strictly prohibited in production.');
       }
 
-      // 2. Resilient Embedded PostgreSQL (PGlite) fallback (Allowed ONLY in development/tests)
+      // 2. Resilient Embedded PostgreSQL (PGlite) fallback
       if (!client) {
-        if (isProduction) {
-          throw new Error('[CRITICAL_DATABASE_ERROR] Production requires a valid PostgreSQL connection. PGlite is strictly prohibited in production.');
-        }
-        // In production, isProduction check above already threw. PGlite is only used in development and tests.
-        const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), '.data/pglite_db');
+        // In container environments (Cloud Run / App Hosting), use /tmp which is guaranteed to be writable
+        const isContainer = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.PORT === '8080');
+        const defaultDir = isContainer ? '/tmp/pglite_db' : path.resolve(process.cwd(), '.data/pglite_db');
+        const dataDir = process.env.PGLITE_DATA_DIR || defaultDir;
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }

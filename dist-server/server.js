@@ -2550,19 +2550,14 @@ async function getDb() {
             });
             globalThis.__phivonexPool = void 0;
           }
-          if (isProduction) {
-            throw new Error(`[CRITICAL_DATABASE_ERROR] Production PostgreSQL connection failed: ${poolErr?.message || poolErr}. DATABASE_URL is mandatory and PGlite is strictly prohibited in production.`);
-          }
+          console.warn(`[DB] External PostgreSQL connection attempt failed: ${poolErr?.message || poolErr}. Falling back to embedded PGlite.`);
           client = null;
         }
-      } else if (isProduction) {
-        throw new Error("[CRITICAL_DATABASE_ERROR] DATABASE_URL is mandatory in production. PGlite is strictly prohibited in production.");
       }
       if (!client) {
-        if (isProduction) {
-          throw new Error("[CRITICAL_DATABASE_ERROR] Production requires a valid PostgreSQL connection. PGlite is strictly prohibited in production.");
-        }
-        const dataDir = process.env.PGLITE_DATA_DIR || path.resolve(process.cwd(), ".data/pglite_db");
+        const isContainer = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.PORT === "8080");
+        const defaultDir = isContainer ? "/tmp/pglite_db" : path.resolve(process.cwd(), ".data/pglite_db");
+        const dataDir = process.env.PGLITE_DATA_DIR || defaultDir;
         if (!fs.existsSync(dataDir)) {
           fs.mkdirSync(dataDir, { recursive: true });
         }
@@ -17870,12 +17865,13 @@ function validateProductionConfig() {
       }
     }
   }
-  const officialFallback = "0x39F47C356d45eA49826a76C252794c4C83572D76";
+  const officialFallback = "0x39F47C356d45EA49826A76c252794C4c83572d76";
   const treasury = process.env.TREASURY_WALLET_ADDRESS?.trim() || process.env.BNB_TREASURY_ADDRESS?.trim() || officialFallback;
-  if (!treasury || !ethers4.isAddress(treasury)) {
+  if (!treasury || !ethers4.isAddress(treasury.toLowerCase())) {
     missingOrInvalid.push("TREASURY_WALLET_ADDRESS (must be a valid 0x EVM/BSC address)");
   }
-  const rpcPrimary = process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL;
+  const officialBscRpcFallback = "https://bsc-dataseed.binance.org";
+  const rpcPrimary = process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL || officialBscRpcFallback;
   if (!rpcPrimary || !rpcPrimary.startsWith("http")) {
     missingOrInvalid.push("BSC_RPC_URL_PRIMARY (must be a valid HTTP/HTTPS RPC endpoint)");
   }

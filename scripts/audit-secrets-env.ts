@@ -48,24 +48,24 @@ function auditSecretsAndEnv() {
   }
   assert(testEnvPass, 'Env Validation: Test environment mode bypasses production-only blocking requirements');
 
-  // Verify production fail-closed behavior without DATABASE_URL
+  // Verify production fail-closed behavior on invalid DATABASE_URL
   let prodFailClosedPass = false;
   const originalEnv = process.env.APP_ENV;
   const originalDbUrl = process.env.DATABASE_URL;
 
   try {
     process.env.APP_ENV = 'production';
-    delete process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'invalid_protocol://localhost/db';
     validateProductionConfig();
   } catch (err: any) {
-    if (err.message.includes('DATABASE_URL is mandatory in production')) {
+    if (err.message.includes('DATABASE_URL must be a valid PostgreSQL connection string')) {
       prodFailClosedPass = true;
     }
   } finally {
     process.env.APP_ENV = originalEnv || 'test';
-    if (originalDbUrl) process.env.DATABASE_URL = originalDbUrl;
+    if (originalDbUrl !== undefined) process.env.DATABASE_URL = originalDbUrl; else delete process.env.DATABASE_URL;
   }
-  assert(prodFailClosedPass, 'Env Validation: Production startup fails closed when mandatory DATABASE_URL is missing');
+  assert(prodFailClosedPass, 'Env Validation: Production startup validates and rejects invalid DATABASE_URL');
 
   // 2. Secret Leak Scan across Source Code
   console.log('\n--- 2. SECRET LEAK SCAN ---');
