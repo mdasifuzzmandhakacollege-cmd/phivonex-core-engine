@@ -14595,7 +14595,7 @@ async function findNextAvailableSlot(db, sponsorUserId, preferredSide) {
   }
   throw new Error("Could not find available placement slot in leg.");
 }
-async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
+async function placeMember(sponsorUserId, memberPublicId, preferredSide, targetParentPublicId) {
   const cleanMemberPublicId = (memberPublicId || "").trim().toUpperCase();
   const side = (preferredSide || "").trim().toUpperCase();
   if (side !== "LEFT" && side !== "RIGHT") {
@@ -14666,54 +14666,49 @@ async function placeMember(sponsorUserId, memberPublicId, preferredSide) {
     error.statusCode = 409;
     throw error;
   }
-  const maxRetries = 5;
-  let attempt = 0;
   let finalParentId = "";
   let finalSide = side;
-  let placedAtDate = null;
-  while (attempt < maxRetries) {
-    attempt++;
+  if (targetParentPublicId) {
+    const targetParentPublicIdClean = targetParentPublicId.trim().toUpperCase();
+    const parentRes2 = await db.query(
+      `SELECT id FROM users WHERE public_id = $1`,
+      [targetParentPublicIdClean]
+    );
+    if (parentRes2.rows.length === 0) {
+      throw new Error("Invalid target parent.");
+    }
+    const targetParentId = parentRes2.rows[0].id;
+    finalParentId = targetParentId;
+    const slotCheck = await db.query(
+      `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
+      [finalParentId, side]
+    );
+    if (slotCheck.rows.length > 0) {
+      throw new Error(`The selected position (${side}) under ${targetParentPublicIdClean} is already occupied.`);
+    }
+  } else {
     const slot = await findNextAvailableSlot(db, sponsorUserId, side);
     finalParentId = slot.parentId;
     finalSide = slot.side;
-    await validateNoCycle(db, member.id, finalParentId);
-    try {
-      const updateRes = await db.query(
-        `
-        UPDATE binary_placements
-        SET 
-          parent_user_id = $1,
-          side = $2,
-          status = 'PLACED',
-          placed_at = CURRENT_TIMESTAMP
-        WHERE user_id = $3 AND status = 'UNPLACED'
-        RETURNING user_id, parent_user_id, side, status, placed_at
-        `,
-        [finalParentId, finalSide, member.id]
-      );
-      if (updateRes.rows.length === 0) {
-        const checkPlaced = await db.query(
-          `SELECT status FROM binary_placements WHERE user_id = $1`,
-          [member.id]
-        );
-        if (checkPlaced.rows[0]?.status === "PLACED") {
-          const error = new Error("Member was already placed in the network by another operation.");
-          error.code = "ALREADY_PLACED";
-          error.statusCode = 409;
-          throw error;
-        }
-        throw new Error("Failed to update binary placement status.");
-      }
-      placedAtDate = updateRes.rows[0].placed_at;
-      break;
-    } catch (err) {
-      if (err.code === "23505" && attempt < maxRetries) {
-        console.warn(`[BinaryPlacement] Slot collision at parent ${finalParentId} side ${finalSide}. Retrying attempt ${attempt}...`);
-        continue;
-      }
-      throw err;
-    }
   }
+  await validateNoCycle(db, member.id, finalParentId);
+  const updateRes = await db.query(
+    `
+    UPDATE binary_placements
+    SET 
+      parent_user_id = $1,
+      side = $2,
+      status = 'PLACED',
+      placed_at = CURRENT_TIMESTAMP
+    WHERE user_id = $3 AND status = 'UNPLACED'
+    RETURNING user_id, parent_user_id, side, status, placed_at
+    `,
+    [finalParentId, finalSide, member.id]
+  );
+  if (updateRes.rows.length === 0) {
+    throw new Error("Failed to update binary placement status.");
+  }
+  const placedAtDate = updateRes.rows[0].placed_at;
   const parentRes = await db.query(
     `SELECT public_id FROM users WHERE id = $1`,
     [finalParentId]
@@ -14927,7 +14922,7 @@ var router7 = Router7();
 router7.post("/place", requireAuth, async (req, res) => {
   try {
     const user = req.user;
-    const { memberPublicId, preferredSide } = req.body || {};
+    const { memberPublicId, preferredSide, targetParentPublicId } = req.body || {};
     if (!memberPublicId || typeof memberPublicId !== "string") {
       res.status(400).json({
         error: "INVALID_MEMBER_ID",
@@ -14942,7 +14937,7 @@ router7.post("/place", requireAuth, async (req, res) => {
       });
       return;
     }
-    const result = await placeMember(user.id, memberPublicId, preferredSide);
+    const result = await placeMember(user.id, memberPublicId, preferredSide, targetParentPublicId);
     res.status(200).json(result);
   } catch (err) {
     console.error("[Network API] Error in /api/network/place:", err);
@@ -17313,11 +17308,28 @@ withdrawalRouter.get("/admin/mode", requireAdmin, async (req, res) => {
         autoEnabled = String(rawVal).toLowerCase() === "true";
       }
     }
+    const rawKey = (process.env.PAYOUT_PRIVATE_KEY || process.env.TREASURY_PRIVATE_KEY || "").trim();
+    const isValidKey = rawKey.length > 0 && !rawKey.includes("YOUR_MOTHER_PAYOUT_WALLET") && !rawKey.includes("PLACEHOLDER");
+    let payoutWalletAddress = null;
+    let isSignerConfigured = false;
+    if (isValidKey) {
+      try {
+        const { ethers: ethers10 } = await import("ethers");
+        const cleanKey = rawKey.startsWith("0x") ? rawKey : `0x${rawKey}`;
+        const w = new ethers10.Wallet(cleanKey);
+        payoutWalletAddress = w.address;
+        isSignerConfigured = true;
+      } catch {
+        isSignerConfigured = false;
+      }
+    }
     return res.status(200).json({
       success: true,
       minWithdrawalAmount: minRes,
       autoWithdrawalEnabled: autoEnabled,
-      mode: autoEnabled ? "FULL_AUTOMATIC" : "MANUAL_APPROVAL"
+      mode: autoEnabled ? "FULL_AUTOMATIC" : "MANUAL_APPROVAL",
+      isSignerConfigured,
+      payoutWalletAddress
     });
   } catch (err) {
     console.error("[Withdrawal API] Error fetching mode:", err);
@@ -22043,6 +22055,57 @@ function startMatchingScheduler() {
   scheduleNextDailyRun();
 }
 
+// src/server/services/emailReportingService.ts
+init_db();
+import { Resend } from "resend";
+import cron from "node-cron";
+async function sendWeeklyReports() {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn("[WeeklyReport] RESEND_API_KEY not set. Skipping.");
+    return;
+  }
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const db = await getDb();
+  const usersRes = await db.query(
+    `SELECT id, email, full_name FROM users WHERE status = 'ACTIVE'`
+  );
+  for (const user of usersRes.rows) {
+    try {
+      const networkSummary = await getNetworkSummary(user.id);
+      const rewardsSummary = await getUserRewardsSummary(user.id);
+      await resend.emails.send({
+        from: "reports@phivonex.com",
+        to: user.email,
+        subject: "Your Weekly Phivonex Network Summary",
+        html: `
+          <h1>Hello ${user.full_name},</h1>
+          <p>Here is your weekly summary for your Phivonex network:</p>
+          <h2>Network Growth</h2>
+          <ul>
+            <li>Direct Referrals: ${networkSummary.directReferrals}</li>
+            <li>Placed Members: ${networkSummary.placedMembers}</li>
+          </ul>
+          <h2>Reward Earnings</h2>
+          <ul>
+            <li>Total Earned: ${rewardsSummary.totalRewardsEarned} PHIVO</li>
+            <li>Available Balance: ${rewardsSummary.totalAccrued} PHIVO</li>
+          </ul>
+          <p>Keep up the great work!</p>
+        `
+      });
+      console.log(`[WeeklyReport] Sent to ${user.email}`);
+    } catch (err) {
+      console.error(`[WeeklyReport] Failed to send to ${user.email}:`, err);
+    }
+  }
+}
+function startWeeklyReportScheduler() {
+  cron.schedule("0 0 * * 1", () => {
+    sendWeeklyReports().catch((err) => console.error("[WeeklyReport] Scheduler error:", err));
+  });
+  console.log("[WeeklyReport] Scheduler started.");
+}
+
 // server.ts
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
@@ -22162,6 +22225,7 @@ async function startServer() {
   getDb().then(() => {
     console.log("[Server] Database and referral migrations initialized.");
     startMatchingScheduler();
+    startWeeklyReportScheduler();
     setInterval(() => {
       executeDailyAutomaticRewardCheck().catch(
         (err) => console.error("[RewardScheduler] Interval error:", err)
