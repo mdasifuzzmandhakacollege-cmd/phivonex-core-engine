@@ -26,6 +26,7 @@ import { supportRouter } from './src/server/routes/supportRoutes';
 import { kycRouter } from './src/server/routes/kycRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
+import { startWeeklyReportScheduler } from './src/server/services/emailReportingService';
 import { executeDailyAutomaticRewardCheck } from './src/server/services/nodeRewardService';
 import {
   securityHeadersMiddleware,
@@ -183,6 +184,7 @@ async function startServer() {
   getDb().then(() => {
     console.log('[Server] Database and referral migrations initialized.');
     startMatchingScheduler();
+    startWeeklyReportScheduler();
 
     // Start Daily Mining Reward Automation Check (Every 60 seconds)
     setInterval(() => {

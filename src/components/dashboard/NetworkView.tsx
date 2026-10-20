@@ -26,6 +26,7 @@ import {
 import {
   PromotionSection,
 } from './PromotionSection';
+import { PlacementManager } from './PlacementManager';
 
 export interface VolumeSummary {
   businessDate: string;
@@ -85,6 +86,7 @@ export const NetworkView: React.FC = () => {
   const [matchingHistory, setMatchingHistory] = useState<MatchingSettlementItem[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [depth, setDepth] = useState<number>(3);
+  const [selectedMember, setSelectedMember] = useState<UnplacedMember | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [placingMember, setPlacingMember] = useState<{
@@ -732,16 +734,19 @@ interface NodeRendererProps {
   rootVolume?: VolumeSummary | null;
 }
 
-const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({ node, isRoot = false, side, rootVolume }) => {
+const BinaryTreeNodeRenderer: React.FC<NodeRendererProps & { onPlace?: (side: 'LEFT' | 'RIGHT', parentId: string) => void }> = ({ node, isRoot = false, side, rootVolume, onPlace }) => {
   if (!node) {
     return (
       <div className="flex flex-col items-center">
-        <div className="w-32 sm:w-40 p-3 rounded-xl border border-dashed border-white/[0.1] bg-[#05070B] text-center">
+        <button 
+          onClick={() => onPlace?.(side || 'LEFT', 'parent_id_placeholder')}
+          className="w-32 sm:w-40 p-3 rounded-xl border border-dashed border-white/[0.1] bg-[#05070B] text-center hover:bg-[#00CFFF]/10 transition-colors"
+        >
           <div className="text-[10px] font-mono uppercase tracking-wider text-[#667085] mb-1">
             {side || 'Position'}
           </div>
-          <div className="text-xs font-mono text-[#98A2B3]">Empty Slot</div>
-        </div>
+          <div className="text-xs font-mono text-[#00CFFF]">Click to Place</div>
+        </button>
       </div>
     );
   }

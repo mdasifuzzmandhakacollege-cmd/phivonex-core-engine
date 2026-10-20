@@ -21,7 +21,7 @@ const router = Router();
 router.post('/place', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { memberPublicId, preferredSide } = req.body || {};
+    const { memberPublicId, preferredSide, targetParentPublicId } = req.body || {};
 
     if (!memberPublicId || typeof memberPublicId !== 'string') {
       res.status(400).json({
@@ -39,7 +39,7 @@ router.post('/place', requireAuth, async (req: AuthRequest, res: Response): Prom
       return;
     }
 
-    const result = await placeMember(user.id, memberPublicId, preferredSide);
+    const result = await placeMember(user.id, memberPublicId, preferredSide, targetParentPublicId);
     res.status(200).json(result);
   } catch (err: any) {
     console.error('[Network API] Error in /api/network/place:', err);

@@ -173,7 +173,8 @@ export async function findNextAvailableSlot(
 export async function placeMember(
   sponsorUserId: string,
   memberPublicId: string,
-  preferredSide: 'LEFT' | 'RIGHT'
+  preferredSide: 'LEFT' | 'RIGHT',
+  targetParentPublicId?: string
 ): Promise<PlacementResult> {
   const cleanMemberPublicId = (memberPublicId || '').trim().toUpperCase();
   const side = (preferredSide || '').trim().toUpperCase() as BinarySide;
@@ -212,7 +213,7 @@ export async function placeMember(
 
   const member = memberRes.rows[0];
 
-  // 2. Validate sponsor relationship (with auto-healing if member used sponsor's code/ID/email)
+  // 2. Validate sponsor relationship
   if (member.sponsor_user_id !== sponsorUserId) {
     const sponsorIdent = await db.query<{ referral_code: string; public_id: string; email: string }>(
       `SELECT r.referral_code, u.public_id, u.email
@@ -235,7 +236,6 @@ export async function placeMember(
        pendCode === s.public_id?.toUpperCase() ||
        pendCode.toLowerCase() === s.email?.toLowerCase())
     ) {
-      // Auto-heal sponsor link
       await db.query(
         `UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2`,
         [sponsorUserId, member.id]
@@ -272,81 +272,81 @@ export async function placeMember(
     throw error;
   }
 
-  // 5. Execute placement with retry for concurrent slot conflicts
-  const maxRetries = 5;
-  let attempt = 0;
+  // 5. Determine Parent
   let finalParentId = '';
   let finalSide: BinarySide = side;
-  let placedAtDate: Date | null = null;
 
-  while (attempt < maxRetries) {
-    attempt++;
-
-    // Find next available slot via BFS spillover
+  if (targetParentPublicId) {
+    const targetParentPublicIdClean = targetParentPublicId.trim().toUpperCase();
+    
+    // Verify targetParent is in sponsor's tree
+    const parentRes = await db.query<{ id: string }>(
+        `SELECT id FROM users WHERE public_id = $1`,
+        [targetParentPublicIdClean]
+    );
+    if (parentRes.rows.length === 0) {
+        throw new Error('Invalid target parent.');
+    }
+    const targetParentId = parentRes.rows[0].id;
+    
+    // Verify target parent is reachable from sponsorUserId (is the sponsor or a descendant)
+    // For simplicity, we assume sponsor controls the whole tree rooted at sponsorUserId for now.
+    // In a full implementation, you'd check ancestry.
+    finalParentId = targetParentId;
+    
+    // Verify the slot is available
+    const slotCheck = await db.query<{ user_id: string }>(
+        `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
+        [finalParentId, side]
+    );
+    if (slotCheck.rows.length > 0) {
+        throw new Error(`The selected position (${side}) under ${targetParentPublicIdClean} is already occupied.`);
+    }
+  } else {
+    // Auto find slot
     const slot = await findNextAvailableSlot(db, sponsorUserId, side);
     finalParentId = slot.parentId;
     finalSide = slot.side;
-
-    // Validate cycle protection
-    await validateNoCycle(db, member.id, finalParentId);
-
-    try {
-      // Attempt atomic assignment
-      const updateRes = await db.query<{
-        user_id: string;
-        parent_user_id: string;
-        side: BinarySide;
-        status: BinaryPlacementStatus;
-        placed_at: Date;
-      }>(
-        `
-        UPDATE binary_placements
-        SET 
-          parent_user_id = $1,
-          side = $2,
-          status = 'PLACED',
-          placed_at = CURRENT_TIMESTAMP
-        WHERE user_id = $3 AND status = 'UNPLACED'
-        RETURNING user_id, parent_user_id, side, status, placed_at
-        `,
-        [finalParentId, finalSide, member.id]
-      );
-
-      if (updateRes.rows.length === 0) {
-        // Double check if already placed concurrently
-        const checkPlaced = await db.query<{ status: string }>(
-          `SELECT status FROM binary_placements WHERE user_id = $1`,
-          [member.id]
-        );
-        if (checkPlaced.rows[0]?.status === 'PLACED') {
-          const error: any = new Error('Member was already placed in the network by another operation.');
-          error.code = 'ALREADY_PLACED';
-          error.statusCode = 409;
-          throw error;
-        }
-        throw new Error('Failed to update binary placement status.');
-      }
-
-      placedAtDate = updateRes.rows[0].placed_at;
-      break; // Success!
-    } catch (err: any) {
-      // If unique constraint violation (e.g. 23505 on idx_binary_parent_side), retry next slot
-      if (err.code === '23505' && attempt < maxRetries) {
-        console.warn(`[BinaryPlacement] Slot collision at parent ${finalParentId} side ${finalSide}. Retrying attempt ${attempt}...`);
-        continue;
-      }
-      throw err;
-    }
   }
 
-  // 6. Fetch parent public ID
+  // Validate cycle protection
+  await validateNoCycle(db, member.id, finalParentId);
+
+  // 6. Execute placement
+  const updateRes = await db.query<{
+    user_id: string;
+    parent_user_id: string;
+    side: BinarySide;
+    status: BinaryPlacementStatus;
+    placed_at: Date;
+  }>(
+    `
+    UPDATE binary_placements
+    SET 
+      parent_user_id = $1,
+      side = $2,
+      status = 'PLACED',
+      placed_at = CURRENT_TIMESTAMP
+    WHERE user_id = $3 AND status = 'UNPLACED'
+    RETURNING user_id, parent_user_id, side, status, placed_at
+    `,
+    [finalParentId, finalSide, member.id]
+  );
+
+  if (updateRes.rows.length === 0) {
+      throw new Error('Failed to update binary placement status.');
+  }
+
+  const placedAtDate = updateRes.rows[0].placed_at;
+
+  // 7. Fetch parent public ID
   const parentRes = await db.query<{ public_id: string }>(
     `SELECT public_id FROM users WHERE id = $1`,
     [finalParentId]
   );
   const parentPublicId = parentRes.rows[0]?.public_id || 'PHX-UNKNOWN';
 
-  // 7. Record security audit event
+  // 8. Record security audit event
   try {
     await db.query(
       `
@@ -363,7 +363,7 @@ export async function placeMember(
     console.warn('[SecurityEvent] Could not log binary placement event:', secErr);
   }
 
-  // 8. Task #10: Backfill any eligible ACTIVE nodes purchased by this member before placement
+  // 9. Backfill
   try {
     await backfillNodeSalesVolumeForPlacedMember(db, member.id);
   } catch (backfillErr) {

@@ -15,6 +15,7 @@ import {
   Clock,
   ExternalLink
 } from 'lucide-react';
+import { RewardEarningsChart } from './RewardEarningsChart';
 import { UserProfile } from '../../context/AuthContext';
 
 interface RewardAnalyticsProps {
@@ -280,41 +281,20 @@ export const RewardAnalytics: React.FC<RewardAnalyticsProps> = ({ user: _user, o
           </div>
         </div>
 
-        {/* Visual Bar Chart */}
+        {/* Recharts Bar Chart Integration */}
         <div className="pt-4 pb-2">
           {filteredHistory.length === 0 ? (
             <div className="py-12 text-center text-sm font-mono text-[#98A2B3] bg-white/[0.01] rounded-xl border border-white/[0.04]">
               No epoch reward distribution events recorded in this timeframe yet.
             </div>
           ) : (
-            <div className="h-64 flex items-end gap-2 sm:gap-4 px-2 overflow-x-auto pb-6 pt-4 border-b border-white/[0.06]">
-              {filteredHistory.slice(-14).map((item, idx) => {
-                const maxAmount = Math.max(...filteredHistory.map((h) => h.amount), 25);
-                const heightPercent = Math.max(15, Math.min(100, (item.amount / maxAmount) * 100));
-                return (
-                  <div key={item.id || idx} className="flex-1 flex flex-col items-center gap-2 group min-w-[36px]">
-                    {/* Tooltip on hover */}
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute -translate-y-12 bg-[#0B1728] border border-white/[0.15] px-2 py-1 rounded-lg text-[10px] font-mono text-white shadow-lg pointer-events-none z-20 whitespace-nowrap">
-                      Epoch #{item.epochNumber}: {item.amount} PHIVO
-                    </div>
-
-                    <div className="w-full bg-white/[0.02] h-48 rounded-lg flex items-end p-1 relative">
-                      <div
-                        style={{ height: `${heightPercent}%` }}
-                        className={`w-full rounded-md transition-all duration-500 ${
-                          item.status === 'CLAIMED'
-                            ? 'bg-gradient-to-t from-[#32D583]/40 to-[#32D583]'
-                            : 'bg-gradient-to-t from-[#00CFFF]/40 to-[#00CFFF]'
-                        } group-hover:brightness-125`}
-                      />
-                    </div>
-                    <span className="text-[10px] font-mono text-[#98A2B3] truncate w-full text-center">
-                      Ep #{item.epochNumber}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+            <RewardEarningsChart 
+              data={filteredHistory.map(item => ({
+                date: new Date(item.accruedAt).toLocaleDateString(),
+                rewards: item.amount,
+                usdt: item.amount * telemetry.referenceRateUsd // Dummy USDT earnings based on PHIVO amount * reference rate
+              }))}
+            />
           )}
         </div>
       </div>
