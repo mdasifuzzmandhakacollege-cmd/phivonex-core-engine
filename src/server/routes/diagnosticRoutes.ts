@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { checkCloudSqlConnection } from '../utils/cloudSqlDiagnostic';
+import { verifyLedgerSynchronization } from '../utils/ledgerSyncDiagnostic';
 
 export const diagnosticRouter = Router();
 
@@ -58,6 +59,29 @@ diagnosticRouter.get('/cloudsql/summary', async (req: Request, res: Response) =>
     return res.status(500).json({
       status: 'error',
       message: 'Failed to retrieve diagnostic summary.',
+    });
+  }
+});
+
+/**
+ * GET /api/diagnostics/ledger-sync
+ * Diagnostic utility endpoint to verify synchronization between dashboard states and backend ledger records.
+ * Ensures no transaction data is lost across application updates or deployments.
+ */
+diagnosticRouter.get('/ledger-sync', async (req: Request, res: Response) => {
+  try {
+    const report = await verifyLedgerSynchronization();
+    const statusCode = report.status === 'error' ? 503 : 200;
+    return res.status(statusCode).json({
+      success: report.status !== 'error',
+      report,
+    });
+  } catch (err: any) {
+    console.error('[Diagnostic Router Error] Ledger sync diagnostic failed:', err);
+    return res.status(500).json({
+      success: false,
+      error: 'LEDGER_SYNC_DIAGNOSTIC_ERROR',
+      message: 'Failed to execute ledger synchronization diagnostic check.',
     });
   }
 });

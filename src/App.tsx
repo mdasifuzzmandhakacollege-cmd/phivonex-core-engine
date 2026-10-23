@@ -7,6 +7,8 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
 import { SystemConfigProvider } from './context/SystemConfigContext';
+import { ThemeProvider } from './context/ThemeContext';
+
 
 // Pages
 import { RegisterPage } from './pages/RegisterPage';
@@ -171,12 +173,14 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <SystemConfigProvider>
-        <NotificationProvider>
-          <AppContent />
-        </NotificationProvider>
-      </SystemConfigProvider>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <SystemConfigProvider>
+          <NotificationProvider>
+            <AppContent />
+          </NotificationProvider>
+        </SystemConfigProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

@@ -29,6 +29,7 @@ import { ReferralShareModal } from '../modals/ReferralShareModal';
 import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
+import { RewardTrend30DaysChart } from './RewardTrend30DaysChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
 import { ActiveOfferCards } from './ActiveOfferCards';
 import { Premium3DFlipCard } from './Premium3DFlipCard';
@@ -692,6 +693,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           4. PHIVO REFERENCE RATE (Institutional Utility Card)
          ======================================================== */}
       <TokenPriceTrendChart onNavigateTab={onNavigateTab} compact={false} />
+
+      {/* ========================================================
+          4B. 30-DAY PHIVO REWARDS TREND GRAPH (Recharts Integration)
+          ======================================================== */}
+      <RewardTrend30DaysChart onNavigateTab={onNavigateTab} />
 
       {/* ========================================================
           5. CORE PERFORMANCE GRID (Nodes & Binary Network)

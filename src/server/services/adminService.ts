@@ -886,6 +886,7 @@ export async function updateAdminUserProfile(params: {
   adminUserId: string;
   adminPublicId: string;
   targetUserId: string;
+  email?: string;
   fullName?: string;
   country?: string;
   phone?: string;
@@ -918,6 +919,21 @@ export async function updateAdminUserProfile(params: {
     throw err;
   }
 
+  const newEmail = params.email !== undefined ? params.email.trim().toLowerCase() : currentUser.email;
+  if (newEmail !== currentUser.email) {
+    if (!newEmail || !newEmail.includes('@')) {
+      const err: any = new Error('Invalid email address provided.');
+      err.statusCode = 400;
+      throw err;
+    }
+    const emailCheck = await db.query(`SELECT 1 FROM users WHERE LOWER(email) = $1 AND id != $2`, [newEmail, currentUser.id]);
+    if (emailCheck.rows.length > 0) {
+      const err: any = new Error('Email address is already registered to another user account.');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
   const newFullName = params.fullName !== undefined ? params.fullName.trim() : currentUser.full_name;
   const newCountry = params.country !== undefined ? params.country.trim() : currentUser.country;
   const newPhone = params.phone !== undefined ? params.phone.trim() : currentUser.phone;
@@ -926,10 +942,10 @@ export async function updateAdminUserProfile(params: {
   await db.query(
     `
     UPDATE users
-    SET full_name = $1, country = $2, phone = $3, status = $4, updated_at = CURRENT_TIMESTAMP
-    WHERE id = $5
+    SET email = $1, full_name = $2, country = $3, phone = $4, status = $5, updated_at = CURRENT_TIMESTAMP
+    WHERE id = $6
     `,
-    [newFullName, newCountry, newPhone, newStatus, currentUser.id]
+    [newEmail, newFullName, newCountry, newPhone, newStatus, currentUser.id]
   );
 
   // If locking or suspending, revoke active sessions immediately
@@ -1001,6 +1017,107 @@ export async function updateAdminUserProfile(params: {
   } catch {}
 
   return { user: updatedUser };
+}
+
+/**
+ * Manually re-assigns a user's sponsor / referral team leader in the binary / referral network tree.
+ */
+export async function assignUserSponsor(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  sponsorIdentifier: string; // can be public_id, referral_code, or email
+  reason: string;
+  ipAddress?: string;
+}): Promise<{ success: boolean; message: string; user: any; sponsor: any }> {
+  const db = await getDb();
+
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Admin reason is mandatory (minimum 5 characters) for manual team/sponsor reassignment.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // 1. Fetch target user
+  const targetRes = await db.query<any>(`SELECT id, public_id, full_name, email FROM users WHERE id::text = $1 OR public_id = $1`, [params.targetUserId]);
+  if (targetRes.rows.length === 0) {
+    const err: any = new Error('Target user account not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  const targetUser = targetRes.rows[0];
+
+  // 2. Find new sponsor by public_id, referral_code, or email
+  const cleanSponsorId = params.sponsorIdentifier.trim();
+  const sponsorRes = await db.query<any>(
+    `SELECT u.id, u.public_id, u.full_name, u.email, r.referral_code 
+     FROM users u
+     LEFT JOIN user_referrals r ON u.id = r.user_id
+     WHERE u.public_id = $1 OR u.id::text = $1 OR LOWER(u.email) = LOWER($1) OR LOWER(r.referral_code) = LOWER($1)`,
+    [cleanSponsorId]
+  );
+
+  if (sponsorRes.rows.length === 0) {
+    const err: any = new Error(`Sponsor leader not found with identifier: "${cleanSponsorId}". Please provide a valid User Public ID, Referral Code, or Email.`);
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const sponsorUser = sponsorRes.rows[0];
+
+  // Prevent self-referral
+  if (targetUser.id === sponsorUser.id) {
+    const err: any = new Error('A user cannot be their own team sponsor.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Update or insert into user_referrals
+  await db.query(
+    `INSERT INTO user_referrals (user_id, referral_code, sponsor_user_id, created_at)
+     VALUES ($1, (SELECT COALESCE((SELECT referral_code FROM user_referrals WHERE user_id = $1), 'PHX' || floor(random()*90000+10000))), $2, CURRENT_TIMESTAMP)
+     ON CONFLICT (user_id) 
+     DO UPDATE SET sponsor_user_id = $2`,
+    [targetUser.id, sponsorUser.id]
+  );
+
+  // Clear pending referral code
+  await db.query(`UPDATE users SET pending_referral_code = NULL WHERE id = $1`, [targetUser.id]);
+
+  // Audit log
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: 'ADMIN_REASSIGN_REFERRAL_SPONSOR',
+    targetType: 'USER',
+    targetId: targetUser.public_id,
+    details: `Admin ${params.adminPublicId} manually moved operator ${targetUser.public_id} into leader team ${sponsorUser.public_id} (${sponsorUser.email}). Reason: ${params.reason}`,
+    metadata: {
+      targetUserId: targetUser.id,
+      targetPublicId: targetUser.public_id,
+      newSponsorUserId: sponsorUser.id,
+      newSponsorPublicId: sponsorUser.public_id,
+      reason: params.reason,
+    },
+    ipAddress: params.ipAddress,
+  });
+
+  // Create persistent notification for target user
+  createNotification({
+    userId: targetUser.id,
+    type: 'SECURITY_ALERT',
+    title: 'Referral Team Reassigned',
+    message: `Your account team sponsorship has been updated to leader ${sponsorUser.public_id} by administrator ${params.adminPublicId}.`,
+    sourceType: 'ADMIN_ADJUSTMENT',
+    sourceId: targetUser.public_id,
+  }).catch(console.error);
+
+  return {
+    success: true,
+    message: `Successfully re-assigned operator ${targetUser.public_id} under leader ${sponsorUser.public_id} (${sponsorUser.full_name}).`,
+    user: targetUser,
+    sponsor: sponsorUser,
+  };
 }
 
 /**

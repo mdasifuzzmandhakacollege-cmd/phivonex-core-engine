@@ -17,6 +17,13 @@ import {
   Activity,
   Calendar,
   History,
+  Copy,
+  Check,
+  Share2,
+  ShieldCheck,
+  Zap,
+  Globe,
+  Award,
 } from 'lucide-react';
 import {
   MatchingSection,
@@ -76,7 +83,7 @@ export interface NetworkSummary {
   rightNetworkMembers: number;
 }
 
-export const NetworkView: React.FC = () => {
+export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
   const [summary, setSummary] = useState<NetworkSummary | null>(null);
   const [unplacedList, setUnplacedList] = useState<UnplacedMember[]>([]);
   const [treeData, setTreeData] = useState<TreeNode | null>(null);
@@ -86,7 +93,8 @@ export const NetworkView: React.FC = () => {
   const [matchingHistory, setMatchingHistory] = useState<MatchingSettlementItem[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
   const [depth, setDepth] = useState<number>(3);
-  const [selectedMember, setSelectedMember] = useState<UnplacedMember | null>(null);
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [inspectNode, setInspectNode] = useState<TreeNode | null>(null);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [placingMember, setPlacingMember] = useState<{
@@ -97,48 +105,53 @@ export const NetworkView: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Fetch summary, unplaced, tree, binary sales volume, and matching bonus
+  const referralCode = user?.referralCode || user?.publicId || 'PHX10088';
+  const referralLink = `${window.location.origin}/register?ref=${referralCode}`;
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(referralLink);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
+  };
+
   const fetchNetworkData = useCallback(async (currentDepth = depth) => {
     setLoading(true);
     setErrorMsg(null);
     try {
       const [summaryRes, unplacedRes, treeRes, volumeRes, historyRes, matchingSumRes, matchingHistRes] = await Promise.all([
-        fetch('/api/network/summary', { credentials: 'include' }),
-        fetch('/api/network/unplaced', { credentials: 'include' }),
-        fetch(`/api/network/tree?depth=${currentDepth}`, { credentials: 'include' }),
-        fetch('/api/network/volume-summary', { credentials: 'include' }),
-        fetch('/api/network/volume-history?page=1&limit=5', { credentials: 'include' }),
-        fetch('/api/matching/summary', { credentials: 'include' }),
-        fetch('/api/matching/history?page=1&limit=10', { credentials: 'include' }),
+        fetch('/api/network/summary', { credentials: 'include' }).catch(() => null),
+        fetch('/api/network/unplaced', { credentials: 'include' }).catch(() => null),
+        fetch(`/api/network/tree?depth=${currentDepth}`, { credentials: 'include' }).catch(() => null),
+        fetch('/api/network/volume-summary', { credentials: 'include' }).catch(() => null),
+        fetch('/api/network/volume-history?page=1&limit=5', { credentials: 'include' }).catch(() => null),
+        fetch('/api/matching/summary', { credentials: 'include' }).catch(() => null),
+        fetch('/api/matching/history?page=1&limit=10', { credentials: 'include' }).catch(() => null),
       ]);
 
-      if (summaryRes.ok) {
-        const summaryData = await summaryRes.json();
-        setSummary(summaryData);
+      if (summaryRes && summaryRes.ok) {
+        setSummary(await summaryRes.json());
       }
-      if (unplacedRes.ok) {
-        const unplacedData = await unplacedRes.json();
-        setUnplacedList(unplacedData.unplaced || []);
+      if (unplacedRes && unplacedRes.ok) {
+        const data = await unplacedRes.json();
+        setUnplacedList(data.unplaced || []);
       }
-      if (treeRes.ok) {
-        const treeJson = await treeRes.json();
-        setTreeData(treeJson.tree || null);
+      if (treeRes && treeRes.ok) {
+        const data = await treeRes.json();
+        setTreeData(data.tree || null);
       }
-      if (volumeRes.ok) {
-        const volData = await volumeRes.json();
-        setVolumeSummary(volData);
+      if (volumeRes && volumeRes.ok) {
+        setVolumeSummary(await volumeRes.json());
       }
-      if (historyRes.ok) {
-        const histData = await historyRes.json();
-        setVolumeHistory(histData.history || []);
+      if (historyRes && historyRes.ok) {
+        const data = await historyRes.json();
+        setVolumeHistory(data.history || []);
       }
-      if (matchingSumRes.ok) {
-        const sumData = await matchingSumRes.json();
-        setMatchingSummary(sumData);
+      if (matchingSumRes && matchingSumRes.ok) {
+        setMatchingSummary(await matchingSumRes.json());
       }
-      if (matchingHistRes.ok) {
-        const histData = await matchingHistRes.json();
-        setMatchingHistory(histData.history || []);
+      if (matchingHistRes && matchingHistRes.ok) {
+        const data = await matchingHistRes.json();
+        setMatchingHistory(data.history || []);
       }
     } catch (err: any) {
       console.warn('[NetworkView] Error fetching network:', err);
@@ -170,14 +183,11 @@ export const NetworkView: React.FC = () => {
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data.message || 'Placement failed.');
       }
 
-      setSuccessMsg(
-        `Successfully placed ${placingMember.member.displayName} into ${data.side} team.`
-      );
+      setSuccessMsg(`Successfully placed ${placingMember.member.displayName} into ${data.side} team.`);
       setPlacingMember(null);
       await fetchNetworkData(depth);
     } catch (err: any) {
@@ -188,62 +198,70 @@ export const NetworkView: React.FC = () => {
     }
   };
 
+  // Calculate balance percentage
+  const leftTotal = summary?.leftNetworkMembers || 0;
+  const rightTotal = summary?.rightNetworkMembers || 0;
+  const totalTeam = leftTotal + rightTotal;
+  const leftPercent = totalTeam > 0 ? Math.round((leftTotal / totalTeam) * 100) : 50;
+  const rightPercent = totalTeam > 0 ? 100 - leftPercent : 50;
+
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
       {/* ========================================================
-          1. COMPACT PAGE HERO
+          1. AFFILIATE COMMAND CENTER HERO & REFERRAL CARD
          ======================================================== */}
-      <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-5 sm:p-7 shadow-xl">
-        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-[#00CFFF]/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-6 sm:p-8 shadow-2xl">
+        <div className="absolute top-0 right-0 -mt-12 -mr-12 w-80 h-80 bg-[#00CFFF]/15 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute bottom-0 left-1/3 -mb-16 w-64 h-64 bg-[#32D583]/10 rounded-full blur-3xl pointer-events-none" />
 
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-5">
-          <div className="space-y-2">
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-3">
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#00CFFF]/10 border border-[#00CFFF]/25 text-[#00CFFF] text-[11px] font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF]" />
-                Binary Structure
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00CFFF]/15 border border-[#00CFFF]/30 text-[#00CFFF] text-xs font-mono font-bold tracking-wider uppercase">
+                <Globe className="w-3.5 h-3.5 animate-spin-slow" />
+                Global Affiliate Command Center
               </span>
-              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px] font-mono">
-                Daily Global Settlement (18:00 UTC)
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-[#32D583] text-xs font-mono font-bold">
+                <Zap className="w-3.5 h-3.5 text-[#32D583]" />
+                Live Binary Matrix Sync
               </span>
             </div>
 
-            <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-              Network
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+              Network Tree &amp; Matrix
             </h1>
             <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
-              Track your binary team, daily matching progress, and PHIVONEX promotion rank.
+              Experience the ultra-modern decentralized genealogical gene tree. Monitor team equilibrium, unplaced referrals, daily matching bonuses, and instant referral sharing.
             </p>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start md:self-auto">
-            {/* Depth selector */}
-            <div className="flex items-center bg-[#05070B] border border-white/[0.08] rounded-xl p-1">
-              <span className="text-xs text-[#98A2B3] px-2 font-mono">Depth:</span>
-              {[2, 3, 4, 5].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDepth(d)}
-                  className={`px-2.5 py-1 text-xs font-mono rounded-lg transition-colors cursor-pointer ${
-                    depth === d
-                      ? 'bg-[#00CFFF] text-[#05070B] font-bold shadow-sm'
-                      : 'text-[#98A2B3] hover:text-white'
-                  }`}
-                >
-                  {d}
-                </button>
-              ))}
+          {/* Quick Referral Share Box */}
+          <div className="p-4 rounded-2xl bg-[#05070B]/90 border border-white/[0.1] shadow-xl backdrop-blur-md flex flex-col space-y-2.5 min-w-[280px] sm:min-w-[320px]">
+            <div className="flex items-center justify-between text-xs text-[#98A2B3] font-mono">
+              <span>Your Referral Link</span>
+              <span className="text-[#00CFFF] font-bold">{referralCode}</span>
             </div>
-
-            <button
-              onClick={() => fetchNetworkData(depth)}
-              disabled={loading}
-              className="p-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center disabled:opacity-50"
-              title="Refresh Network Data"
-              aria-label="Refresh Network Data"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 text-[#00CFFF] ${loading ? 'animate-spin' : ''}`} />
-            </button>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={referralLink}
+                className="w-full bg-[#07101D] border border-white/[0.08] rounded-xl px-3 py-2 text-xs font-mono text-white select-all focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                className="p-2.5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold transition-all cursor-pointer flex items-center justify-center shrink-0 shadow-lg shadow-[#00CFFF]/20 active:scale-95"
+                title="Copy Referral Link"
+              >
+                {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+            {copiedLink && (
+              <div className="text-[10px] font-mono text-[#32D583] text-center animate-fadeIn">
+                ✓ Referral link copied to clipboard!
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -255,10 +273,7 @@ export const NetworkView: React.FC = () => {
             <AlertCircle className="w-4 h-4 shrink-0" />
             <span>{errorMsg}</span>
           </div>
-          <button
-            onClick={() => setErrorMsg(null)}
-            className="text-white hover:underline text-xs font-mono cursor-pointer"
-          >
+          <button onClick={() => setErrorMsg(null)} className="text-white hover:underline text-xs font-mono cursor-pointer">
             Dismiss
           </button>
         </div>
@@ -270,21 +285,18 @@ export const NetworkView: React.FC = () => {
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>{successMsg}</span>
           </div>
-          <button
-            onClick={() => setSuccessMsg(null)}
-            className="text-white hover:underline text-xs font-mono cursor-pointer"
-          >
+          <button onClick={() => setSuccessMsg(null)} className="text-white hover:underline text-xs font-mono cursor-pointer">
             Dismiss
           </button>
         </div>
       )}
 
       {/* ========================================================
-          2. COMPACT SUMMARY KPI GRID
+          2. KPI SUMMARY METRICS GRID
          ======================================================== */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* Direct Referrals */}
-        <div className="p-4 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#00CFFF]/30 transition-all">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
             <span className="font-medium text-[11px] uppercase tracking-wider">Direct Referrals</span>
             <Users className="w-4 h-4 text-[#00CFFF]" />
@@ -298,7 +310,7 @@ export const NetworkView: React.FC = () => {
         </div>
 
         {/* Placed Members */}
-        <div className="p-4 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#32D583]/30 transition-all">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
             <span className="font-medium text-[11px] uppercase tracking-wider">Placed Members</span>
             <UserCheck className="w-4 h-4 text-[#32D583]" />
@@ -312,7 +324,7 @@ export const NetworkView: React.FC = () => {
         </div>
 
         {/* Unplaced Referrals */}
-        <div className="p-4 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#F59E0B]/30 transition-all">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
             <span className="font-medium text-[11px] uppercase tracking-wider">Unplaced</span>
             <Clock className="w-4 h-4 text-[#F59E0B]" />
@@ -326,7 +338,7 @@ export const NetworkView: React.FC = () => {
         </div>
 
         {/* Left Network */}
-        <div className="p-4 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between">
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#00CFFF]/30 transition-all">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
             <span className="font-medium text-[11px] uppercase tracking-wider">Left Team</span>
             <ArrowLeft className="w-4 h-4 text-[#00CFFF]" />
@@ -340,7 +352,7 @@ export const NetworkView: React.FC = () => {
         </div>
 
         {/* Right Network */}
-        <div className="p-4 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between col-span-2 sm:col-span-1">
+        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between col-span-2 sm:col-span-1 group hover:border-[#32D583]/30 transition-all">
           <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
             <span className="font-medium text-[11px] uppercase tracking-wider">Right Team</span>
             <ArrowRight className="w-4 h-4 text-[#32D583]" />
@@ -355,7 +367,45 @@ export const NetworkView: React.FC = () => {
       </div>
 
       {/* ========================================================
-          3. BINARY SALES VOLUME SECTION
+          3. TEAM EQUILIBRIUM & LEG BALANCE METER
+         ======================================================== */}
+      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
+              <GitFork className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-sm font-bold text-white">Team Equilibrium &amp; Leg Balance</h2>
+              <p className="text-[11px] text-[#98A2B3]">Real-time ratio between Left and Right team distribution.</p>
+            </div>
+          </div>
+          <div className="text-xs font-mono text-[#00CFFF] bg-[#00CFFF]/10 px-2.5 py-1 rounded-lg border border-[#00CFFF]/20">
+            Total Team: {totalTeam} Members
+          </div>
+        </div>
+
+        {/* Visual Progress Bar */}
+        <div className="space-y-2">
+          <div className="flex justify-between text-xs font-mono">
+            <span className="text-[#00CFFF]">Left Team: {leftTotal} ({leftPercent}%)</span>
+            <span className="text-[#32D583]">Right Team: {rightTotal} ({rightPercent}%)</span>
+          </div>
+          <div className="h-3 w-full bg-[#05070B] rounded-full overflow-hidden p-0.5 border border-white/[0.08] flex">
+            <div
+              className="bg-gradient-to-r from-[#00CFFF] to-[#168BFF] h-full rounded-l-full transition-all duration-500"
+              style={{ width: `${leftPercent}%` }}
+            />
+            <div
+              className="bg-gradient-to-r from-[#10B981] to-[#32D583] h-full rounded-r-full transition-all duration-500"
+              style={{ width: `${rightPercent}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================
+          4. BINARY SALES VOLUME SECTION
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
@@ -496,7 +546,7 @@ export const NetworkView: React.FC = () => {
       </div>
 
       {/* ========================================================
-          4. DAILY BINARY MATCHING SECTION (10 Approved Tiers)
+          5. DAILY BINARY MATCHING SECTION
          ======================================================== */}
       <MatchingSection
         summary={matchingSummary}
@@ -505,12 +555,12 @@ export const NetworkView: React.FC = () => {
       />
 
       {/* ========================================================
-          5. SEQUENTIAL PROMOTION SECTION (7 Sequential Ranks)
+          6. SEQUENTIAL PROMOTION SECTION
          ======================================================== */}
       <PromotionSection />
 
       {/* ========================================================
-          6. UNPLACED DIRECT REFERRALS SECTION
+          7. UNPLACED DIRECT REFERRALS SECTION
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
@@ -590,7 +640,7 @@ export const NetworkView: React.FC = () => {
       </div>
 
       {/* ========================================================
-          7. INTERACTIVE BINARY TREE VIEW (Horizontally Safe)
+          8. INTERACTIVE BINARY GENE TREE VIEW (International Grade)
          ======================================================== */}
       <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl overflow-hidden space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
@@ -599,37 +649,50 @@ export const NetworkView: React.FC = () => {
               <Layers className="w-4 h-4" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-white">Binary Tree Structure</h2>
+              <h2 className="text-sm font-bold text-white">Genealogical Binary Tree</h2>
               <p className="text-[11px] text-[#98A2B3]">
-                Visual structure of your binary tree down to depth {depth}.
+                Interactive gene tree visualization down to depth {depth}. Click any node to inspect details.
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs font-mono">
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#00CFFF]" />
-              <span className="text-[#98A2B3]">Left Team</span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#32D583]" />
-              <span className="text-[#98A2B3]">Right Team</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center bg-[#05070B] border border-white/[0.08] rounded-xl p-1">
+              <span className="text-[11px] text-[#98A2B3] px-2 font-mono">Depth:</span>
+              {[2, 3, 4, 5].map((d) => (
+                <button
+                  key={d}
+                  onClick={() => setDepth(d)}
+                  className={`px-2.5 py-1 text-xs font-mono rounded-lg transition-colors cursor-pointer ${
+                    depth === d
+                      ? 'bg-[#00CFFF] text-[#05070B] font-bold shadow-sm'
+                      : 'text-[#98A2B3] hover:text-white'
+                  }`}
+                >
+                  {d}
+                </button>
+              ))}
             </div>
           </div>
         </div>
 
         {/* Tree Container */}
-        <div className="w-full overflow-x-auto py-6 px-3 bg-[#05070B] rounded-xl border border-white/[0.06] min-h-[380px] flex items-center justify-center">
+        <div className="w-full overflow-x-auto py-8 px-4 bg-[#05070B] rounded-2xl border border-white/[0.06] min-h-[420px] flex items-center justify-center shadow-inner">
           {loading && !treeData ? (
-            <div className="flex flex-col items-center justify-center space-y-2 py-10">
-              <RefreshCw className="w-6 h-6 text-[#00CFFF] animate-spin" />
-              <p className="text-xs font-mono text-[#98A2B3]">Loading binary tree...</p>
+            <div className="flex flex-col items-center justify-center space-y-3 py-12">
+              <RefreshCw className="w-7 h-7 text-[#00CFFF] animate-spin" />
+              <p className="text-xs font-mono text-[#98A2B3]">Loading binary gene tree...</p>
             </div>
           ) : treeData ? (
             <div className="min-w-fit flex flex-col items-center">
-              <BinaryTreeNodeRenderer node={treeData} isRoot={true} rootVolume={volumeSummary} />
+              <BinaryTreeNodeRenderer
+                node={treeData}
+                isRoot={true}
+                rootVolume={volumeSummary}
+                onInspect={(node) => setInspectNode(node)}
+              />
             </div>
           ) : (
-            <div className="text-center py-10 text-[#98A2B3] text-xs font-mono">
+            <div className="text-center py-12 text-[#98A2B3] text-xs font-mono">
               No binary tree data found.
             </div>
           )}
@@ -637,7 +700,7 @@ export const NetworkView: React.FC = () => {
       </div>
 
       {/* ========================================================
-          8. CONFIRMATION PLACEMENT MODAL
+          9. CONFIRMATION PLACEMENT MODAL
          ======================================================== */}
       {placingMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
@@ -720,33 +783,82 @@ export const NetworkView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ========================================================
+          10. NODE INSPECT MODAL
+         ======================================================== */}
+      {inspectNode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-sm bg-[#07101D] border border-white/[0.12] rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-[#00CFFF]/15 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF] font-bold">
+                  {inspectNode.user.displayName.charAt(0)}
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">{inspectNode.user.displayName}</h3>
+                  <p className="text-[11px] font-mono text-[#00CFFF]">{inspectNode.user.publicId}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setInspectNode(null)}
+                className="text-[#98A2B3] hover:text-white text-xs font-mono cursor-pointer p-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs font-mono">
+              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
+                <span className="text-[#98A2B3]">Position Side:</span>
+                <span className="text-white font-bold">{inspectNode.side || 'ROOT'}</span>
+              </div>
+              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
+                <span className="text-[#98A2B3]">Placed At:</span>
+                <span className="text-white">{inspectNode.placedAt ? new Date(inspectNode.placedAt).toLocaleDateString() : 'Direct Ancestor'}</span>
+              </div>
+              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
+                <span className="text-[#98A2B3]">Subtree Status:</span>
+                <span className="text-[#32D583] font-bold">ACTIVE</span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setInspectNode(null)}
+              className="w-full py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white text-xs font-mono font-bold transition-colors cursor-pointer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 /**
- * Recursive binary tree visualizer component
+ * Recursive binary gene tree visualizer component with interactive inspect
  */
 interface NodeRendererProps {
   node: TreeNode | null;
   isRoot?: boolean;
   side?: 'LEFT' | 'RIGHT';
   rootVolume?: VolumeSummary | null;
+  onInspect?: (node: TreeNode) => void;
 }
 
-const BinaryTreeNodeRenderer: React.FC<NodeRendererProps & { onPlace?: (side: 'LEFT' | 'RIGHT', parentId: string) => void }> = ({ node, isRoot = false, side, rootVolume, onPlace }) => {
+const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({ node, isRoot = false, side, rootVolume, onInspect }) => {
   if (!node) {
     return (
       <div className="flex flex-col items-center">
-        <button 
-          onClick={() => onPlace?.(side || 'LEFT', 'parent_id_placeholder')}
-          className="w-32 sm:w-40 p-3 rounded-xl border border-dashed border-white/[0.1] bg-[#05070B] text-center hover:bg-[#00CFFF]/10 transition-colors"
-        >
-          <div className="text-[10px] font-mono uppercase tracking-wider text-[#667085] mb-1">
+        <div className="w-28 sm:w-36 p-3 rounded-xl border border-dashed border-white/[0.1] bg-[#05070B] text-center opacity-60">
+          <div className="text-[9px] font-mono uppercase tracking-wider text-[#667085] mb-0.5">
             {side || 'Position'}
           </div>
-          <div className="text-xs font-mono text-[#00CFFF]">Click to Place</div>
-        </button>
+          <div className="text-[11px] font-mono text-[#98A2B3]">Empty Slot</div>
+        </div>
       </div>
     );
   }
@@ -755,22 +867,23 @@ const BinaryTreeNodeRenderer: React.FC<NodeRendererProps & { onPlace?: (side: 'L
     <div className="flex flex-col items-center">
       {/* Node Card */}
       <div
-        className={`w-32 sm:w-40 p-3 rounded-xl border transition-all relative ${
+        onClick={() => onInspect?.(node)}
+        className={`w-32 sm:w-40 p-3 rounded-2xl border transition-all relative cursor-pointer group hover:scale-105 ${
           isRoot
-            ? 'bg-[#0B1728] border-[#00CFFF]/40 shadow-lg shadow-[#00CFFF]/10'
+            ? 'bg-gradient-to-br from-[#0B1728] to-[#07101D] border-[#00CFFF]/50 shadow-xl shadow-[#00CFFF]/15'
             : node.side === 'LEFT'
-            ? 'bg-[#05070B] border-[#00CFFF]/30'
-            : 'bg-[#05070B] border-[#32D583]/30'
+            ? 'bg-[#05070B] border-[#00CFFF]/30 hover:border-[#00CFFF]'
+            : 'bg-[#05070B] border-[#32D583]/30 hover:border-[#32D583]'
         }`}
       >
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-1.5">
           <span
-            className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded uppercase ${
+            className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
               isRoot
-                ? 'bg-[#00CFFF]/20 text-[#00CFFF]'
+                ? 'bg-[#00CFFF]/25 text-[#00CFFF] border border-[#00CFFF]/40'
                 : node.side === 'LEFT'
-                ? 'bg-[#00CFFF]/10 text-[#00CFFF]'
-                : 'bg-[#32D583]/10 text-[#32D583]'
+                ? 'bg-[#00CFFF]/15 text-[#00CFFF]'
+                : 'bg-[#32D583]/15 text-[#32D583]'
             }`}
           >
             {isRoot ? 'YOU' : node.side}
@@ -785,19 +898,19 @@ const BinaryTreeNodeRenderer: React.FC<NodeRendererProps & { onPlace?: (side: 'L
           )}
         </div>
 
-        <div className="text-xs font-bold text-white truncate">{node.user.displayName}</div>
+        <div className="text-xs font-bold text-white truncate group-hover:text-[#00CFFF] transition-colors">{node.user.displayName}</div>
         <div className="text-[10px] font-mono text-[#00CFFF] truncate mt-0.5">
           {node.user.publicId}
         </div>
 
         {/* Root Volume Badges */}
         {isRoot && rootVolume && (
-          <div className="mt-2 pt-1.5 border-t border-white/[0.06] grid grid-cols-2 gap-1 text-[9px] font-mono">
+          <div className="mt-2.5 pt-2 border-t border-white/[0.08] grid grid-cols-2 gap-1 text-[9px] font-mono">
             <div className="text-[#00CFFF] flex items-center justify-between">
               <span>L:</span>
               <span className="font-bold">{rootVolume.availableForFutureMatching.left}</span>
             </div>
-            <div className="text-[#32D583] flex items-center justify-between border-l border-white/[0.06] pl-1">
+            <div className="text-[#32D583] flex items-center justify-between border-l border-white/[0.08] pl-1">
               <span>R:</span>
               <span className="font-bold">{rootVolume.availableForFutureMatching.right}</span>
             </div>
@@ -806,22 +919,22 @@ const BinaryTreeNodeRenderer: React.FC<NodeRendererProps & { onPlace?: (side: 'L
       </div>
 
       {/* Branch Connectors and Children */}
-      <div className="w-0.5 h-5 bg-white/[0.1]"></div>
+      <div className="w-0.5 h-6 bg-gradient-to-b from-white/[0.2] to-white/[0.1]"></div>
 
       <div className="relative flex justify-center items-start pt-0">
-        <div className="grid grid-cols-2 gap-3 sm:gap-6 relative">
-          <div className="absolute top-0 left-1/4 right-1/4 h-0.5 bg-white/[0.1]"></div>
+        <div className="grid grid-cols-2 gap-4 sm:gap-8 relative">
+          <div className="absolute top-0 left-1/4 right-1/4 h-0.5 bg-white/[0.15]"></div>
 
           {/* Left Branch */}
           <div className="flex flex-col items-center">
-            <div className="w-0.5 h-3 bg-[#00CFFF]/40"></div>
-            <BinaryTreeNodeRenderer node={node.left} side="LEFT" />
+            <div className="w-0.5 h-4 bg-[#00CFFF]/50"></div>
+            <BinaryTreeNodeRenderer node={node.left} side="LEFT" rootVolume={rootVolume} onInspect={onInspect} />
           </div>
 
           {/* Right Branch */}
           <div className="flex flex-col items-center">
-            <div className="w-0.5 h-3 bg-[#32D583]/40"></div>
-            <BinaryTreeNodeRenderer node={node.right} side="RIGHT" />
+            <div className="w-0.5 h-4 bg-[#32D583]/50"></div>
+            <BinaryTreeNodeRenderer node={node.right} side="RIGHT" rootVolume={rootVolume} onInspect={onInspect} />
           </div>
         </div>
       </div>

@@ -16,6 +16,7 @@ import {
   executeAdminWalletAdjustment,
   setUserAccountStatus,
   revokeUserSessions,
+  assignUserSponsor,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
 import {
@@ -237,7 +238,7 @@ adminRouter.get('/users', async (req: AuthRequest, res: Response) => {
 adminRouter.put('/users/:userId', async (req: AuthRequest, res: Response) => {
   try {
     const { userId } = req.params;
-    const { fullName, country, phone, status, reason } = req.body || {};
+    const { email, fullName, country, phone, status, reason } = req.body || {};
 
     const adminUserId = req.user?.id || '';
     const adminPublicId = req.user?.public_id || 'SYSTEM_ADMIN';
@@ -247,6 +248,7 @@ adminRouter.put('/users/:userId', async (req: AuthRequest, res: Response) => {
       adminUserId,
       adminPublicId,
       targetUserId: userId,
+      email,
       fullName,
       country,
       phone,
@@ -265,6 +267,42 @@ adminRouter.put('/users/:userId', async (req: AuthRequest, res: Response) => {
     return res.status(err.statusCode || 500).json({
       error: err.code || 'SERVER_ERROR',
       message: err.message || 'Failed to update user profile.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/sponsor
+ * Manually re-assigns a user's sponsor / team leader in the referral tree with audit log & reason.
+ */
+adminRouter.post('/users/:userId/sponsor', async (req: AuthRequest, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { sponsorIdentifier, reason } = req.body || {};
+
+    if (!sponsorIdentifier || !sponsorIdentifier.trim()) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'Sponsor identifier (Public ID, Referral Code, or Email) is required.' });
+    }
+
+    const adminUserId = req.user?.id || '';
+    const adminPublicId = req.user?.public_id || 'SYSTEM_ADMIN';
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await assignUserSponsor({
+      adminUserId,
+      adminPublicId,
+      targetUserId: userId,
+      sponsorIdentifier,
+      reason,
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error re-assigning user sponsor:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to re-assign user team sponsor.',
     });
   }
 });

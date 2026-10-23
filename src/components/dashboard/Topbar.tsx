@@ -17,11 +17,14 @@ import {
   VolumeX,
   Wallet,
   Activity,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
 import { UserProfile } from '../../context/AuthContext';
 import { useNotifications } from '../../context/NotificationContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
+import { useTheme } from '../../context/ThemeContext';
 import { DashboardTab } from './Sidebar';
 import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 
@@ -43,6 +46,7 @@ export const Topbar: React.FC<TopbarProps> = ({
   onNavigate,
 }) => {
   const { isConnected } = useSystemConfig();
+  const { theme, toggleTheme } = useTheme();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
@@ -179,6 +183,21 @@ export const Topbar: React.FC<TopbarProps> = ({
           <span className="font-mono font-bold text-white text-xs sm:text-sm tabular-nums">
             ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
           </span>
+        </button>
+
+        {/* Theme Toggle Button */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="p-2.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95 shadow-sm"
+          title={theme === 'dark' ? 'Switch to High-Contrast Light Mode' : 'Switch to Dark Mode'}
+          aria-label="Toggle Theme Mode"
+        >
+          {theme === 'dark' ? (
+            <Sun className="w-4 h-4 text-amber-400" />
+          ) : (
+            <Moon className="w-4 h-4 text-[#00CFFF]" />
+          )}
         </button>
 
         {/* Notification Bell Trigger */}
