@@ -978,3 +978,17 @@ function mapRowToRunSummary(row: any): ReconciliationRunSummary {
     errorMessage: row.error_message,
   };
 }
+
+import cron from 'node-cron';
+
+export function startDailyAuditScheduler() {
+  // Run daily at 01:00 AM
+  cron.schedule('0 1 * * *', () => {
+    runFinancialReconciliation({
+      adminUserId: null,
+      adminPublicId: 'SYSTEM_AUDITOR_CRON'
+    }).catch(err => console.error('[DailyAudit] Scheduler error:', err));
+  });
+  console.log('[DailyAudit] Scheduler started.');
+}
+

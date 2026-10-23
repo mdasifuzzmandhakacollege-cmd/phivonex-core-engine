@@ -276,7 +276,7 @@ export async function getAdminUsersList(
       u.email_verified_at,
       u.created_at,
       sp.public_id AS sponsor_public_id,
-      (SELECT COUNT(*)::int FROM nodes n WHERE n.owner_user_id = u.id AND n.status = 'ACTIVE') AS node_count
+      (SELECT COUNT(*)::int FROM nodes n WHERE n.owner_user_id = u.id AND n.status IN ('ACTIVE', 'PURCHASED', 'EMITTING', 'MATURED')) AS node_count
     FROM users u
     LEFT JOIN user_referrals ur ON u.id = ur.user_id
     LEFT JOIN users sp ON ur.sponsor_user_id = sp.id

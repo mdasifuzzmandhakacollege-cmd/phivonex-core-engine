@@ -57,6 +57,7 @@ import { LeadershipRankControl } from '../components/admin/LeadershipRankControl
 import { AdminCommunicationsHub } from '../components/admin/AdminCommunicationsHub';
 import { User360View } from '../components/admin/User360View';
 import { KYCManagement } from '../components/admin/KYCManagement';
+import { ReconciliationReport } from '../components/admin/ReconciliationReport';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 
 interface AdminPageProps {
@@ -79,6 +80,7 @@ export type AdminTab =
   | 'withdrawal-logs'
   | 'transactions'
   | 'network'
+  | 'diagnostics'
   | 'audit'
   | 'communications'
   | 'support';
@@ -117,6 +119,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (clean.includes('/withdrawals')) return 'withdrawals';
     if (clean.includes('/transactions')) return 'transactions';
     if (clean.includes('/network')) return 'network';
+    if (clean.includes('/diagnostics')) return 'diagnostics';
     if (clean.includes('/audit')) return 'audit';
     return 'overview';
   };
@@ -674,6 +677,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'withdrawal-logs' as AdminTab, label: 'Withdrawal State Logs', icon: Clock },
     { id: 'transactions' as AdminTab, label: 'Ledger Explorer', icon: ArrowLeftRight },
     { id: 'network' as AdminTab, label: 'Network Telemetry', icon: GitFork },
+    { id: 'diagnostics' as AdminTab, label: 'System Diagnostics', icon: ShieldAlert },
     { id: 'communications' as AdminTab, label: 'Communications & Email', icon: Mail },
     { id: 'support' as AdminTab, label: 'Support Center', icon: HelpCircle },
     { id: 'audit' as AdminTab, label: 'Admin Audit Logs', icon: FileText },
@@ -1569,6 +1573,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                 </table>
               </div>
             </div>
+          )}
+
+          {activeTab === 'diagnostics' && (
+            <ReconciliationReport />
           )}
 
           {/* TAB 5: AUDIT LOGS */}
