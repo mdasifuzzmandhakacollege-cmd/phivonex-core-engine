@@ -175,15 +175,16 @@ router.get('/direct', requireAuth, async (req: AuthRequest, res: Response): Prom
         SET sponsor_user_id = $1
         FROM users u
         WHERE ur.user_id = u.id
-          AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+          AND ur.sponsor_user_id IS NULL
           AND u.id != $1
+          AND COALESCE(TRIM(u.pending_referral_code), '') != ''
           AND (
             UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
             OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
             OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
           )
         `,
-        [user.id, s.referral_code || '', s.public_id || '', s.email || '']
+        [user.id, s.referral_code || '__NONE__', s.public_id || '__NONE__', s.email || '__NONE__']
       );
 
       // Ensure all direct referrals exist in binary_placements
@@ -213,7 +214,7 @@ router.get('/direct', requireAuth, async (req: AuthRequest, res: Response): Prom
         u.public_id, 
         u.full_name, 
         ur.created_at,
-        COALESCE(bp.status, 'UNPLACED') as placement_status,
+        CASE WHEN bp.status = 'PLACED' AND bp.parent_user_id IS NOT NULL THEN 'PLACED' ELSE 'UNPLACED' END as placement_status,
         bp.side as team_side,
         bp.placed_at
       FROM user_referrals ur

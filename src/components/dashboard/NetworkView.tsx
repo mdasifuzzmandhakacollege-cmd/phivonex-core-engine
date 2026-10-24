@@ -92,7 +92,7 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
   const [matchingSummary, setMatchingSummary] = useState<MatchingSummary | null>(null);
   const [matchingHistory, setMatchingHistory] = useState<MatchingSettlementItem[]>([]);
   const [showHistory, setShowHistory] = useState<boolean>(false);
-  const [depth, setDepth] = useState<number>(3);
+  const [depth, setDepth] = useState<number>(8);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [inspectNode, setInspectNode] = useState<TreeNode | null>(null);
 
@@ -100,7 +100,9 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
   const [placingMember, setPlacingMember] = useState<{
     member: UnplacedMember;
     side: 'LEFT' | 'RIGHT';
+    targetParentPublicId?: string;
   } | null>(null);
+  const [manualMemberInput, setManualMemberInput] = useState<string>('');
   const [submittingPlacement, setSubmittingPlacement] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -167,6 +169,12 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
 
   const handleConfirmPlacement = async () => {
     if (!placingMember) return;
+    const effectiveMemberId = (placingMember.member.publicId || manualMemberInput || '').trim();
+    if (!effectiveMemberId) {
+      setErrorMsg('Please select a member or enter their Public ID / Email.');
+      return;
+    }
+
     setSubmittingPlacement(true);
     setErrorMsg(null);
     setSuccessMsg(null);
@@ -177,8 +185,9 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          memberPublicId: placingMember.member.publicId,
+          memberPublicId: effectiveMemberId,
           preferredSide: placingMember.side,
+          targetParentPublicId: placingMember.targetParentPublicId || undefined,
         }),
       });
 
@@ -187,8 +196,11 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
         throw new Error(data.message || 'Placement failed.');
       }
 
-      setSuccessMsg(`Successfully placed ${placingMember.member.displayName} into ${data.side} team.`);
+      setSuccessMsg(
+        `Successfully placed ${placingMember.member.displayName || data.memberPublicId} into ${data.side} team under ${data.parentPublicId}!`
+      );
       setPlacingMember(null);
+      setManualMemberInput('');
       await fetchNetworkData(depth);
     } catch (err: any) {
       console.warn('[NetworkView] Placement error:', err);
@@ -196,6 +208,25 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
     } finally {
       setSubmittingPlacement(false);
     }
+  };
+
+  const handleOpenManualPlacement = (side: 'LEFT' | 'RIGHT', targetParentPublicId?: string) => {
+    const cleanId = manualMemberInput.trim();
+    const matched = unplacedList.find(
+      (u) => u.publicId.toUpperCase() === cleanId.toUpperCase()
+    );
+    const fallbackMember: UnplacedMember = matched ||
+      unplacedList[0] || {
+        publicId: cleanId,
+        displayName: cleanId || 'Direct Referral Member',
+        joinedAt: new Date().toISOString(),
+        placementStatus: 'UNPLACED',
+      };
+    setPlacingMember({
+      member: fallbackMember,
+      side,
+      targetParentPublicId,
+    });
   };
 
   // Calculate balance percentage
@@ -580,12 +611,53 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
           </span>
         </div>
 
+        {/* Quick Manual Placement Bar (by Public ID or Email) */}
+        <div className="p-4 rounded-xl bg-[#05070B] border border-[#00CFFF]/20 flex flex-col md:flex-row md:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+              <UserCheck className="w-3.5 h-3.5 text-[#00CFFF]" />
+              <span>Quick Team Placement (By Public ID or Email)</span>
+            </div>
+            <p className="text-[11px] text-[#98A2B3]">
+              Enter your direct referral&apos;s Public ID (e.g. PHX-100809) or Email and place them directly into your LEFT or RIGHT team.
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <input
+              type="text"
+              value={manualMemberInput}
+              onChange={(e) => setManualMemberInput(e.target.value)}
+              placeholder="Enter Member ID (PHX-...) or Email"
+              className="bg-[#07101D] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-[#667085] outline-none min-w-[230px]"
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleOpenManualPlacement('LEFT')}
+                className="flex items-center justify-center gap-1 py-2 px-3 rounded-xl bg-[#00CFFF]/15 hover:bg-[#00CFFF]/25 text-[#00CFFF] border border-[#00CFFF]/30 text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Place LEFT</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenManualPlacement('RIGHT')}
+                className="flex items-center justify-center gap-1 py-2 px-3 rounded-xl bg-[#32D583]/15 hover:bg-[#32D583]/25 text-[#32D583] border border-[#32D583]/30 text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap"
+              >
+                <span>Place RIGHT</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
         {unplacedList.length === 0 ? (
-          <div className="p-8 text-center border border-dashed border-white/[0.06] rounded-xl bg-[#05070B] space-y-1">
-            <CheckCircle2 className="w-7 h-7 text-[#32D583] mx-auto mb-1 opacity-80" />
+          <div className="p-6 text-center border border-dashed border-white/[0.06] rounded-xl bg-[#05070B] space-y-1">
+            <CheckCircle2 className="w-6 h-6 text-[#32D583] mx-auto mb-1 opacity-80" />
             <p className="text-xs font-bold text-white">All direct referrals are placed</p>
             <p className="text-[11px] text-[#98A2B3]">
-              When new members register with your referral code, they will appear here awaiting team placement.
+              When new members register with your referral link, they appear here automatically, or you can place them above using their Public ID / Email or by clicking any &ldquo;+ Place Member&rdquo; slot in the tree below.
             </p>
           </div>
         ) : (
@@ -658,7 +730,7 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
           <div className="flex items-center gap-3">
             <div className="flex items-center bg-[#05070B] border border-white/[0.08] rounded-xl p-1">
               <span className="text-[11px] text-[#98A2B3] px-2 font-mono">Depth:</span>
-              {[2, 3, 4, 5].map((d) => (
+              {[3, 5, 8, 10].map((d) => (
                 <button
                   key={d}
                   onClick={() => setDepth(d)}
@@ -689,6 +761,9 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
                 isRoot={true}
                 rootVolume={volumeSummary}
                 onInspect={(node) => setInspectNode(node)}
+                onSelectEmptySlot={(parentPublicId, slotSide) =>
+                  handleOpenManualPlacement(slotSide, parentPublicId)
+                }
               />
             </div>
           ) : (
@@ -717,19 +792,104 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
               </div>
               <div>
                 <h3 className="text-base font-bold text-white">Confirm Network Placement</h3>
-                <p className="text-xs text-[#98A2B3]">Review placement details</p>
+                <p className="text-xs text-[#98A2B3]">
+                  Place direct referral into your binary team
+                </p>
+              </div>
+            </div>
+
+            {/* Member Selector / Input if multiple unplaced or manual slot click */}
+            <div className="space-y-3">
+              {unplacedList.length > 0 && (
+                <div>
+                  <label className="text-[11px] font-mono text-[#98A2B3] block mb-1">
+                    Select Unplaced Direct Referral:
+                  </label>
+                  <select
+                    value={placingMember.member.publicId}
+                    onChange={(e) => {
+                      const found = unplacedList.find((u) => u.publicId === e.target.value);
+                      if (found) {
+                        setPlacingMember({
+                          ...placingMember,
+                          member: found,
+                        });
+                      }
+                    }}
+                    className="w-full bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2.5 text-xs font-mono text-white outline-none cursor-pointer"
+                  >
+                    {unplacedList.map((u) => (
+                      <option key={u.publicId} value={u.publicId}>
+                        {u.displayName} ({u.publicId})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div>
+                <label className="text-[11px] font-mono text-[#98A2B3] block mb-1">
+                  Member Public ID or Email:
+                </label>
+                <input
+                  type="text"
+                  value={placingMember.member.publicId}
+                  onChange={(e) =>
+                    setPlacingMember({
+                      ...placingMember,
+                      member: {
+                        ...placingMember.member,
+                        publicId: e.target.value,
+                        displayName: e.target.value || 'Direct Referral',
+                      },
+                    })
+                  }
+                  placeholder="e.g. PHX-100809 or user@gmail.com"
+                  className="w-full bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2 text-xs font-mono text-white outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPlacingMember({ ...placingMember, side: 'LEFT' })}
+                  className={`py-2 px-3 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                    placingMember.side === 'LEFT'
+                      ? 'bg-[#00CFFF]/20 border-[#00CFFF] text-[#00CFFF]'
+                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3]'
+                  }`}
+                >
+                  LEFT TEAM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPlacingMember({ ...placingMember, side: 'RIGHT' })}
+                  className={`py-2 px-3 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                    placingMember.side === 'RIGHT'
+                      ? 'bg-[#32D583]/20 border-[#32D583] text-[#32D583]'
+                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3]'
+                  }`}
+                >
+                  RIGHT TEAM
+                </button>
               </div>
             </div>
 
             <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 text-xs font-mono">
               <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Member:</span>
-                <span className="text-white font-semibold">{placingMember.member.displayName}</span>
+                <span className="text-[#98A2B3]">Member ID:</span>
+                <span className="text-[#00CFFF] font-bold">
+                  {placingMember.member.publicId || '—'}
+                </span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Public ID:</span>
-                <span className="text-[#00CFFF] font-bold">{placingMember.member.publicId}</span>
-              </div>
+              {placingMember.targetParentPublicId && (
+                <div className="flex justify-between">
+                  <span className="text-[#98A2B3]">Under Parent Node:</span>
+                  <span className="text-white font-bold">
+                    {placingMember.targetParentPublicId}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between">
                 <span className="text-[#98A2B3]">Target Leg:</span>
                 <span
@@ -747,7 +907,7 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
             <div className="p-3.5 rounded-xl bg-[#F59E0B]/10 border border-[#F59E0B]/20 text-[#F59E0B] text-xs flex items-start gap-2.5">
               <Info className="w-4 h-4 shrink-0 mt-0.5" />
               <p className="leading-relaxed">
-                <strong>Placement Notice:</strong> Once placed, this member is permanently assigned to the selected team leg.
+                <strong>Placement Notice:</strong> Once placed, this member and any active Genesis Node volume they hold will be attributed to your selected binary leg.
               </p>
             </div>
 
@@ -824,6 +984,41 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
               </div>
             </div>
 
+            {/* Quick Place Under This Node if Left or Right slot is open */}
+            {(!inspectNode.left || !inspectNode.right) && (
+              <div className="pt-2 border-t border-white/[0.06] space-y-2">
+                <div className="text-[11px] font-mono text-[#98A2B3]">
+                  Place a direct referral directly under {inspectNode.user.publicId}:
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={Boolean(inspectNode.left)}
+                    onClick={() => {
+                      const parentPubId = inspectNode.user.publicId;
+                      setInspectNode(null);
+                      handleOpenManualPlacement('LEFT', parentPubId);
+                    }}
+                    className="py-2 px-2.5 rounded-xl bg-[#00CFFF]/15 hover:bg-[#00CFFF]/25 disabled:opacity-30 text-[#00CFFF] border border-[#00CFFF]/30 text-[11px] font-mono font-bold cursor-pointer"
+                  >
+                    + Place LEFT
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(inspectNode.right)}
+                    onClick={() => {
+                      const parentPubId = inspectNode.user.publicId;
+                      setInspectNode(null);
+                      handleOpenManualPlacement('RIGHT', parentPubId);
+                    }}
+                    className="py-2 px-2.5 rounded-xl bg-[#32D583]/15 hover:bg-[#32D583]/25 disabled:opacity-30 text-[#32D583] border border-[#32D583]/30 text-[11px] font-mono font-bold cursor-pointer"
+                  >
+                    + Place RIGHT
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setInspectNode(null)}
@@ -839,26 +1034,54 @@ export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
 };
 
 /**
- * Recursive binary gene tree visualizer component with interactive inspect
+ * Recursive binary gene tree visualizer component with interactive inspect & clickable Empty Slots
  */
 interface NodeRendererProps {
   node: TreeNode | null;
+  parentPublicId?: string;
   isRoot?: boolean;
   side?: 'LEFT' | 'RIGHT';
   rootVolume?: VolumeSummary | null;
   onInspect?: (node: TreeNode) => void;
+  onSelectEmptySlot?: (parentPublicId: string, side: 'LEFT' | 'RIGHT') => void;
 }
 
-const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({ node, isRoot = false, side, rootVolume, onInspect }) => {
+const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({
+  node,
+  parentPublicId,
+  isRoot = false,
+  side,
+  rootVolume,
+  onInspect,
+  onSelectEmptySlot,
+}) => {
   if (!node) {
     return (
       <div className="flex flex-col items-center">
-        <div className="w-28 sm:w-36 p-3 rounded-xl border border-dashed border-white/[0.1] bg-[#05070B] text-center opacity-60">
-          <div className="text-[9px] font-mono uppercase tracking-wider text-[#667085] mb-0.5">
-            {side || 'Position'}
+        <button
+          type="button"
+          onClick={() => {
+            if (parentPublicId && side && onSelectEmptySlot) {
+              onSelectEmptySlot(parentPublicId, side);
+            }
+          }}
+          className={`w-28 sm:w-36 p-3 rounded-xl border border-dashed transition-all text-center cursor-pointer group ${
+            side === 'LEFT'
+              ? 'border-[#00CFFF]/30 hover:border-[#00CFFF] bg-[#00CFFF]/[0.03] hover:bg-[#00CFFF]/10'
+              : 'border-[#32D583]/30 hover:border-[#32D583] bg-[#32D583]/[0.03] hover:bg-[#32D583]/10'
+          }`}
+        >
+          <div
+            className={`text-[9px] font-mono uppercase tracking-wider font-bold mb-0.5 ${
+              side === 'LEFT' ? 'text-[#00CFFF]' : 'text-[#32D583]'
+            }`}
+          >
+            {side || 'Position'} Slot
           </div>
-          <div className="text-[11px] font-mono text-[#98A2B3]">Empty Slot</div>
-        </div>
+          <div className="text-[11px] font-mono text-white/80 group-hover:text-white font-semibold">
+            + Place Member
+          </div>
+        </button>
       </div>
     );
   }
@@ -898,7 +1121,9 @@ const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({ node, isRoot = fa
           )}
         </div>
 
-        <div className="text-xs font-bold text-white truncate group-hover:text-[#00CFFF] transition-colors">{node.user.displayName}</div>
+        <div className="text-xs font-bold text-white truncate group-hover:text-[#00CFFF] transition-colors">
+          {node.user.displayName}
+        </div>
         <div className="text-[10px] font-mono text-[#00CFFF] truncate mt-0.5">
           {node.user.publicId}
         </div>
@@ -928,13 +1153,27 @@ const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({ node, isRoot = fa
           {/* Left Branch */}
           <div className="flex flex-col items-center">
             <div className="w-0.5 h-4 bg-[#00CFFF]/50"></div>
-            <BinaryTreeNodeRenderer node={node.left} side="LEFT" rootVolume={rootVolume} onInspect={onInspect} />
+            <BinaryTreeNodeRenderer
+              node={node.left}
+              parentPublicId={node.user.publicId}
+              side="LEFT"
+              rootVolume={rootVolume}
+              onInspect={onInspect}
+              onSelectEmptySlot={onSelectEmptySlot}
+            />
           </div>
 
           {/* Right Branch */}
           <div className="flex flex-col items-center">
             <div className="w-0.5 h-4 bg-[#32D583]/50"></div>
-            <BinaryTreeNodeRenderer node={node.right} side="RIGHT" rootVolume={rootVolume} onInspect={onInspect} />
+            <BinaryTreeNodeRenderer
+              node={node.right}
+              parentPublicId={node.user.publicId}
+              side="RIGHT"
+              rootVolume={rootVolume}
+              onInspect={onInspect}
+              onSelectEmptySlot={onSelectEmptySlot}
+            />
           </div>
         </div>
       </div>

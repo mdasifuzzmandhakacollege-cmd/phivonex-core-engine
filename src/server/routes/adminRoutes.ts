@@ -50,7 +50,10 @@ import {
   adminRepairAffiliateTree,
   getNodeGrowthAndVolumeAnalytics,
 } from '../services/affiliateTreeService';
-import { seedGenealogyNetworkTree } from '../services/genealogySeedService';
+import {
+  seedGenealogyNetworkTree,
+  getAffiliateMasterMapStatus,
+} from '../services/genealogySeedService';
 
 export const adminRouter = Router();
 
@@ -1143,6 +1146,70 @@ adminRouter.post('/network/tree/repair', async (req: AuthRequest, res: Response)
 });
 
 /**
+ * GET /api/admin/network/master-map
+ * Returns the 12-account Master Affiliate & Node Activation Map enriched with live PostgreSQL state and binary tree.
+ */
+adminRouter.get('/network/master-map', async (_req: AuthRequest, res: Response) => {
+  try {
+    const status = await getAffiliateMasterMapStatus();
+    return res.status(200).json({
+      success: true,
+      ...status,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching master affiliate map:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to load Master Affiliate Map status.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/network/master-map/save
+ * Saves and activates the complete Affiliate Master Map in 1 click:
+ * - Syncs all users to PostgreSQL, Firebase Auth & Cloud Firestore
+ * - Links all direct sponsors & binary tree placements (Left / Right)
+ * - Activates $1,000 Genesis Nodes, deducts node purchase, and propagates binary volume
+ * - Credits $25 Spot Referral Commissions to each member's wallet
+ */
+adminRouter.post('/network/master-map/save', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { specs } = req.body || {};
+
+    const seedResult = await seedGenealogyNetworkTree(
+      Array.isArray(specs) && specs.length > 0 ? specs : undefined
+    );
+    const liveStatus = await getAffiliateMasterMapStatus();
+
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: 'ADMIN_SAVE_MASTER_AFFILIATE_MAP',
+      targetType: 'SYSTEM_NETWORK_TREE',
+      targetId: 'AFFILIATE_MASTER_MAP',
+      details: `Admin ${admin.public_id} saved and activated the Master Affiliate Map (${seedResult.count} accounts, active nodes, $25 spot commissions, and binary tree synced to PostgreSQL & Firestore).`,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Master Affiliate Map saved & activated! ${seedResult.count} accounts, active nodes, $25 spot commissions, and referral/binary trees are 100% live.`,
+      seededAccounts: seedResult.seededAccounts,
+      count: seedResult.count,
+      ...liveStatus,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error saving & activating master affiliate map:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: err.message || 'Failed to save and activate Master Affiliate Map.',
+    });
+  }
+});
+
+/**
  * POST /api/admin/network/seed-genealogy
  * Admin endpoint to trigger complete genealogy tree seeding & sync to PostgreSQL, Firebase Auth & Firestore.
  */
@@ -1150,6 +1217,7 @@ adminRouter.post('/network/seed-genealogy', async (req: AuthRequest, res: Respon
   try {
     const admin = req.user!;
     const result = await seedGenealogyNetworkTree();
+    const liveStatus = await getAffiliateMasterMapStatus();
 
     await logAdminAction({
       adminUserId: admin.id,
@@ -1161,7 +1229,10 @@ adminRouter.post('/network/seed-genealogy', async (req: AuthRequest, res: Respon
       ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
     });
 
-    return res.status(200).json(result);
+    return res.status(200).json({
+      ...result,
+      ...liveStatus,
+    });
   } catch (err: any) {
     console.error('[Admin API] Error seeding genealogy tree:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to seed genealogy tree.' });

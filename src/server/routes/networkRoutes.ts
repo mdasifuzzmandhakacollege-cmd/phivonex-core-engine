@@ -80,7 +80,7 @@ router.get('/tree', requireAuth, async (req: AuthRequest, res: Response): Promis
   try {
     const user = req.user!;
     const rawDepth = parseInt(req.query.depth as string, 10);
-    const depth = isNaN(rawDepth) ? 3 : rawDepth;
+    const depth = isNaN(rawDepth) ? 8 : rawDepth;
 
     const tree = await getNetworkTree(user.id, depth);
     res.status(200).json({ tree });

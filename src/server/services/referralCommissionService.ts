@@ -401,6 +401,7 @@ export async function getUserCommissions(sponsorUserId: string): Promise<UserCom
   const db = await getDb();
 
   const result = await db.query<{
+    id: string;
     public_commission_id: string;
     referred_public_id: string;
     public_node_id: string;
@@ -411,6 +412,7 @@ export async function getUserCommissions(sponsorUserId: string): Promise<UserCom
   }>(
     `
     SELECT 
+      rc.id,
       rc.public_commission_id,
       u.public_id AS referred_public_id,
       n.public_node_id,
@@ -429,8 +431,10 @@ export async function getUserCommissions(sponsorUserId: string): Promise<UserCom
 
   let totalEarnedUsd = 0;
   const commissions: SafeReferralCommission[] = [];
+  const seenSourceIds = new Set<string>();
 
   for (const row of result.rows) {
+    seenSourceIds.add(row.id);
     const amount = Number(row.amount_usd);
     if (row.status === 'EARNED') {
       totalEarnedUsd += amount;
@@ -446,8 +450,70 @@ export async function getUserCommissions(sponsorUserId: string): Promise<UserCom
     });
   }
 
+  // Also include Master Affiliate Map Spot Commissions posted directly to financial_ledger_entries
+  const spotLedgerRes = await db.query<{
+    source_id: string;
+    source_ref: string;
+    amount: string | number;
+    status: string;
+    created_at: Date;
+  }>(
+    `
+    SELECT source_id::text AS source_id, source_ref, amount, status, created_at
+    FROM financial_ledger_entries
+    WHERE user_id = $1
+      AND source_type = 'REFERRAL_COMMISSION'
+      AND entry_type = 'CREDIT'
+      AND source_ref LIKE 'PHX-COM-SPOT%'
+    ORDER BY created_at DESC
+    `,
+    [sponsorUserId]
+  );
+
+  if (spotLedgerRes.rows.length > 0) {
+    // Find a direct referral or user's active node for display metadata
+    const refChildRes = await db.query<{ public_id: string }>(
+      `
+      SELECT u.public_id
+      FROM user_referrals ur
+      JOIN users u ON ur.user_id = u.id
+      WHERE ur.sponsor_user_id = $1
+      ORDER BY ur.created_at ASC
+      LIMIT 1
+      `,
+      [sponsorUserId]
+    );
+    const ownNodeRes = await db.query<{ public_node_id: string }>(
+      `SELECT public_node_id FROM nodes WHERE owner_user_id = $1 LIMIT 1`,
+      [sponsorUserId]
+    );
+
+    const refPublicId = refChildRes.rows[0]?.public_id || 'PHX-NETWORK';
+    const nodePublicId = ownNodeRes.rows[0]?.public_node_id || 'PHX-NODE-GENESIS';
+
+    for (const spot of spotLedgerRes.rows) {
+      if (seenSourceIds.has(spot.source_id)) continue;
+      const amt = Number(spot.amount);
+      if (amt <= 0) continue;
+      const isEarned = spot.status === 'SETTLED';
+      if (isEarned) {
+        totalEarnedUsd += amt;
+      }
+      commissions.push({
+        publicCommissionId: spot.source_ref || 'PHX-SPOT-025',
+        referredUserPublicId: refPublicId,
+        nodePublicId,
+        amountUsd: amt,
+        status: isEarned ? 'EARNED' : 'REVERSED',
+        earnedAt: new Date(spot.created_at).toISOString(),
+        reversedAt: isEarned ? null : new Date().toISOString(),
+      });
+    }
+  }
+
   return {
     totalEarnedUsd,
     commissions,
   };
 }
+

@@ -851,36 +851,46 @@ import { initializeApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { getMessaging } from "firebase-admin/messaging";
+function shouldTripCircuit(err) {
+  const msg = String(err?.message || err || "");
+  return err?.code === 7 || err?.code === 16 || msg.includes("PERMISSION_DENIED") || msg.includes("Could not load the default credentials") || msg.includes("insufficient authentication scopes");
+}
 function createSafeDocProxy(docPath) {
   return {
     set: async (data, options) => {
-      if (!isTestEnvironment) {
+      if (!firestoreCircuitBroken) {
         try {
           return await rawFirestore.doc(docPath).set(data, options);
         } catch (err) {
-          console.warn(`[Firestore Proxy Notice] doc.set failed for ${docPath}:`, err);
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
           return { id: docPath };
         }
       }
       return { id: docPath };
     },
     get: async () => {
-      if (!isTestEnvironment) {
+      if (!firestoreCircuitBroken) {
         try {
           return await rawFirestore.doc(docPath).get();
         } catch (err) {
-          console.warn(`[Firestore Proxy Notice] doc.get failed for ${docPath}:`, err);
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
           return { exists: false, data: () => null, id: docPath };
         }
       }
       return { exists: false, data: () => null, id: docPath };
     },
     delete: async () => {
-      if (!isTestEnvironment) {
+      if (!firestoreCircuitBroken) {
         try {
           return await rawFirestore.doc(docPath).delete();
         } catch (err) {
-          console.warn(`[Firestore Proxy Notice] doc.delete failed for ${docPath}:`, err);
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
           return {};
         }
       }
@@ -892,11 +902,13 @@ function createSafeCollectionProxy(colName) {
   return {
     doc: (docId) => createSafeDocProxy(`${colName}/${docId || "auto_id"}`),
     get: async () => {
-      if (!isTestEnvironment) {
+      if (!firestoreCircuitBroken) {
         try {
           return await rawFirestore.collection(colName).get();
         } catch (err) {
-          console.warn(`[Firestore Proxy Notice] collection.get failed for ${colName}:`, err);
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
           return { empty: true, docs: [], size: 0 };
         }
       }
@@ -904,11 +916,13 @@ function createSafeCollectionProxy(colName) {
     }
   };
 }
-var isTestEnvironment, adminApp, rawAuth, rawMessaging, rawFirestore, adminFirestore, adminAuth, adminMessaging;
+var isTestEnvironment, firestoreCircuitBroken, authCircuitBroken, adminApp, rawAuth, rawMessaging, rawFirestore, adminFirestore, adminAuth, adminMessaging;
 var init_firebase_admin = __esm({
   "src/lib/firebase-admin.ts"() {
     init_firebase_applet_config();
     isTestEnvironment = process.env.NODE_ENV === "test" || Boolean(process.env.PGLITE_DATA_DIR) || Boolean(process.env.CI) || process.env.NO_FIRESTORE_SYNC === "1";
+    firestoreCircuitBroken = isTestEnvironment;
+    authCircuitBroken = isTestEnvironment;
     if (!getApps().length) {
       adminApp = initializeApp({
         projectId: firebase_applet_config_default.projectId
@@ -928,42 +942,52 @@ var init_firebase_admin = __esm({
     };
     adminAuth = {
       createUser: async (properties) => {
-        if (!isTestEnvironment) {
+        if (!authCircuitBroken) {
           try {
             return await rawAuth.createUser(properties);
           } catch (err) {
-            console.warn("[Firebase Auth Notice] createUser error:", err);
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
             return { uid: properties.uid || "mock-uid" };
           }
         }
         return { uid: properties.uid || "mock-uid" };
       },
       updateUser: async (uid, properties) => {
-        if (!isTestEnvironment) {
+        if (!authCircuitBroken) {
           try {
             return await rawAuth.updateUser(uid, properties);
           } catch (err) {
-            console.warn("[Firebase Auth Notice] updateUser error:", err);
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
             return { uid };
           }
         }
         return { uid };
       },
       getUser: async (uid) => {
-        if (!isTestEnvironment) {
+        if (!authCircuitBroken) {
           try {
             return await rawAuth.getUser(uid);
           } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
             return null;
           }
         }
         return null;
       },
       getUserByEmail: async (email) => {
-        if (!isTestEnvironment) {
+        if (!authCircuitBroken) {
           try {
             return await rawAuth.getUserByEmail(email);
           } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
             return null;
           }
         }
@@ -7690,6 +7714,7 @@ async function getUserCommissions(sponsorUserId) {
   const result = await db.query(
     `
     SELECT 
+      rc.id,
       rc.public_commission_id,
       u.public_id AS referred_public_id,
       n.public_node_id,
@@ -7707,7 +7732,9 @@ async function getUserCommissions(sponsorUserId) {
   );
   let totalEarnedUsd = 0;
   const commissions = [];
+  const seenSourceIds = /* @__PURE__ */ new Set();
   for (const row of result.rows) {
+    seenSourceIds.add(row.id);
     const amount = Number(row.amount_usd);
     if (row.status === "EARNED") {
       totalEarnedUsd += amount;
@@ -7721,6 +7748,55 @@ async function getUserCommissions(sponsorUserId) {
       earnedAt: row.earned_at.toISOString(),
       reversedAt: row.reversed_at ? row.reversed_at.toISOString() : null
     });
+  }
+  const spotLedgerRes = await db.query(
+    `
+    SELECT source_id::text AS source_id, source_ref, amount, status, created_at
+    FROM financial_ledger_entries
+    WHERE user_id = $1
+      AND source_type = 'REFERRAL_COMMISSION'
+      AND entry_type = 'CREDIT'
+      AND source_ref LIKE 'PHX-COM-SPOT%'
+    ORDER BY created_at DESC
+    `,
+    [sponsorUserId]
+  );
+  if (spotLedgerRes.rows.length > 0) {
+    const refChildRes = await db.query(
+      `
+      SELECT u.public_id
+      FROM user_referrals ur
+      JOIN users u ON ur.user_id = u.id
+      WHERE ur.sponsor_user_id = $1
+      ORDER BY ur.created_at ASC
+      LIMIT 1
+      `,
+      [sponsorUserId]
+    );
+    const ownNodeRes = await db.query(
+      `SELECT public_node_id FROM nodes WHERE owner_user_id = $1 LIMIT 1`,
+      [sponsorUserId]
+    );
+    const refPublicId = refChildRes.rows[0]?.public_id || "PHX-NETWORK";
+    const nodePublicId = ownNodeRes.rows[0]?.public_node_id || "PHX-NODE-GENESIS";
+    for (const spot of spotLedgerRes.rows) {
+      if (seenSourceIds.has(spot.source_id)) continue;
+      const amt = Number(spot.amount);
+      if (amt <= 0) continue;
+      const isEarned = spot.status === "SETTLED";
+      if (isEarned) {
+        totalEarnedUsd += amt;
+      }
+      commissions.push({
+        publicCommissionId: spot.source_ref || "PHX-SPOT-025",
+        referredUserPublicId: refPublicId,
+        nodePublicId,
+        amountUsd: amt,
+        status: isEarned ? "EARNED" : "REVERSED",
+        earnedAt: new Date(spot.created_at).toISOString(),
+        reversedAt: isEarned ? null : (/* @__PURE__ */ new Date()).toISOString()
+      });
+    }
   }
   return {
     totalEarnedUsd,
@@ -9492,6 +9568,421 @@ var init_nodeOrderService = __esm({
     init_publicNetworkService();
     init_economicService();
     init_notificationService();
+  }
+});
+
+// src/server/services/binaryPlacementService.ts
+import { v4 as uuidv418 } from "uuid";
+async function validateNoCycle(db, memberId, targetParentId) {
+  if (memberId === targetParentId) {
+    const error = new Error("Self-parenting is not permitted.");
+    error.code = "SELF_PARENT_FORBIDDEN";
+    error.statusCode = 400;
+    throw error;
+  }
+  let currentAncestor = targetParentId;
+  const seen = /* @__PURE__ */ new Set();
+  while (currentAncestor) {
+    if (currentAncestor === memberId) {
+      const error = new Error("Cycle detected: Member cannot be placed under their own descendant.");
+      error.code = "CYCLE_DETECTED";
+      error.statusCode = 400;
+      throw error;
+    }
+    if (seen.has(currentAncestor)) {
+      break;
+    }
+    seen.add(currentAncestor);
+    const ancestorRes = await db.query(
+      `SELECT parent_user_id FROM binary_placements WHERE user_id = $1`,
+      [currentAncestor]
+    );
+    currentAncestor = ancestorRes.rows[0]?.parent_user_id || null;
+  }
+}
+async function findNextAvailableSlot(db, sponsorUserId, preferredSide) {
+  const directCheck = await db.query(
+    `
+    SELECT user_id 
+    FROM binary_placements 
+    WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'
+    `,
+    [sponsorUserId, preferredSide]
+  );
+  if (directCheck.rows.length === 0) {
+    return {
+      parentId: sponsorUserId,
+      side: preferredSide
+    };
+  }
+  const legRootUserId = directCheck.rows[0].user_id;
+  const queue = [legRootUserId];
+  const visited = /* @__PURE__ */ new Set([legRootUserId]);
+  while (queue.length > 0) {
+    const currentUserId = queue.shift();
+    const childrenRes = await db.query(
+      `
+      SELECT side, user_id 
+      FROM binary_placements 
+      WHERE parent_user_id = $1 AND status = 'PLACED'
+      ORDER BY CASE WHEN side = 'LEFT' THEN 1 ELSE 2 END
+      `,
+      [currentUserId]
+    );
+    const leftChild = childrenRes.rows.find((r) => r.side === "LEFT");
+    const rightChild = childrenRes.rows.find((r) => r.side === "RIGHT");
+    if (!leftChild) {
+      return {
+        parentId: currentUserId,
+        side: "LEFT"
+      };
+    }
+    if (!rightChild) {
+      return {
+        parentId: currentUserId,
+        side: "RIGHT"
+      };
+    }
+    if (!visited.has(leftChild.user_id)) {
+      visited.add(leftChild.user_id);
+      queue.push(leftChild.user_id);
+    }
+    if (!visited.has(rightChild.user_id)) {
+      visited.add(rightChild.user_id);
+      queue.push(rightChild.user_id);
+    }
+  }
+  throw new Error("Could not find available placement slot in leg.");
+}
+async function placeMember(sponsorUserId, memberPublicId, preferredSide, targetParentPublicId) {
+  const cleanIdentifier = (memberPublicId || "").trim();
+  const side = (preferredSide || "").trim().toUpperCase();
+  if (side !== "LEFT" && side !== "RIGHT") {
+    const error = new Error("Preferred side must be LEFT or RIGHT.");
+    error.code = "INVALID_SIDE";
+    error.statusCode = 400;
+    throw error;
+  }
+  const db = await getDb();
+  const memberRes = await db.query(
+    `
+    SELECT u.id, u.public_id, u.full_name, ur.sponsor_user_id
+    FROM users u
+    LEFT JOIN user_referrals ur ON u.id = ur.user_id
+    WHERE UPPER(TRIM(u.public_id)) = UPPER($1)
+       OR LOWER(TRIM(u.email)) = LOWER($1)
+       OR UPPER(TRIM(ur.referral_code)) = UPPER($1)
+    LIMIT 1
+    `,
+    [cleanIdentifier]
+  );
+  if (memberRes.rows.length === 0) {
+    const error = new Error(`Member '${cleanIdentifier}' not found.`);
+    error.code = "MEMBER_NOT_FOUND";
+    error.statusCode = 404;
+    throw error;
+  }
+  const member = memberRes.rows[0];
+  if (member.sponsor_user_id !== sponsorUserId) {
+    const sponsorIdent = await db.query(
+      `SELECT r.referral_code, u.public_id, u.email
+       FROM users u
+       LEFT JOIN user_referrals r ON u.id = r.user_id
+       WHERE u.id = $1`,
+      [sponsorUserId]
+    );
+    const s = sponsorIdent.rows[0];
+    const memberPending = await db.query(
+      `SELECT pending_referral_code FROM users WHERE id = $1`,
+      [member.id]
+    );
+    const pendCode = (memberPending.rows[0]?.pending_referral_code || "").trim().toUpperCase();
+    if (s && pendCode && (pendCode === s.referral_code?.toUpperCase() || pendCode === s.public_id?.toUpperCase() || pendCode.toLowerCase() === s.email?.toLowerCase())) {
+      await db.query(
+        `UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2`,
+        [sponsorUserId, member.id]
+      );
+      member.sponsor_user_id = sponsorUserId;
+    } else {
+      const error = new Error("You can only place members who you directly sponsored.");
+      error.code = "NOT_DIRECT_SPONSOR";
+      error.statusCode = 403;
+      throw error;
+    }
+  }
+  await db.query(
+    `
+    INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+    VALUES ($1, NULL, NULL, 'UNPLACED', NULL, CURRENT_TIMESTAMP)
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [member.id]
+  );
+  const statusRes = await db.query(
+    `SELECT status, parent_user_id FROM binary_placements WHERE user_id = $1`,
+    [member.id]
+  );
+  if (statusRes.rows[0]?.status === "PLACED" && statusRes.rows[0]?.parent_user_id !== null) {
+    const error = new Error("Member is already placed in the binary network and cannot be moved.");
+    error.code = "ALREADY_PLACED";
+    error.statusCode = 409;
+    throw error;
+  }
+  let finalParentId = "";
+  let finalSide = side;
+  if (targetParentPublicId) {
+    const targetParentPublicIdClean = targetParentPublicId.trim().toUpperCase();
+    const parentRes2 = await db.query(
+      `SELECT id FROM users WHERE public_id = $1`,
+      [targetParentPublicIdClean]
+    );
+    if (parentRes2.rows.length === 0) {
+      throw new Error("Invalid target parent.");
+    }
+    const targetParentId = parentRes2.rows[0].id;
+    finalParentId = targetParentId;
+    const slotCheck = await db.query(
+      `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
+      [finalParentId, side]
+    );
+    if (slotCheck.rows.length > 0) {
+      throw new Error(`The selected position (${side}) under ${targetParentPublicIdClean} is already occupied.`);
+    }
+  } else {
+    const slot = await findNextAvailableSlot(db, sponsorUserId, side);
+    finalParentId = slot.parentId;
+    finalSide = slot.side;
+  }
+  await validateNoCycle(db, member.id, finalParentId);
+  const updateRes = await db.query(
+    `
+    UPDATE binary_placements
+    SET 
+      parent_user_id = $1,
+      side = $2,
+      status = 'PLACED',
+      placed_at = CURRENT_TIMESTAMP
+    WHERE user_id = $3 AND (status = 'UNPLACED' OR parent_user_id IS NULL)
+    RETURNING user_id, parent_user_id, side, status, placed_at
+    `,
+    [finalParentId, finalSide, member.id]
+  );
+  if (updateRes.rows.length === 0) {
+    throw new Error("Failed to update binary placement status.");
+  }
+  const placedAtDate = updateRes.rows[0].placed_at;
+  const parentRes = await db.query(
+    `SELECT public_id FROM users WHERE id = $1`,
+    [finalParentId]
+  );
+  const parentPublicId = parentRes.rows[0]?.public_id || "PHX-UNKNOWN";
+  try {
+    await db.query(
+      `
+      INSERT INTO security_events (id, user_id, event_type, description, created_at)
+      VALUES ($1, $2, 'BINARY_MEMBER_PLACED', $3, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv418(),
+        sponsorUserId,
+        `Placed member ${member.public_id} into ${finalSide} leg under parent ${parentPublicId}.`
+      ]
+    );
+  } catch (secErr) {
+    console.warn("[SecurityEvent] Could not log binary placement event:", secErr);
+  }
+  try {
+    await backfillNodeSalesVolumeForPlacedMember(db, member.id);
+  } catch (backfillErr) {
+    console.warn("[BinaryVolume] Error backfilling node sales volume for newly placed member:", backfillErr);
+  }
+  return {
+    memberPublicId: member.public_id,
+    parentPublicId,
+    side: finalSide,
+    status: "PLACED",
+    placedAt: placedAtDate ? placedAtDate.toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
+async function getUnplacedDirectReferrals(sponsorUserId) {
+  const db = await getDb();
+  const sponsorIdent = await db.query(
+    `SELECT r.referral_code, u.public_id, u.email
+     FROM users u
+     LEFT JOIN user_referrals r ON u.id = r.user_id
+     WHERE u.id = $1`,
+    [sponsorUserId]
+  );
+  if (sponsorIdent.rows.length > 0) {
+    const s = sponsorIdent.rows[0];
+    await db.query(
+      `
+      UPDATE user_referrals ur
+      SET sponsor_user_id = $1
+      FROM users u
+      WHERE ur.user_id = u.id
+        AND ur.sponsor_user_id IS NULL
+        AND u.id != $1
+        AND COALESCE(TRIM(u.pending_referral_code), '') != ''
+        AND (
+          UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
+          OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
+          OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
+        )
+      `,
+      [sponsorUserId, s.referral_code || "__NONE__", s.public_id || "__NONE__", s.email || "__NONE__"]
+    );
+  }
+  await db.query(
+    `
+    INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
+    SELECT ur.user_id, NULL, NULL, 'UNPLACED', NULL, ur.created_at
+    FROM user_referrals ur
+    LEFT JOIN binary_placements bp ON ur.user_id = bp.user_id
+    WHERE ur.sponsor_user_id = $1 AND bp.user_id IS NULL
+    ON CONFLICT (user_id) DO NOTHING
+    `,
+    [sponsorUserId]
+  );
+  const res = await db.query(
+    `
+    SELECT u.public_id, u.full_name, ur.created_at, bp.status
+    FROM user_referrals ur
+    JOIN users u ON ur.user_id = u.id
+    JOIN binary_placements bp ON u.id = bp.user_id
+    WHERE ur.sponsor_user_id = $1 AND (bp.status = 'UNPLACED' OR bp.parent_user_id IS NULL)
+    ORDER BY ur.created_at DESC
+    `,
+    [sponsorUserId]
+  );
+  return res.rows.map((row) => ({
+    publicId: row.public_id,
+    displayName: formatSafeDisplayName(row.full_name),
+    joinedAt: row.created_at.toISOString(),
+    placementStatus: "UNPLACED"
+  }));
+}
+async function getNetworkTree(rootUserId, requestedDepth = 8) {
+  const depth = Math.max(1, Math.min(12, requestedDepth || 8));
+  const db = await getDb();
+  const rootUserRes = await db.query(
+    `SELECT id, public_id, full_name FROM users WHERE id = $1`,
+    [rootUserId]
+  );
+  if (rootUserRes.rows.length === 0) {
+    return null;
+  }
+  const rootUser = rootUserRes.rows[0];
+  async function buildSubtree(currentUserId, currentPublicId, currentFullName, currentSide, currentPlacedAt, currentDepth) {
+    const node = {
+      user: {
+        publicId: currentPublicId,
+        displayName: formatSafeDisplayName(currentFullName)
+      },
+      side: currentSide,
+      placedAt: currentPlacedAt,
+      left: null,
+      right: null
+    };
+    if (currentDepth >= depth) {
+      return node;
+    }
+    const childrenRes = await db.query(
+      `
+      SELECT bp.user_id, u.public_id, u.full_name, bp.side, bp.placed_at
+      FROM binary_placements bp
+      JOIN users u ON bp.user_id = u.id
+      WHERE bp.parent_user_id = $1 AND bp.status = 'PLACED'
+      ORDER BY CASE WHEN bp.side = 'LEFT' THEN 1 ELSE 2 END
+      `,
+      [currentUserId]
+    );
+    const leftChildRow = childrenRes.rows.find((r) => r.side === "LEFT");
+    const rightChildRow = childrenRes.rows.find((r) => r.side === "RIGHT");
+    if (leftChildRow) {
+      node.left = await buildSubtree(
+        leftChildRow.user_id,
+        leftChildRow.public_id,
+        leftChildRow.full_name,
+        "LEFT",
+        leftChildRow.placed_at ? leftChildRow.placed_at.toISOString() : null,
+        currentDepth + 1
+      );
+    }
+    if (rightChildRow) {
+      node.right = await buildSubtree(
+        rightChildRow.user_id,
+        rightChildRow.public_id,
+        rightChildRow.full_name,
+        "RIGHT",
+        rightChildRow.placed_at ? rightChildRow.placed_at.toISOString() : null,
+        currentDepth + 1
+      );
+    }
+    return node;
+  }
+  return buildSubtree(rootUser.id, rootUser.public_id, rootUser.full_name, null, null, 1);
+}
+async function countSubtreeMembers(db, rootParentId, side) {
+  const childRes = await db.query(
+    `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
+    [rootParentId, side]
+  );
+  if (childRes.rows.length === 0) {
+    return 0;
+  }
+  let count = 0;
+  const queue = [childRes.rows[0].user_id];
+  const visited = /* @__PURE__ */ new Set([childRes.rows[0].user_id]);
+  while (queue.length > 0) {
+    const curr = queue.shift();
+    count++;
+    const children = await db.query(
+      `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND status = 'PLACED'`,
+      [curr]
+    );
+    for (const child of children.rows) {
+      if (!visited.has(child.user_id)) {
+        visited.add(child.user_id);
+        queue.push(child.user_id);
+      }
+    }
+  }
+  return count;
+}
+async function getNetworkSummary(userId) {
+  const db = await getDb();
+  const directsRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM user_referrals WHERE sponsor_user_id = $1`,
+    [userId]
+  );
+  const directReferrals = parseInt(directsRes.rows[0]?.count || "0", 10);
+  const placedDirectsRes = await db.query(
+    `
+    SELECT COUNT(*)::int AS count 
+    FROM user_referrals ur
+    JOIN binary_placements bp ON ur.user_id = bp.user_id
+    WHERE ur.sponsor_user_id = $1 AND bp.status = 'PLACED'
+    `,
+    [userId]
+  );
+  const placedMembers = parseInt(placedDirectsRes.rows[0]?.count || "0", 10);
+  const unplacedDirectReferrals = Math.max(0, directReferrals - placedMembers);
+  const leftNetworkMembers = await countSubtreeMembers(db, userId, "LEFT");
+  const rightNetworkMembers = await countSubtreeMembers(db, userId, "RIGHT");
+  return {
+    directReferrals,
+    placedMembers,
+    unplacedDirectReferrals,
+    leftNetworkMembers,
+    rightNetworkMembers
+  };
+}
+var init_binaryPlacementService = __esm({
+  "src/server/services/binaryPlacementService.ts"() {
+    init_db();
+    init_idGenerator();
+    init_binaryVolumeService();
   }
 });
 
@@ -11330,380 +11821,855 @@ var init_bscSignerService = __esm({
   }
 });
 
+// src/config/affiliateMasterMap.ts
+var DEFAULT_AFFILIATE_MASTER_MAP;
+var init_affiliateMasterMap = __esm({
+  "src/config/affiliateMasterMap.ts"() {
+    DEFAULT_AFFILIATE_MASTER_MAP = [
+      {
+        levelLabel: "MOTHER",
+        fullName: "Phivonex Root Mother Account",
+        email: "phivonexcore@gmail.com",
+        role: "ADMIN",
+        sponsorEmail: null,
+        binaryParentEmail: null,
+        side: null,
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 0,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L0",
+        fullName: "Md SHAHJALAL",
+        email: "shahjalal639832@gmail.com",
+        role: "ADMIN",
+        sponsorEmail: "phivonexcore@gmail.com",
+        binaryParentEmail: "phivonexcore@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 0,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L1",
+        fullName: "Shahjalal-2",
+        email: "plcshahjalal@gmail.com",
+        role: "USER",
+        sponsorEmail: "shahjalal639832@gmail.com",
+        binaryParentEmail: "shahjalal639832@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L2",
+        fullName: "MD: Ferdusur Rahman",
+        email: "rahmanmdferdaus761@gmail.com",
+        role: "USER",
+        sponsorEmail: "plcshahjalal@gmail.com",
+        binaryParentEmail: "plcshahjalal@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L3",
+        fullName: "Afroza Abdullah",
+        email: "afrozaabdullah01@gmail.com",
+        role: "USER",
+        sponsorEmail: "rahmanmdferdaus761@gmail.com",
+        binaryParentEmail: "rahmanmdferdaus761@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L4-A",
+        fullName: "Sajid Abdullah",
+        email: "sajidabdullahphivonex@gmail.com",
+        role: "USER",
+        sponsorEmail: "afrozaabdullah01@gmail.com",
+        binaryParentEmail: "afrozaabdullah01@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L5-A",
+        fullName: "Selima Akter",
+        email: "salimaakhter49@gmail.com",
+        role: "USER",
+        sponsorEmail: "sajidabdullahphivonex@gmail.com",
+        binaryParentEmail: "sajidabdullahphivonex@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L6-A",
+        fullName: "Rashed",
+        email: "plabonrashed@gmail.com",
+        role: "USER",
+        sponsorEmail: "salimaakhter49@gmail.com",
+        binaryParentEmail: "salimaakhter49@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L7-A",
+        fullName: "Mariya Akter",
+        email: "mariya.rahman067@gmail.com",
+        role: "USER",
+        sponsorEmail: "plabonrashed@gmail.com",
+        binaryParentEmail: "plabonrashed@gmail.com",
+        side: "LEFT",
+        nodeStatus: "PENDING",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L4-B",
+        fullName: "Mehedi Abdullah",
+        email: "mehediabdullahphivonex@gmail.com",
+        role: "USER",
+        sponsorEmail: "afrozaabdullah01@gmail.com",
+        binaryParentEmail: "afrozaabdullah01@gmail.com",
+        side: "RIGHT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L5-B",
+        fullName: "Rony Kamal",
+        email: "ronykamalphivonex@gmail.com",
+        role: "USER",
+        sponsorEmail: "mehediabdullahphivonex@gmail.com",
+        binaryParentEmail: "mehediabdullahphivonex@gmail.com",
+        side: "LEFT",
+        nodeStatus: "PENDING",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L6-B",
+        fullName: "Raju Ahammed",
+        email: "rsfhealthsociety26@gmail.com",
+        role: "USER",
+        sponsorEmail: "ronykamalphivonex@gmail.com",
+        binaryParentEmail: "ronykamalphivonex@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 25,
+        extraWalletBalanceUsd: 0
+      }
+    ];
+  }
+});
+
 // src/server/services/genealogySeedService.ts
 var genealogySeedService_exports = {};
 __export(genealogySeedService_exports, {
-  GENEALOGY_TREE_SPECS: () => GENEALOGY_TREE_SPECS,
+  GENEALOGY_MASTER_TREE: () => GENEALOGY_MASTER_TREE,
+  getAffiliateMasterMapStatus: () => getAffiliateMasterMapStatus,
+  loadSavedMasterMapSpecs: () => loadSavedMasterMapSpecs,
+  saveMasterMapSpecsToFirestore: () => saveMasterMapSpecsToFirestore,
   seedGenealogyNetworkTree: () => seedGenealogyNetworkTree
 });
+import crypto3 from "crypto";
 import { v4 as uuidv425 } from "uuid";
-async function seedGenealogyNetworkTree() {
+function generateDeterministicPhone(index) {
+  return `+8801700000${String(100 + index).slice(-3)}`;
+}
+function generatePublicId2(index) {
+  return `PHX-${100800 + index}`;
+}
+function generateReferralCode2(index) {
+  return `PHX${800100 + index}`;
+}
+function deterministicUuid(key) {
+  const hash = crypto3.createHash("sha256").update(key).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-8${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+async function loadSavedMasterMapSpecs() {
+  try {
+    const docSnap = await adminFirestore.collection("system_configs").doc("affiliate_master_map").get();
+    if (docSnap.exists) {
+      const data = docSnap.data();
+      if (data && Array.isArray(data.specs) && data.specs.length > 0) {
+        return data.specs;
+      }
+    }
+  } catch (_err) {
+  }
+  return DEFAULT_AFFILIATE_MASTER_MAP;
+}
+async function saveMasterMapSpecsToFirestore(specs) {
+  try {
+    await adminFirestore.collection("system_configs").doc("affiliate_master_map").set(
+      {
+        specs,
+        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn("[GenealogySeed] Could not persist master map config to Firestore:", err.message);
+  }
+}
+async function seedGenealogyNetworkTree(customSpecs) {
   const db = await getDb();
-  console.log("[GenealogySeed] Starting full genealogy network tree sync...");
-  const DEFAULT_INITIAL_PASSWORD = "Phivonex2026!";
-  const defaultPasswordHash = await hashPassword(DEFAULT_INITIAL_PASSWORD);
+  const activeSpecs = customSpecs && Array.isArray(customSpecs) && customSpecs.length > 0 ? customSpecs : await loadSavedMasterMapSpecs();
+  if (customSpecs && customSpecs.length > 0) {
+    await saveMasterMapSpecsToFirestore(customSpecs);
+  }
+  const defaultPasswordHash = await hashPassword("Phivonex@2026");
   const emailToUserMap = /* @__PURE__ */ new Map();
-  for (const spec of GENEALOGY_TREE_SPECS) {
+  for (let i = 0; i < activeSpecs.length; i++) {
+    const spec = activeSpecs[i];
     const cleanEmail = spec.email.trim().toLowerCase();
-    const existingRes = await db.query(`
-      SELECT id, public_id, full_name FROM users WHERE LOWER(email) = $1
-    `, [cleanEmail]);
+    const existingRes = await db.query(
+      `SELECT id, public_id, email, full_name, role FROM users WHERE LOWER(email) = $1 LIMIT 1`,
+      [cleanEmail]
+    );
     let userId;
     let publicId;
     if (existingRes.rows.length > 0) {
       userId = existingRes.rows[0].id;
       publicId = existingRes.rows[0].public_id;
-      await db.query(`
-        UPDATE users SET
-          full_name = $1,
-          role = COALESCE($2, role),
-          status = 'ACTIVE',
-          email_verified_at = COALESCE(email_verified_at, CURRENT_TIMESTAMP),
-          password_hash = COALESCE(password_hash, $3),
-          updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-      `, [spec.fullName, spec.role || "USER", defaultPasswordHash, userId]);
+      await db.query(
+        `UPDATE users SET full_name = $1, role = $2, status = 'ACTIVE', updated_at = NOW() WHERE id = $3`,
+        [spec.fullName.trim(), spec.role, userId]
+      );
     } else {
       userId = uuidv425();
-      const numPart = Math.floor(1e5 + Math.random() * 9e5);
-      publicId = `PHX-${numPart}`;
-      await db.query(`
+      publicId = generatePublicId2(i + 1);
+      const phone = generateDeterministicPhone(i + 1);
+      const pubCheck = await db.query(`SELECT id FROM users WHERE public_id = $1`, [publicId]);
+      if (pubCheck.rows.length > 0) {
+        publicId = `PHX-${Math.floor(2e5 + Math.random() * 799999)}`;
+      }
+      const phoneCheck = await db.query(`SELECT id FROM users WHERE phone = $1`, [phone]);
+      const finalPhone = phoneCheck.rows.length > 0 ? `+88018${Math.floor(1e7 + Math.random() * 89999999)}` : phone;
+      await db.query(
+        `
         INSERT INTO users (
-          id, public_id, full_name, email, country, password_hash, status, role, email_verified_at, created_at, updated_at
-        ) VALUES ($1, $2, $3, $4, 'Global', $5, 'ACTIVE', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-      `, [
-        userId,
-        publicId,
-        spec.fullName,
-        cleanEmail,
-        defaultPasswordHash,
-        spec.role || "USER"
-      ]);
-    }
-    emailToUserMap.set(cleanEmail, { id: userId, publicId });
-    const refCode = `PHX${publicId.replace("PHX-", "")}`;
-    await db.query(`
-      INSERT INTO user_referrals (user_id, referral_code, created_at)
-      VALUES ($1, $2, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id) DO NOTHING
-    `, [userId, refCode]);
-    if (spec.walletBalanceUsd > 0) {
-      const balCheck = await db.query(`
-        SELECT id FROM financial_ledger_entries 
-        WHERE user_id = $1 AND source_type = 'DEPOSIT_CREDIT' AND source_ref = 'GENEALOGY_SEED_BALANCE'
-      `, [userId]);
-      if (balCheck.rows.length === 0) {
-        await db.query(`
-          INSERT INTO financial_ledger_entries (
-            id, public_txn_id, user_id, entry_type, source_type, source_id,
-            source_ref, description, amount, currency, status, created_at
-          ) VALUES ($1, $2, $3, 'CREDIT', 'DEPOSIT_CREDIT', $4, 'GENEALOGY_SEED_BALANCE', 'Ecosystem Wallet Seed Balance Credited', $5, 'USDT', 'SETTLED', CURRENT_TIMESTAMP)
-          ON CONFLICT DO NOTHING
-        `, [
-          uuidv425(),
-          `TX-${uuidv425().slice(0, 8).toUpperCase()}`,
+          id, public_id, full_name, email, phone, country, password_hash, role, status, email_verified_at, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, 'Bangladesh', $6, $7, 'ACTIVE', NOW(), NOW(), NOW())
+        `,
+        [
           userId,
-          uuidv425(),
-          spec.walletBalanceUsd
-        ]);
-      }
+          publicId,
+          spec.fullName.trim(),
+          cleanEmail,
+          finalPhone,
+          defaultPasswordHash,
+          spec.role
+        ]
+      );
     }
-    if (spec.spotCommissionUsd > 0) {
-      const commCheck = await db.query(`
-        SELECT id FROM financial_ledger_entries 
-        WHERE user_id = $1 AND source_type = 'REFERRAL_COMMISSION' AND source_ref = 'GENEALOGY_SPOT_COMMISSION'
-      `, [userId]);
-      if (commCheck.rows.length === 0) {
-        await db.query(`
-          INSERT INTO financial_ledger_entries (
-            id, public_txn_id, user_id, entry_type, source_type, source_id,
-            source_ref, description, amount, currency, status, created_at
-          ) VALUES ($1, $2, $3, 'CREDIT', 'REFERRAL_COMMISSION', $4, 'GENEALOGY_SPOT_COMMISSION', 'Spot Affiliate Commission Credited', $5, 'USDT', 'SETTLED', CURRENT_TIMESTAMP)
-          ON CONFLICT DO NOTHING
-        `, [
-          uuidv425(),
-          `TX-${uuidv425().slice(0, 8).toUpperCase()}`,
-          userId,
-          uuidv425(),
-          spec.spotCommissionUsd
-        ]);
+    const refCodeRes = await db.query(
+      `SELECT referral_code FROM user_referrals WHERE user_id = $1 LIMIT 1`,
+      [userId]
+    );
+    let referralCode;
+    if (refCodeRes.rows.length > 0) {
+      referralCode = refCodeRes.rows[0].referral_code;
+    } else {
+      referralCode = generateReferralCode2(i + 1);
+      const rcCheck = await db.query(
+        `SELECT user_id FROM user_referrals WHERE referral_code = $1`,
+        [referralCode]
+      );
+      if (rcCheck.rows.length > 0) {
+        referralCode = `PHX${Math.floor(1e5 + Math.random() * 899999)}`;
       }
+      await db.query(
+        `INSERT INTO user_referrals (user_id, referral_code, sponsor_user_id, created_at)
+         VALUES ($1, $2, NULL, NOW())
+         ON CONFLICT (user_id) DO NOTHING`,
+        [userId, referralCode]
+      );
     }
-    if (spec.nodeStatus === "ACTIVE") {
-      const nodeCheck = await db.query(`SELECT id FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE'`, [userId]);
-      if (nodeCheck.rows.length === 0) {
-        const nodeNumRes = await db.query(`SELECT COALESCE(MAX(node_number), 0) + 1 AS next_num FROM nodes`);
-        const nextNum = Number(nodeNumRes.rows[0]?.next_num || 1);
-        const nodeUuid = uuidv425();
-        const publicNodeId = `NODE-${nextNum.toString().padStart(5, "0")}`;
-        await db.query(`
-          INSERT INTO nodes (
-            id, node_number, public_node_id, status, owner_user_id, product_version, purchase_price_usd, activated_at, created_at, updated_at
-          ) VALUES ($1, $2, $3, 'ACTIVE', $4, 'GENESIS_V1', 1000.00, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT (id) DO NOTHING
-        `, [nodeUuid, nextNum, publicNodeId, userId]);
-      }
-    }
+    await db.query(
+      `INSERT INTO binary_volume_balances (user_id, carry_left_units, carry_right_units, updated_at)
+       VALUES ($1, 0, 0, NOW())
+       ON CONFLICT (user_id) DO NOTHING`,
+      [userId]
+    );
+    let firebaseSynced = false;
     try {
-      const { adminAuth: adminAuth2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
       try {
-        await adminAuth2.createUser({
-          uid: userId,
-          email: cleanEmail,
-          displayName: spec.fullName,
-          password: DEFAULT_INITIAL_PASSWORD,
-          emailVerified: true
+        const fbUser = await adminAuth.getUserByEmail(cleanEmail);
+        await adminAuth.updateUser(fbUser.uid, {
+          displayName: spec.fullName.trim(),
+          emailVerified: true,
+          disabled: false
         });
-        console.log(`[GenealogySeed] Registered ${cleanEmail} in Firebase Auth`);
-      } catch (authErr) {
-        if (authErr?.code === "auth/uid-already-exists" || authErr?.code === "auth/email-already-exists") {
-          try {
-            await adminAuth2.updateUser(userId, {
-              displayName: spec.fullName,
-              emailVerified: true
-            });
-          } catch {
-          }
+        firebaseSynced = true;
+      } catch (fbErr) {
+        if (fbErr.code === "auth/user-not-found") {
+          await adminAuth.createUser({
+            uid: userId,
+            email: cleanEmail,
+            password: "Phivonex@2026",
+            displayName: spec.fullName.trim(),
+            emailVerified: true,
+            disabled: false
+          });
+          firebaseSynced = true;
         }
       }
-    } catch (firebaseAuthErr) {
-      console.warn(`[GenealogySeed] Firebase Auth notice for ${cleanEmail}:`, firebaseAuthErr);
+    } catch (_authSyncErr) {
     }
     try {
-      const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-      await adminFirestore2.collection("users").doc(userId).set({
-        id: userId,
-        uid: userId,
-        email: cleanEmail,
-        fullName: spec.fullName,
-        publicId,
-        role: spec.role || "USER",
-        status: "ACTIVE",
-        balanceUsd: spec.walletBalanceUsd,
-        spotCommissionUsd: spec.spotCommissionUsd,
-        nodeStatus: spec.nodeStatus,
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { merge: true });
-      await adminFirestore2.collection("wallets").doc(userId).set({
-        userId,
-        balanceUsd: spec.walletBalanceUsd,
-        asset: "USDT",
-        updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-      }, { merge: true });
-    } catch (fsErr) {
-      console.warn(`[GenealogySeed] Firestore user sync notice for ${cleanEmail}:`, fsErr);
+      await adminFirestore.collection("users").doc(userId).set(
+        {
+          id: userId,
+          public_id: publicId,
+          publicId,
+          full_name: spec.fullName.trim(),
+          fullName: spec.fullName.trim(),
+          email: cleanEmail,
+          country: "Bangladesh",
+          role: spec.role,
+          status: "ACTIVE",
+          referralCode,
+          levelLabel: spec.levelLabel,
+          updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+        },
+        { merge: true }
+      );
+    } catch (_fsErr) {
     }
+    emailToUserMap.set(cleanEmail, {
+      id: userId,
+      publicId,
+      email: cleanEmail,
+      fullName: spec.fullName.trim(),
+      referralCode,
+      role: spec.role,
+      firebaseSynced
+    });
   }
-  for (const spec of GENEALOGY_TREE_SPECS) {
+  const mapUserIds = Array.from(emailToUserMap.values()).map((u) => u.id);
+  if (mapUserIds.length > 0) {
+    await db.query(
+      `UPDATE binary_placements
+       SET parent_user_id = NULL, side = NULL, status = 'UNPLACED'
+       WHERE user_id = ANY($1::uuid[])`,
+      [mapUserIds]
+    );
+  }
+  for (const spec of activeSpecs) {
     const cleanEmail = spec.email.trim().toLowerCase();
     const user = emailToUserMap.get(cleanEmail);
-    if (!user) continue;
-    if (spec.sponsorEmail) {
-      const sponsor = emailToUserMap.get(spec.sponsorEmail.trim().toLowerCase());
-      if (sponsor) {
-        await db.query(`
-          UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2
-        `, [sponsor.id, user.id]);
-        try {
-          const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-          await adminFirestore2.collection("referrals").doc(user.id).set({
-            userId: user.id,
+    const sponsorUser = spec.sponsorEmail ? emailToUserMap.get(spec.sponsorEmail.trim().toLowerCase()) || null : null;
+    const parentUser = spec.binaryParentEmail ? emailToUserMap.get(spec.binaryParentEmail.trim().toLowerCase()) || null : null;
+    if (sponsorUser && sponsorUser.id !== user.id) {
+      await db.query(
+        `
+        INSERT INTO user_referrals (
+          user_id, referral_code, sponsor_user_id, created_at
+        ) VALUES ($1, $2, $3, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          sponsor_user_id = EXCLUDED.sponsor_user_id,
+          referral_code = EXCLUDED.referral_code
+        `,
+        [user.id, user.referralCode, sponsorUser.id]
+      );
+      try {
+        await adminFirestore.collection("user_referrals").doc(user.id).set(
+          {
+            user_id: user.id,
             userPublicId: user.publicId,
-            email: cleanEmail,
-            sponsorUserId: sponsor.id,
-            sponsorPublicId: sponsor.publicId,
+            userEmail: user.email,
+            sponsor_user_id: sponsorUser.id,
+            sponsorPublicId: sponsorUser.publicId,
+            sponsorEmail: sponsorUser.email,
+            referral_code: user.referralCode,
             updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-          }, { merge: true });
-        } catch {
-        }
+          },
+          { merge: true }
+        );
+      } catch (_e) {
       }
+    } else {
+      await db.query(
+        `
+        INSERT INTO user_referrals (
+          user_id, referral_code, sponsor_user_id, created_at
+        ) VALUES ($1, $2, NULL, NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          sponsor_user_id = NULL,
+          referral_code = EXCLUDED.referral_code
+        `,
+        [user.id, user.referralCode]
+      );
     }
-    if (spec.binaryParentEmail && spec.side) {
-      const parent = emailToUserMap.get(spec.binaryParentEmail.trim().toLowerCase());
-      if (parent) {
-        await db.query(`
-          INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
-          VALUES ($1, $2, $3, 'PLACED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          ON CONFLICT (user_id) DO UPDATE SET
-            parent_user_id = $2,
-            side = $3,
-            status = 'PLACED',
-            placed_at = COALESCE(binary_placements.placed_at, CURRENT_TIMESTAMP)
-        `, [user.id, parent.id, spec.side]);
-        try {
-          const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-          await adminFirestore2.collection("placements").doc(user.id).set({
-            userId: user.id,
+    if (parentUser && spec.side && parentUser.id !== user.id) {
+      await db.query(
+        `UPDATE binary_placements
+         SET parent_user_id = NULL, side = NULL, status = 'UNPLACED'
+         WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED' AND user_id != $3`,
+        [parentUser.id, spec.side, user.id]
+      );
+      await db.query(
+        `
+        INSERT INTO binary_placements (
+          user_id, parent_user_id, side, status, placed_at, created_at
+        ) VALUES ($1, $2, $3, 'PLACED', NOW(), NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          parent_user_id = EXCLUDED.parent_user_id,
+          side = EXCLUDED.side,
+          status = 'PLACED',
+          placed_at = COALESCE(binary_placements.placed_at, NOW())
+        `,
+        [user.id, parentUser.id, spec.side]
+      );
+      try {
+        await adminFirestore.collection("binary_placements").doc(user.id).set(
+          {
+            user_id: user.id,
             userPublicId: user.publicId,
-            parentId: parent.id,
-            parentPublicId: parent.publicId,
+            userEmail: user.email,
+            sponsor_user_id: sponsorUser ? sponsorUser.id : parentUser.id,
+            parent_user_id: parentUser.id,
+            parentPublicId: parentUser.publicId,
+            parentEmail: parentUser.email,
             side: spec.side,
             status: "PLACED",
+            placed_at: (/* @__PURE__ */ new Date()).toISOString(),
             updatedAt: (/* @__PURE__ */ new Date()).toISOString()
-          }, { merge: true });
-        } catch {
-        }
+          },
+          { merge: true }
+        );
+      } catch (_e) {
       }
+    } else {
+      await db.query(
+        `
+        INSERT INTO binary_placements (
+          user_id, parent_user_id, side, status, placed_at, created_at
+        ) VALUES ($1, NULL, NULL, 'PLACED', NOW(), NOW())
+        ON CONFLICT (user_id) DO UPDATE SET
+          parent_user_id = NULL,
+          side = NULL,
+          status = 'PLACED',
+          placed_at = COALESCE(binary_placements.placed_at, NOW())
+        `,
+        [user.id]
+      );
     }
   }
-  console.log(`[GenealogySeed] Successfully seeded & verified ${GENEALOGY_TREE_SPECS.length} genealogy network tree accounts in PostgreSQL, Firebase Auth, and Cloud Firestore!`);
+  const seededAccounts = [];
+  for (let i = 0; i < activeSpecs.length; i++) {
+    const spec = activeSpecs[i];
+    const cleanEmail = spec.email.trim().toLowerCase();
+    const user = emailToUserMap.get(cleanEmail);
+    const nodePrice = Number(spec.nodePriceUsd || 1e3);
+    let activeNodePublicId = null;
+    const fundSourceUuid = deterministicUuid(`SEED-NODE-FUND:${user.id}`);
+    const purchaseSourceUuid = deterministicUuid(`SEED-NODE-PURCHASE:${user.id}`);
+    const spotSourceUuid = deterministicUuid(`SEED-SPOT-COMM:${user.id}`);
+    const extraBalSourceUuid = deterministicUuid(`SEED-EXTRA-BAL:${user.id}`);
+    await db.query(
+      `DELETE FROM financial_ledger_entries
+       WHERE user_id = $1
+         AND source_type = 'ADMIN_ADJUSTMENT'
+         AND (
+           source_ref LIKE 'GENEALOGY-INIT-%'
+           OR source_ref LIKE 'SEED-%'
+           OR description LIKE 'Initial Node & Affiliate Wallet Balance%'
+           OR description LIKE '%Mother%Seed%'
+           OR amount = 10000
+         )`,
+      [user.id]
+    );
+    if (spec.nodeStatus === "ACTIVE") {
+      const existingNodeRes = await db.query(
+        `SELECT id, public_node_id, node_number
+         FROM nodes
+         WHERE owner_user_id = $1 AND status = 'ACTIVE'
+         ORDER BY activated_at ASC NULLS LAST
+         LIMIT 1`,
+        [user.id]
+      );
+      let nodeId;
+      let nodeNumber;
+      if (existingNodeRes.rows.length > 0) {
+        nodeId = existingNodeRes.rows[0].id;
+        activeNodePublicId = existingNodeRes.rows[0].public_node_id;
+        nodeNumber = existingNodeRes.rows[0].node_number;
+      } else {
+        const availNodeRes = await db.query(
+          `SELECT id, public_node_id, node_number
+           FROM nodes
+           WHERE status = 'AVAILABLE' AND owner_user_id IS NULL
+           ORDER BY node_number ASC
+           LIMIT 1`
+        );
+        if (availNodeRes.rows.length > 0) {
+          nodeId = availNodeRes.rows[0].id;
+          activeNodePublicId = availNodeRes.rows[0].public_node_id;
+          nodeNumber = availNodeRes.rows[0].node_number;
+          await db.query(
+            `UPDATE nodes
+             SET status = 'ACTIVE',
+                 owner_user_id = $1,
+                 purchase_price_usd = $2,
+                 purchase_timestamp = NOW(),
+                 activated_at = NOW(),
+                 maturity_timestamp = NOW() + INTERVAL '200 days',
+                 updated_at = NOW()
+             WHERE id = $3`,
+            [user.id, nodePrice, nodeId]
+          );
+        } else {
+          const usedNumsRes = await db.query(
+            `SELECT COALESCE(MAX(node_number), 0)::int AS max_num FROM nodes WHERE node_number < 10000`
+          );
+          nodeNumber = Math.min(1e4, Math.max(1, (usedNumsRes.rows[0]?.max_num || 0) + 1));
+          nodeId = uuidv425();
+          activeNodePublicId = `PHX-NODE-${String(nodeNumber).padStart(5, "0")}`;
+          const upsertedNode = await db.query(
+            `INSERT INTO nodes (
+               id, node_number, public_node_id, status, owner_user_id, purchase_price_usd,
+               purchase_timestamp, activated_at, maturity_timestamp, created_at, updated_at
+             ) VALUES ($1, $2, $3, 'ACTIVE', $4, $5, NOW(), NOW(), NOW() + INTERVAL '200 days', NOW(), NOW())
+             ON CONFLICT (node_number) DO UPDATE SET
+               status = 'ACTIVE',
+               owner_user_id = EXCLUDED.owner_user_id,
+               purchase_timestamp = COALESCE(nodes.purchase_timestamp, NOW()),
+               activated_at = COALESCE(nodes.activated_at, NOW()),
+               updated_at = NOW()
+             RETURNING id, public_node_id`,
+            [nodeId, nodeNumber, activeNodePublicId, user.id, nodePrice]
+          );
+          nodeId = upsertedNode.rows[0].id;
+          activeNodePublicId = upsertedNode.rows[0].public_node_id;
+        }
+      }
+      const existingOrderRes = await db.query(
+        `SELECT id, public_order_id FROM node_orders WHERE user_id = $1 AND node_id = $2 AND status = 'COMPLETED' LIMIT 1`,
+        [user.id, nodeId]
+      );
+      let publicOrderId;
+      if (existingOrderRes.rows.length > 0) {
+        publicOrderId = existingOrderRes.rows[0].public_order_id;
+      } else {
+        const orderId = uuidv425();
+        publicOrderId = `PHX-ORD-${800100 + i}`;
+        const ordCollision = await db.query(
+          `SELECT id FROM node_orders WHERE public_order_id = $1`,
+          [publicOrderId]
+        );
+        if (ordCollision.rows.length > 0) {
+          publicOrderId = `PHX-ORD-${Math.floor(1e5 + Math.random() * 899999)}`;
+        }
+        await db.query(
+          `INSERT INTO node_orders (
+             id, public_order_id, user_id, node_id, node_number, amount_usd, currency,
+             status, payment_method, payment_reference, reserved_at, expires_at, completed_at, created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, 'USD', 'COMPLETED', 'WALLET_USD', $7, NOW(), NOW() + INTERVAL '1 day', NOW(), NOW(), NOW())`,
+          [
+            orderId,
+            publicOrderId,
+            user.id,
+            nodeId,
+            nodeNumber,
+            nodePrice,
+            `MASTER-MAP-NODE-${user.publicId}`
+          ]
+        );
+      }
+      await db.query(
+        `DELETE FROM node_orders WHERE user_id = $1 AND status = 'PENDING' AND payment_reference LIKE 'GENEALOGY-PENDING-%'`,
+        [user.id]
+      );
+      await db.query(
+        `INSERT INTO node_owners (
+           id, node_id, user_id, acquired_via, acquired_at, is_current_owner
+         ) VALUES ($1, $2, $3, 'PURCHASE', NOW(), TRUE)
+         ON CONFLICT (node_id, user_id) DO UPDATE SET
+           is_current_owner = TRUE`,
+        [uuidv425(), nodeId, user.id]
+      );
+      await db.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        ) VALUES ($1, $2, $3, 'CREDIT', 'BLOCKCHAIN_DEPOSIT', $4, $5, $6, $7, 'USDT', 'SETTLED', NOW())
+        ON CONFLICT (source_type, source_id, entry_type) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          status = 'SETTLED'
+        `,
+        [
+          uuidv425(),
+          `PHX-TXN-FND${100 + i}`,
+          user.id,
+          fundSourceUuid,
+          `DEP-${user.publicId}`,
+          `Genesis Node Activation Deposit ($${nodePrice.toLocaleString()} USDT)`,
+          nodePrice
+        ]
+      );
+      await db.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        ) VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, $7, 'USD', 'SETTLED', NOW())
+        ON CONFLICT (source_type, source_id, entry_type) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          status = 'SETTLED'
+        `,
+        [
+          uuidv425(),
+          `PHX-TXN-NOD${100 + i}`,
+          user.id,
+          purchaseSourceUuid,
+          publicOrderId,
+          `Genesis Node Activation (${activeNodePublicId}) \u2014 Deducted $${nodePrice.toLocaleString()}`,
+          nodePrice
+        ]
+      );
+      try {
+        await propagateNodeSalesVolume(db, nodeId, user.id);
+      } catch (_volErr) {
+      }
+      try {
+        await adminFirestore.collection("nodes").doc(nodeId).set(
+          {
+            id: nodeId,
+            public_node_id: activeNodePublicId,
+            owner_user_id: user.id,
+            ownerEmail: user.email,
+            ownerPublicId: user.publicId,
+            status: "ACTIVE",
+            purchase_price_usd: nodePrice,
+            updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+          },
+          { merge: true }
+        );
+      } catch (_e) {
+      }
+    } else {
+      await db.query(
+        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id IN ($2, $3)`,
+        [user.id, fundSourceUuid, purchaseSourceUuid]
+      );
+    }
+    const spotAmount = Number(spec.spotCommissionUsd || 0);
+    if (spotAmount > 0) {
+      await db.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        ) VALUES ($1, $2, $3, 'CREDIT', 'REFERRAL_COMMISSION', $4, $5, $6, $7, 'USD', 'SETTLED', NOW())
+        ON CONFLICT (source_type, source_id, entry_type) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          description = EXCLUDED.description,
+          status = 'SETTLED'
+        `,
+        [
+          uuidv425(),
+          `PHX-TXN-SPT${100 + i}`,
+          user.id,
+          spotSourceUuid,
+          `PHX-COM-SPOT${100 + i}`,
+          `Affiliate Spot Referral Commission ($${spotAmount.toFixed(2)} USD)`,
+          spotAmount
+        ]
+      );
+    } else {
+      await db.query(
+        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
+        [user.id, spotSourceUuid]
+      );
+    }
+    const extraBalAmount = Number(spec.extraWalletBalanceUsd || 0);
+    if (extraBalAmount > 0) {
+      await db.query(
+        `
+        INSERT INTO financial_ledger_entries (
+          id, public_txn_id, user_id, entry_type, source_type, source_id,
+          source_ref, description, amount, currency, status, created_at
+        ) VALUES ($1, $2, $3, 'CREDIT', 'ADMIN_ADJUSTMENT', $4, $5, $6, $7, 'USD', 'SETTLED', NOW())
+        ON CONFLICT (source_type, source_id, entry_type) DO UPDATE SET
+          amount = EXCLUDED.amount,
+          status = 'SETTLED'
+        `,
+        [
+          uuidv425(),
+          `PHX-TXN-EXT${100 + i}`,
+          user.id,
+          extraBalSourceUuid,
+          `ADM-BAL-${user.publicId}`,
+          `Admin Master Map Wallet Credit ($${extraBalAmount.toFixed(2)} USD)`,
+          extraBalAmount
+        ]
+      );
+    } else {
+      await db.query(
+        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
+        [user.id, extraBalSourceUuid]
+      );
+    }
+    seededAccounts.push({
+      level: spec.levelLabel,
+      fullName: spec.fullName,
+      email: cleanEmail,
+      publicId: user.publicId,
+      referralCode: user.referralCode,
+      sponsorEmail: spec.sponsorEmail,
+      binaryParentEmail: spec.binaryParentEmail,
+      side: spec.side,
+      nodeStatus: spec.nodeStatus,
+      activeNodePublicId,
+      spotCommissionUsd: spotAmount,
+      firebaseSynced: user.firebaseSynced
+    });
+  }
   return {
     success: true,
-    count: GENEALOGY_TREE_SPECS.length,
-    users: GENEALOGY_TREE_SPECS.map((s) => s.email)
+    seededAccounts,
+    count: seededAccounts.length
   };
 }
-var GENEALOGY_TREE_SPECS;
+async function getAffiliateMasterMapStatus() {
+  const db = await getDb();
+  const savedSpecs = await loadSavedMasterMapSpecs();
+  const enriched = [];
+  let rootUserId = null;
+  for (const spec of savedSpecs) {
+    const cleanEmail = spec.email.trim().toLowerCase();
+    const userRes = await db.query(
+      `SELECT id, public_id, full_name, role FROM users WHERE LOWER(email) = $1 LIMIT 1`,
+      [cleanEmail]
+    );
+    if (userRes.rows.length === 0) {
+      enriched.push({
+        ...spec,
+        userId: null,
+        publicId: null,
+        referralCode: null,
+        activeNodePublicId: null,
+        activeNodesCount: 0,
+        walletBalanceUsd: 0,
+        spotCommissionEarnedUsd: 0,
+        leftVolumeUnits: 0,
+        rightVolumeUnits: 0,
+        directReferralsCount: 0,
+        binaryStatus: "UNPLACED"
+      });
+      continue;
+    }
+    const u = userRes.rows[0];
+    if (!rootUserId || spec.levelLabel === "MOTHER") {
+      rootUserId = u.id;
+    }
+    const [refRes, nodeRes, balRes, volRes, dirCountRes, bpRes] = await Promise.all([
+      db.query(
+        `SELECT referral_code FROM user_referrals WHERE user_id = $1 LIMIT 1`,
+        [u.id]
+      ),
+      db.query(
+        `SELECT public_node_id FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE' ORDER BY activated_at ASC`,
+        [u.id]
+      ),
+      db.query(
+        `
+        SELECT
+          COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' AND status = 'SETTLED' THEN amount ELSE 0 END), 0) AS credits,
+          COALESCE(SUM(CASE WHEN entry_type = 'DEBIT' AND status IN ('SETTLED', 'PENDING') THEN amount ELSE 0 END), 0) AS debits,
+          COALESCE(SUM(CASE WHEN entry_type = 'REVERSAL' AND status = 'SETTLED' THEN amount ELSE 0 END), 0) AS reversals,
+          COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' AND source_type = 'REFERRAL_COMMISSION' AND status = 'SETTLED' THEN amount ELSE 0 END), 0) AS spot_comm
+        FROM financial_ledger_entries
+        WHERE user_id = $1
+        `,
+        [u.id]
+      ),
+      db.query(
+        `
+        SELECT
+          COALESCE(SUM(CASE WHEN side = 'LEFT' THEN volume_units ELSE 0 END), 0)::int AS left_units,
+          COALESCE(SUM(CASE WHEN side = 'RIGHT' THEN volume_units ELSE 0 END), 0)::int AS right_units
+        FROM binary_volume_events
+        WHERE beneficiary_user_id = $1 AND status = 'ACTIVE'
+        `,
+        [u.id]
+      ),
+      db.query(
+        `SELECT COUNT(*)::int AS cnt FROM user_referrals WHERE sponsor_user_id = $1`,
+        [u.id]
+      ),
+      db.query(
+        `SELECT status, side FROM binary_placements WHERE user_id = $1 LIMIT 1`,
+        [u.id]
+      )
+    ]);
+    const credits = Number(balRes.rows[0]?.credits || 0);
+    const debits = Number(balRes.rows[0]?.debits || 0);
+    const reversals = Number(balRes.rows[0]?.reversals || 0);
+    const walletBalanceUsd = Math.max(0, Number((credits - debits - reversals).toFixed(2)));
+    const spotCommissionEarnedUsd = Number(balRes.rows[0]?.spot_comm || 0);
+    enriched.push({
+      ...spec,
+      userId: u.id,
+      publicId: u.public_id,
+      referralCode: refRes.rows[0]?.referral_code || null,
+      activeNodePublicId: nodeRes.rows[0]?.public_node_id || null,
+      activeNodesCount: nodeRes.rows.length,
+      nodeStatus: nodeRes.rows.length > 0 ? "ACTIVE" : spec.nodeStatus,
+      walletBalanceUsd,
+      spotCommissionEarnedUsd,
+      leftVolumeUnits: Number(volRes.rows[0]?.left_units || 0),
+      rightVolumeUnits: Number(volRes.rows[0]?.right_units || 0),
+      directReferralsCount: Number(dirCountRes.rows[0]?.cnt || 0),
+      binaryStatus: bpRes.rows[0]?.status === "PLACED" ? "PLACED" : "UNPLACED"
+    });
+  }
+  let rootTree = null;
+  if (rootUserId) {
+    rootTree = await getNetworkTree(rootUserId, 10);
+  }
+  return {
+    specs: enriched,
+    rootTree
+  };
+}
+var GENEALOGY_MASTER_TREE;
 var init_genealogySeedService = __esm({
   "src/server/services/genealogySeedService.ts"() {
-    init_db();
     init_crypto();
-    GENEALOGY_TREE_SPECS = [
-      // Mother Account
-      {
-        email: "phivonexcore@gmail.com",
-        fullName: "Root Mother Account",
-        role: "ADMIN",
-        sponsorEmail: null,
-        binaryParentEmail: null,
-        side: null,
-        walletBalanceUsd: 1e4,
-        spotCommissionUsd: 0,
-        nodeStatus: "ACTIVE"
-      },
-      // L0 Main Admin
-      {
-        email: "shahjalal639832@gmail.com",
-        fullName: "Md SHAHJALAL",
-        role: "ADMIN",
-        sponsorEmail: "phivonexcore@gmail.com",
-        binaryParentEmail: "phivonexcore@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 5e3,
-        spotCommissionUsd: 0,
-        nodeStatus: "ACTIVE"
-      },
-      // L1
-      {
-        email: "plcshahjalal@gmail.com",
-        fullName: "Shahjalal-2",
-        role: "USER",
-        sponsorEmail: "shahjalal639832@gmail.com",
-        binaryParentEmail: "shahjalal639832@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L2
-      {
-        email: "rahmanmdferdaus761@gmail.com",
-        fullName: "MD: Ferdusur Rahman",
-        role: "USER",
-        sponsorEmail: "plcshahjalal@gmail.com",
-        binaryParentEmail: "plcshahjalal@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L3
-      {
-        email: "afrozaabdullah01@gmail.com",
-        fullName: "Afroza Abdullah",
-        role: "USER",
-        sponsorEmail: "rahmanmdferdaus761@gmail.com",
-        binaryParentEmail: "rahmanmdferdaus761@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L4-A (Left Branch of Afroza)
-      {
-        email: "sajidabdullahphivonex@gmail.com",
-        fullName: "Sajid Abdullah",
-        role: "USER",
-        sponsorEmail: "afrozaabdullah01@gmail.com",
-        binaryParentEmail: "afrozaabdullah01@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L5-A
-      {
-        email: "salimaakhter49@gmail.com",
-        fullName: "Selima Akter",
-        role: "USER",
-        sponsorEmail: "sajidabdullahphivonex@gmail.com",
-        binaryParentEmail: "sajidabdullahphivonex@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L6-A
-      {
-        email: "plabonrashed@gmail.com",
-        fullName: "Rashed",
-        role: "USER",
-        sponsorEmail: "salimaakhter49@gmail.com",
-        binaryParentEmail: "salimaakhter49@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L7-A
-      {
-        email: "mariya.rahman067@gmail.com",
-        fullName: "Mariya Akter",
-        role: "USER",
-        sponsorEmail: "plabonrashed@gmail.com",
-        binaryParentEmail: "plabonrashed@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 0,
-        spotCommissionUsd: 25,
-        nodeStatus: "PENDING"
-      },
-      // L4-B (Right Branch of Afroza)
-      {
-        email: "mehediabdullahphivonex@gmail.com",
-        fullName: "Mehedi Abdullah",
-        role: "USER",
-        sponsorEmail: "afrozaabdullah01@gmail.com",
-        binaryParentEmail: "afrozaabdullah01@gmail.com",
-        side: "RIGHT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      },
-      // L5-B
-      {
-        email: "ronykamalphivonex@gmail.com",
-        fullName: "Rony Kamal",
-        role: "USER",
-        sponsorEmail: "mehediabdullahphivonex@gmail.com",
-        binaryParentEmail: "mehediabdullahphivonex@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 0,
-        spotCommissionUsd: 25,
-        nodeStatus: "PENDING"
-      },
-      // L6-B
-      {
-        email: "rsfhealthsociety26@gmail.com",
-        fullName: "Raju Ahammed",
-        role: "USER",
-        sponsorEmail: "ronykamalphivonex@gmail.com",
-        binaryParentEmail: "ronykamalphivonex@gmail.com",
-        side: "LEFT",
-        walletBalanceUsd: 1e3,
-        spotCommissionUsd: 25,
-        nodeStatus: "ACTIVE"
-      }
-    ];
+    init_db();
+    init_firebase_admin();
+    init_affiliateMasterMap();
+    init_binaryVolumeService();
+    init_binaryPlacementService();
+    GENEALOGY_MASTER_TREE = DEFAULT_AFFILIATE_MASTER_MAP;
   }
 });
 
@@ -12170,9 +13136,9 @@ router.post("/register/request-verification", registrationLimiter, async (req, r
       }
     }
     const passwordHash = await hashPassword(password);
-    const crypto4 = await import("crypto");
-    const rawCode = crypto4.randomInt(1e5, 999999).toString();
-    const codeHash = crypto4.createHash("sha256").update(rawCode).digest("hex");
+    const crypto5 = await import("crypto");
+    const rawCode = crypto5.randomInt(1e5, 999999).toString();
+    const codeHash = crypto5.createHash("sha256").update(rawCode).digest("hex");
     const existingPending = await db.query(
       `SELECT last_sent_at FROM pending_registrations WHERE email = $1`,
       [normalizedEmail]
@@ -12257,8 +13223,8 @@ router.post("/register/verify-email", registrationLimiter, async (req, res) => {
       res.status(400).json({ error: "TOKEN_EXPIRED", message: "Verification code has expired. Please request a new code." });
       return;
     }
-    const crypto4 = await import("crypto");
-    const codeHash = crypto4.createHash("sha256").update(code.trim()).digest("hex");
+    const crypto5 = await import("crypto");
+    const codeHash = crypto5.createHash("sha256").update(code.trim()).digest("hex");
     if (record.code_hash !== codeHash) {
       await db.query(
         `UPDATE pending_registrations SET failed_attempts = failed_attempts + 1 WHERE email = $1`,
@@ -13469,15 +14435,16 @@ router2.get("/direct", requireAuth, async (req, res) => {
         SET sponsor_user_id = $1
         FROM users u
         WHERE ur.user_id = u.id
-          AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+          AND ur.sponsor_user_id IS NULL
           AND u.id != $1
+          AND COALESCE(TRIM(u.pending_referral_code), '') != ''
           AND (
             UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
             OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
             OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
           )
         `,
-        [user.id, s.referral_code || "", s.public_id || "", s.email || ""]
+        [user.id, s.referral_code || "__NONE__", s.public_id || "__NONE__", s.email || "__NONE__"]
       );
       await db.query(
         `
@@ -13497,7 +14464,7 @@ router2.get("/direct", requireAuth, async (req, res) => {
         u.public_id, 
         u.full_name, 
         ur.created_at,
-        COALESCE(bp.status, 'UNPLACED') as placement_status,
+        CASE WHEN bp.status = 'PLACED' AND bp.parent_user_id IS NOT NULL THEN 'PLACED' ELSE 'UNPLACED' END as placement_status,
         bp.side as team_side,
         bp.placed_at
       FROM user_referrals ur
@@ -15248,415 +16215,7 @@ var commissionRoutes_default = router6;
 
 // src/server/routes/networkRoutes.ts
 import { Router as Router7 } from "express";
-
-// src/server/services/binaryPlacementService.ts
-init_db();
-init_idGenerator();
-init_binaryVolumeService();
-import { v4 as uuidv418 } from "uuid";
-async function validateNoCycle(db, memberId, targetParentId) {
-  if (memberId === targetParentId) {
-    const error = new Error("Self-parenting is not permitted.");
-    error.code = "SELF_PARENT_FORBIDDEN";
-    error.statusCode = 400;
-    throw error;
-  }
-  let currentAncestor = targetParentId;
-  const seen = /* @__PURE__ */ new Set();
-  while (currentAncestor) {
-    if (currentAncestor === memberId) {
-      const error = new Error("Cycle detected: Member cannot be placed under their own descendant.");
-      error.code = "CYCLE_DETECTED";
-      error.statusCode = 400;
-      throw error;
-    }
-    if (seen.has(currentAncestor)) {
-      break;
-    }
-    seen.add(currentAncestor);
-    const ancestorRes = await db.query(
-      `SELECT parent_user_id FROM binary_placements WHERE user_id = $1`,
-      [currentAncestor]
-    );
-    currentAncestor = ancestorRes.rows[0]?.parent_user_id || null;
-  }
-}
-async function findNextAvailableSlot(db, sponsorUserId, preferredSide) {
-  const directCheck = await db.query(
-    `
-    SELECT user_id 
-    FROM binary_placements 
-    WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'
-    `,
-    [sponsorUserId, preferredSide]
-  );
-  if (directCheck.rows.length === 0) {
-    return {
-      parentId: sponsorUserId,
-      side: preferredSide
-    };
-  }
-  const legRootUserId = directCheck.rows[0].user_id;
-  const queue = [legRootUserId];
-  const visited = /* @__PURE__ */ new Set([legRootUserId]);
-  while (queue.length > 0) {
-    const currentUserId = queue.shift();
-    const childrenRes = await db.query(
-      `
-      SELECT side, user_id 
-      FROM binary_placements 
-      WHERE parent_user_id = $1 AND status = 'PLACED'
-      ORDER BY CASE WHEN side = 'LEFT' THEN 1 ELSE 2 END
-      `,
-      [currentUserId]
-    );
-    const leftChild = childrenRes.rows.find((r) => r.side === "LEFT");
-    const rightChild = childrenRes.rows.find((r) => r.side === "RIGHT");
-    if (!leftChild) {
-      return {
-        parentId: currentUserId,
-        side: "LEFT"
-      };
-    }
-    if (!rightChild) {
-      return {
-        parentId: currentUserId,
-        side: "RIGHT"
-      };
-    }
-    if (!visited.has(leftChild.user_id)) {
-      visited.add(leftChild.user_id);
-      queue.push(leftChild.user_id);
-    }
-    if (!visited.has(rightChild.user_id)) {
-      visited.add(rightChild.user_id);
-      queue.push(rightChild.user_id);
-    }
-  }
-  throw new Error("Could not find available placement slot in leg.");
-}
-async function placeMember(sponsorUserId, memberPublicId, preferredSide, targetParentPublicId) {
-  const cleanMemberPublicId = (memberPublicId || "").trim().toUpperCase();
-  const side = (preferredSide || "").trim().toUpperCase();
-  if (side !== "LEFT" && side !== "RIGHT") {
-    const error = new Error("Preferred side must be LEFT or RIGHT.");
-    error.code = "INVALID_SIDE";
-    error.statusCode = 400;
-    throw error;
-  }
-  const db = await getDb();
-  const memberRes = await db.query(
-    `
-    SELECT u.id, u.public_id, u.full_name, ur.sponsor_user_id
-    FROM users u
-    LEFT JOIN user_referrals ur ON u.id = ur.user_id
-    WHERE u.public_id = $1
-    `,
-    [cleanMemberPublicId]
-  );
-  if (memberRes.rows.length === 0) {
-    const error = new Error(`Member with public ID '${cleanMemberPublicId}' not found.`);
-    error.code = "MEMBER_NOT_FOUND";
-    error.statusCode = 404;
-    throw error;
-  }
-  const member = memberRes.rows[0];
-  if (member.sponsor_user_id !== sponsorUserId) {
-    const sponsorIdent = await db.query(
-      `SELECT r.referral_code, u.public_id, u.email
-       FROM users u
-       LEFT JOIN user_referrals r ON u.id = r.user_id
-       WHERE u.id = $1`,
-      [sponsorUserId]
-    );
-    const s = sponsorIdent.rows[0];
-    const memberPending = await db.query(
-      `SELECT pending_referral_code FROM users WHERE id = $1`,
-      [member.id]
-    );
-    const pendCode = (memberPending.rows[0]?.pending_referral_code || "").trim().toUpperCase();
-    if (s && pendCode && (pendCode === s.referral_code?.toUpperCase() || pendCode === s.public_id?.toUpperCase() || pendCode.toLowerCase() === s.email?.toLowerCase())) {
-      await db.query(
-        `UPDATE user_referrals SET sponsor_user_id = $1 WHERE user_id = $2`,
-        [sponsorUserId, member.id]
-      );
-      member.sponsor_user_id = sponsorUserId;
-    } else {
-      const error = new Error("You can only place members who you directly sponsored.");
-      error.code = "NOT_DIRECT_SPONSOR";
-      error.statusCode = 403;
-      throw error;
-    }
-  }
-  await db.query(
-    `
-    INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
-    VALUES ($1, NULL, NULL, 'UNPLACED', NULL, CURRENT_TIMESTAMP)
-    ON CONFLICT (user_id) DO NOTHING
-    `,
-    [member.id]
-  );
-  const statusRes = await db.query(
-    `SELECT status FROM binary_placements WHERE user_id = $1`,
-    [member.id]
-  );
-  if (statusRes.rows[0]?.status === "PLACED") {
-    const error = new Error("Member is already placed in the binary network and cannot be moved.");
-    error.code = "ALREADY_PLACED";
-    error.statusCode = 409;
-    throw error;
-  }
-  let finalParentId = "";
-  let finalSide = side;
-  if (targetParentPublicId) {
-    const targetParentPublicIdClean = targetParentPublicId.trim().toUpperCase();
-    const parentRes2 = await db.query(
-      `SELECT id FROM users WHERE public_id = $1`,
-      [targetParentPublicIdClean]
-    );
-    if (parentRes2.rows.length === 0) {
-      throw new Error("Invalid target parent.");
-    }
-    const targetParentId = parentRes2.rows[0].id;
-    finalParentId = targetParentId;
-    const slotCheck = await db.query(
-      `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
-      [finalParentId, side]
-    );
-    if (slotCheck.rows.length > 0) {
-      throw new Error(`The selected position (${side}) under ${targetParentPublicIdClean} is already occupied.`);
-    }
-  } else {
-    const slot = await findNextAvailableSlot(db, sponsorUserId, side);
-    finalParentId = slot.parentId;
-    finalSide = slot.side;
-  }
-  await validateNoCycle(db, member.id, finalParentId);
-  const updateRes = await db.query(
-    `
-    UPDATE binary_placements
-    SET 
-      parent_user_id = $1,
-      side = $2,
-      status = 'PLACED',
-      placed_at = CURRENT_TIMESTAMP
-    WHERE user_id = $3 AND status = 'UNPLACED'
-    RETURNING user_id, parent_user_id, side, status, placed_at
-    `,
-    [finalParentId, finalSide, member.id]
-  );
-  if (updateRes.rows.length === 0) {
-    throw new Error("Failed to update binary placement status.");
-  }
-  const placedAtDate = updateRes.rows[0].placed_at;
-  const parentRes = await db.query(
-    `SELECT public_id FROM users WHERE id = $1`,
-    [finalParentId]
-  );
-  const parentPublicId = parentRes.rows[0]?.public_id || "PHX-UNKNOWN";
-  try {
-    await db.query(
-      `
-      INSERT INTO security_events (id, user_id, event_type, description, created_at)
-      VALUES ($1, $2, 'BINARY_MEMBER_PLACED', $3, CURRENT_TIMESTAMP)
-      `,
-      [
-        uuidv418(),
-        sponsorUserId,
-        `Placed member ${member.public_id} into ${finalSide} leg under parent ${parentPublicId}.`
-      ]
-    );
-  } catch (secErr) {
-    console.warn("[SecurityEvent] Could not log binary placement event:", secErr);
-  }
-  try {
-    await backfillNodeSalesVolumeForPlacedMember(db, member.id);
-  } catch (backfillErr) {
-    console.warn("[BinaryVolume] Error backfilling node sales volume for newly placed member:", backfillErr);
-  }
-  return {
-    memberPublicId: member.public_id,
-    parentPublicId,
-    side: finalSide,
-    status: "PLACED",
-    placedAt: placedAtDate ? placedAtDate.toISOString() : (/* @__PURE__ */ new Date()).toISOString()
-  };
-}
-async function getUnplacedDirectReferrals(sponsorUserId) {
-  const db = await getDb();
-  const sponsorIdent = await db.query(
-    `SELECT r.referral_code, u.public_id, u.email
-     FROM users u
-     LEFT JOIN user_referrals r ON u.id = r.user_id
-     WHERE u.id = $1`,
-    [sponsorUserId]
-  );
-  if (sponsorIdent.rows.length > 0) {
-    const s = sponsorIdent.rows[0];
-    await db.query(
-      `
-      UPDATE user_referrals ur
-      SET sponsor_user_id = $1
-      FROM users u
-      WHERE ur.user_id = u.id
-        AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
-        AND u.id != $1
-        AND (
-          UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
-          OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
-          OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
-        )
-      `,
-      [sponsorUserId, s.referral_code || "", s.public_id || "", s.email || ""]
-    );
-  }
-  await db.query(
-    `
-    INSERT INTO binary_placements (user_id, parent_user_id, side, status, placed_at, created_at)
-    SELECT ur.user_id, NULL, NULL, 'UNPLACED', NULL, ur.created_at
-    FROM user_referrals ur
-    LEFT JOIN binary_placements bp ON ur.user_id = bp.user_id
-    WHERE ur.sponsor_user_id = $1 AND bp.user_id IS NULL
-    ON CONFLICT (user_id) DO NOTHING
-    `,
-    [sponsorUserId]
-  );
-  const res = await db.query(
-    `
-    SELECT u.public_id, u.full_name, ur.created_at, bp.status
-    FROM user_referrals ur
-    JOIN users u ON ur.user_id = u.id
-    JOIN binary_placements bp ON u.id = bp.user_id
-    WHERE ur.sponsor_user_id = $1 AND bp.status = 'UNPLACED'
-    ORDER BY ur.created_at DESC
-    `,
-    [sponsorUserId]
-  );
-  return res.rows.map((row) => ({
-    publicId: row.public_id,
-    displayName: formatSafeDisplayName(row.full_name),
-    joinedAt: row.created_at.toISOString(),
-    placementStatus: "UNPLACED"
-  }));
-}
-async function getNetworkTree(rootUserId, requestedDepth = 3) {
-  const depth = Math.max(1, Math.min(5, requestedDepth || 3));
-  const db = await getDb();
-  const rootUserRes = await db.query(
-    `SELECT id, public_id, full_name FROM users WHERE id = $1`,
-    [rootUserId]
-  );
-  if (rootUserRes.rows.length === 0) {
-    return null;
-  }
-  const rootUser = rootUserRes.rows[0];
-  async function buildSubtree(currentUserId, currentPublicId, currentFullName, currentSide, currentPlacedAt, currentDepth) {
-    const node = {
-      user: {
-        publicId: currentPublicId,
-        displayName: formatSafeDisplayName(currentFullName)
-      },
-      side: currentSide,
-      placedAt: currentPlacedAt,
-      left: null,
-      right: null
-    };
-    if (currentDepth >= depth) {
-      return node;
-    }
-    const childrenRes = await db.query(
-      `
-      SELECT bp.user_id, u.public_id, u.full_name, bp.side, bp.placed_at
-      FROM binary_placements bp
-      JOIN users u ON bp.user_id = u.id
-      WHERE bp.parent_user_id = $1 AND bp.status = 'PLACED'
-      ORDER BY CASE WHEN bp.side = 'LEFT' THEN 1 ELSE 2 END
-      `,
-      [currentUserId]
-    );
-    const leftChildRow = childrenRes.rows.find((r) => r.side === "LEFT");
-    const rightChildRow = childrenRes.rows.find((r) => r.side === "RIGHT");
-    if (leftChildRow) {
-      node.left = await buildSubtree(
-        leftChildRow.user_id,
-        leftChildRow.public_id,
-        leftChildRow.full_name,
-        "LEFT",
-        leftChildRow.placed_at ? leftChildRow.placed_at.toISOString() : null,
-        currentDepth + 1
-      );
-    }
-    if (rightChildRow) {
-      node.right = await buildSubtree(
-        rightChildRow.user_id,
-        rightChildRow.public_id,
-        rightChildRow.full_name,
-        "RIGHT",
-        rightChildRow.placed_at ? rightChildRow.placed_at.toISOString() : null,
-        currentDepth + 1
-      );
-    }
-    return node;
-  }
-  return buildSubtree(rootUser.id, rootUser.public_id, rootUser.full_name, null, null, 1);
-}
-async function countSubtreeMembers(db, rootParentId, side) {
-  const childRes = await db.query(
-    `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND side = $2 AND status = 'PLACED'`,
-    [rootParentId, side]
-  );
-  if (childRes.rows.length === 0) {
-    return 0;
-  }
-  let count = 0;
-  const queue = [childRes.rows[0].user_id];
-  const visited = /* @__PURE__ */ new Set([childRes.rows[0].user_id]);
-  while (queue.length > 0) {
-    const curr = queue.shift();
-    count++;
-    const children = await db.query(
-      `SELECT user_id FROM binary_placements WHERE parent_user_id = $1 AND status = 'PLACED'`,
-      [curr]
-    );
-    for (const child of children.rows) {
-      if (!visited.has(child.user_id)) {
-        visited.add(child.user_id);
-        queue.push(child.user_id);
-      }
-    }
-  }
-  return count;
-}
-async function getNetworkSummary(userId) {
-  const db = await getDb();
-  const directsRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM user_referrals WHERE sponsor_user_id = $1`,
-    [userId]
-  );
-  const directReferrals = parseInt(directsRes.rows[0]?.count || "0", 10);
-  const placedDirectsRes = await db.query(
-    `
-    SELECT COUNT(*)::int AS count 
-    FROM user_referrals ur
-    JOIN binary_placements bp ON ur.user_id = bp.user_id
-    WHERE ur.sponsor_user_id = $1 AND bp.status = 'PLACED'
-    `,
-    [userId]
-  );
-  const placedMembers = parseInt(placedDirectsRes.rows[0]?.count || "0", 10);
-  const unplacedDirectReferrals = Math.max(0, directReferrals - placedMembers);
-  const leftNetworkMembers = await countSubtreeMembers(db, userId, "LEFT");
-  const rightNetworkMembers = await countSubtreeMembers(db, userId, "RIGHT");
-  return {
-    directReferrals,
-    placedMembers,
-    unplacedDirectReferrals,
-    leftNetworkMembers,
-    rightNetworkMembers
-  };
-}
-
-// src/server/routes/networkRoutes.ts
+init_binaryPlacementService();
 init_binaryVolumeService();
 var router7 = Router7();
 router7.post("/place", requireAuth, async (req, res) => {
@@ -15708,7 +16267,7 @@ router7.get("/tree", requireAuth, async (req, res) => {
   try {
     const user = req.user;
     const rawDepth = parseInt(req.query.depth, 10);
-    const depth = isNaN(rawDepth) ? 3 : rawDepth;
+    const depth = isNaN(rawDepth) ? 8 : rawDepth;
     const tree = await getNetworkTree(user.id, depth);
     res.status(200).json({ tree });
   } catch (err) {
@@ -19425,6 +19984,7 @@ init_emailService();
 // src/server/services/affiliateTreeService.ts
 init_db();
 init_adminService();
+init_binaryPlacementService();
 async function adminUpdateBinaryPlacement(params) {
   const db = await getDb();
   if (!params.reason || params.reason.trim().length < 5) {
@@ -19531,7 +20091,10 @@ async function adminRepairAffiliateTree() {
       OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM((SELECT referral_code FROM user_referrals WHERE user_id = sp.id)))
       OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM(sp.email))
     )
-    WHERE ur.user_id = u.id AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+    WHERE ur.user_id = u.id
+      AND ur.sponsor_user_id IS NULL
+      AND u.id != sp.id
+      AND COALESCE(TRIM(u.pending_referral_code), '') != ''
   `);
   const repairedSponsors = repairSponsorsRes?.rowCount || 0;
   const repairPlacementsRes = await db.query(`
@@ -20479,10 +21042,58 @@ adminRouter.post("/network/tree/repair", async (req, res) => {
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to repair affiliate tree." });
   }
 });
+adminRouter.get("/network/master-map", async (_req, res) => {
+  try {
+    const status = await getAffiliateMasterMapStatus();
+    return res.status(200).json({
+      success: true,
+      ...status
+    });
+  } catch (err) {
+    console.error("[Admin API] Error fetching master affiliate map:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: "Failed to load Master Affiliate Map status."
+    });
+  }
+});
+adminRouter.post("/network/master-map/save", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { specs } = req.body || {};
+    const seedResult = await seedGenealogyNetworkTree(
+      Array.isArray(specs) && specs.length > 0 ? specs : void 0
+    );
+    const liveStatus = await getAffiliateMasterMapStatus();
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: "ADMIN_SAVE_MASTER_AFFILIATE_MAP",
+      targetType: "SYSTEM_NETWORK_TREE",
+      targetId: "AFFILIATE_MASTER_MAP",
+      details: `Admin ${admin.public_id} saved and activated the Master Affiliate Map (${seedResult.count} accounts, active nodes, $25 spot commissions, and binary tree synced to PostgreSQL & Firestore).`,
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Master Affiliate Map saved & activated! ${seedResult.count} accounts, active nodes, $25 spot commissions, and referral/binary trees are 100% live.`,
+      seededAccounts: seedResult.seededAccounts,
+      count: seedResult.count,
+      ...liveStatus
+    });
+  } catch (err) {
+    console.error("[Admin API] Error saving & activating master affiliate map:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: err.message || "Failed to save and activate Master Affiliate Map."
+    });
+  }
+});
 adminRouter.post("/network/seed-genealogy", async (req, res) => {
   try {
     const admin = req.user;
     const result = await seedGenealogyNetworkTree();
+    const liveStatus = await getAffiliateMasterMapStatus();
     await logAdminAction({
       adminUserId: admin.id,
       adminPublicId: admin.public_id,
@@ -20492,7 +21103,10 @@ adminRouter.post("/network/seed-genealogy", async (req, res) => {
       details: `Admin ${admin.public_id} triggered full Genealogy Tree seed. Seeded ${result.count} accounts to PostgreSQL, Firebase Auth, and Firestore.`,
       ipAddress: req.headers["x-forwarded-for"] || req.ip
     });
-    return res.status(200).json(result);
+    return res.status(200).json({
+      ...result,
+      ...liveStatus
+    });
   } catch (err) {
     console.error("[Admin API] Error seeding genealogy tree:", err);
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to seed genealogy tree." });
@@ -22008,7 +22622,7 @@ notificationRouter.get("/push-status", requireAuth, async (req, res) => {
 // src/server/routes/emailWebhookRoutes.ts
 init_emailService();
 import { Router as Router19 } from "express";
-import crypto3 from "crypto";
+import crypto4 from "crypto";
 var emailWebhookRouter = Router19();
 function verifyCryptographicSignature(rawBody, headers, secret) {
   const svixId = headers["svix-id"] || headers["webhook-id"];
@@ -22046,15 +22660,15 @@ function verifyCryptographicSignature(rawBody, headers, secret) {
   }
   const signatures = svixSignature.split(" ");
   for (const key of keyCandidates) {
-    const hmacHex = crypto3.createHmac("sha256", key).update(toSign).digest("hex");
-    const hmacBase64 = crypto3.createHmac("sha256", key).update(toSign).digest("base64");
+    const hmacHex = crypto4.createHmac("sha256", key).update(toSign).digest("hex");
+    const hmacBase64 = crypto4.createHmac("sha256", key).update(toSign).digest("base64");
     for (const sig of signatures) {
       const parts = sig.split(",");
       const targetSig = parts.length === 2 ? parts[1] : sig;
       try {
         const expectedBuf = Buffer.from(targetSig, "hex");
         const computedBuf = Buffer.from(hmacHex, "hex");
-        if (expectedBuf.length === computedBuf.length && crypto3.timingSafeEqual(expectedBuf, computedBuf)) {
+        if (expectedBuf.length === computedBuf.length && crypto4.timingSafeEqual(expectedBuf, computedBuf)) {
           return true;
         }
       } catch {
@@ -22062,7 +22676,7 @@ function verifyCryptographicSignature(rawBody, headers, secret) {
       try {
         const expectedBuf = Buffer.from(targetSig, "base64");
         const computedBuf = Buffer.from(hmacBase64, "base64");
-        if (expectedBuf.length === computedBuf.length && crypto3.timingSafeEqual(expectedBuf, computedBuf)) {
+        if (expectedBuf.length === computedBuf.length && crypto4.timingSafeEqual(expectedBuf, computedBuf)) {
           return true;
         }
       } catch {
@@ -23299,6 +23913,7 @@ function startMatchingScheduler() {
 
 // src/server/services/emailReportingService.ts
 init_db();
+init_binaryPlacementService();
 import { Resend } from "resend";
 import cron2 from "node-cron";
 async function sendWeeklyReports() {

@@ -148,7 +148,10 @@ export async function adminRepairAffiliateTree() {
       OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM((SELECT referral_code FROM user_referrals WHERE user_id = sp.id)))
       OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM(sp.email))
     )
-    WHERE ur.user_id = u.id AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+    WHERE ur.user_id = u.id
+      AND ur.sponsor_user_id IS NULL
+      AND u.id != sp.id
+      AND COALESCE(TRIM(u.pending_referral_code), '') != ''
   `);
   const repairedSponsors = (repairSponsorsRes as any)?.rowCount || 0;
 

@@ -176,7 +176,7 @@ export async function placeMember(
   preferredSide: 'LEFT' | 'RIGHT',
   targetParentPublicId?: string
 ): Promise<PlacementResult> {
-  const cleanMemberPublicId = (memberPublicId || '').trim().toUpperCase();
+  const cleanIdentifier = (memberPublicId || '').trim();
   const side = (preferredSide || '').trim().toUpperCase() as BinarySide;
 
   if (side !== 'LEFT' && side !== 'RIGHT') {
@@ -188,7 +188,7 @@ export async function placeMember(
 
   const db = await getDb();
 
-  // 1. Fetch member details
+  // 1. Fetch member details (supports Public ID, Email, or Referral Code)
   const memberRes = await db.query<{
     id: string;
     public_id: string;
@@ -199,13 +199,16 @@ export async function placeMember(
     SELECT u.id, u.public_id, u.full_name, ur.sponsor_user_id
     FROM users u
     LEFT JOIN user_referrals ur ON u.id = ur.user_id
-    WHERE u.public_id = $1
+    WHERE UPPER(TRIM(u.public_id)) = UPPER($1)
+       OR LOWER(TRIM(u.email)) = LOWER($1)
+       OR UPPER(TRIM(ur.referral_code)) = UPPER($1)
+    LIMIT 1
     `,
-    [cleanMemberPublicId]
+    [cleanIdentifier]
   );
 
   if (memberRes.rows.length === 0) {
-    const error: any = new Error(`Member with public ID '${cleanMemberPublicId}' not found.`);
+    const error: any = new Error(`Member '${cleanIdentifier}' not found.`);
     error.code = 'MEMBER_NOT_FOUND';
     error.statusCode = 404;
     throw error;
@@ -260,12 +263,12 @@ export async function placeMember(
   );
 
   // 4. Check current placement status (IMMUTABILITY CHECK)
-  const statusRes = await db.query<{ status: BinaryPlacementStatus }>(
-    `SELECT status FROM binary_placements WHERE user_id = $1`,
+  const statusRes = await db.query<{ status: BinaryPlacementStatus; parent_user_id: string | null }>(
+    `SELECT status, parent_user_id FROM binary_placements WHERE user_id = $1`,
     [member.id]
   );
 
-  if (statusRes.rows[0]?.status === 'PLACED') {
+  if (statusRes.rows[0]?.status === 'PLACED' && statusRes.rows[0]?.parent_user_id !== null) {
     const error: any = new Error('Member is already placed in the binary network and cannot be moved.');
     error.code = 'ALREADY_PLACED';
     error.statusCode = 409;
@@ -327,7 +330,7 @@ export async function placeMember(
       side = $2,
       status = 'PLACED',
       placed_at = CURRENT_TIMESTAMP
-    WHERE user_id = $3 AND status = 'UNPLACED'
+    WHERE user_id = $3 AND (status = 'UNPLACED' OR parent_user_id IS NULL)
     RETURNING user_id, parent_user_id, side, status, placed_at
     `,
     [finalParentId, finalSide, member.id]
@@ -402,15 +405,16 @@ export async function getUnplacedDirectReferrals(sponsorUserId: string): Promise
       SET sponsor_user_id = $1
       FROM users u
       WHERE ur.user_id = u.id
-        AND (ur.sponsor_user_id IS NULL OR ur.sponsor_user_id = '')
+        AND ur.sponsor_user_id IS NULL
         AND u.id != $1
+        AND COALESCE(TRIM(u.pending_referral_code), '') != ''
         AND (
           UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($2))
           OR UPPER(TRIM(u.pending_referral_code)) = UPPER(TRIM($3))
           OR LOWER(TRIM(u.pending_referral_code)) = LOWER(TRIM($4))
         )
       `,
-      [sponsorUserId, s.referral_code || '', s.public_id || '', s.email || '']
+      [sponsorUserId, s.referral_code || '__NONE__', s.public_id || '__NONE__', s.email || '__NONE__']
     );
   }
 
@@ -438,7 +442,7 @@ export async function getUnplacedDirectReferrals(sponsorUserId: string): Promise
     FROM user_referrals ur
     JOIN users u ON ur.user_id = u.id
     JOIN binary_placements bp ON u.id = bp.user_id
-    WHERE ur.sponsor_user_id = $1 AND bp.status = 'UNPLACED'
+    WHERE ur.sponsor_user_id = $1 AND (bp.status = 'UNPLACED' OR bp.parent_user_id IS NULL)
     ORDER BY ur.created_at DESC
     `,
     [sponsorUserId]
@@ -453,10 +457,10 @@ export async function getUnplacedDirectReferrals(sponsorUserId: string): Promise
 }
 
 /**
- * Returns the privacy-safe binary tree hierarchy starting from rootUserId down to specified depth (1-5).
+ * Returns the privacy-safe binary tree hierarchy starting from rootUserId down to specified depth (1-12).
  */
-export async function getNetworkTree(rootUserId: string, requestedDepth: number = 3): Promise<TreeNode | null> {
-  const depth = Math.max(1, Math.min(5, requestedDepth || 3));
+export async function getNetworkTree(rootUserId: string, requestedDepth: number = 8): Promise<TreeNode | null> {
+  const depth = Math.max(1, Math.min(12, requestedDepth || 8));
   const db = await getDb();
 
   // 1. Fetch root user info
