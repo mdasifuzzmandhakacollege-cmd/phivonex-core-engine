@@ -17,6 +17,7 @@ import {
   setUserAccountStatus,
   revokeUserSessions,
   assignUserSponsor,
+  sendUserAuditReportEmail,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
 import {
@@ -49,6 +50,7 @@ import {
   adminRepairAffiliateTree,
   getNodeGrowthAndVolumeAnalytics,
 } from '../services/affiliateTreeService';
+import { seedGenealogyNetworkTree } from '../services/genealogySeedService';
 
 export const adminRouter = Router();
 
@@ -461,6 +463,36 @@ adminRouter.post('/users/:userId/sessions/revoke', async (req: AuthRequest, res:
     });
   }
 });
+
+/**
+ * POST /api/admin/users/:userId/send-audit-report
+ * 1-Click Audit Report Email Dispatch to User with full 360° Account Details & Audit Trail.
+ */
+adminRouter.post('/users/:userId/send-audit-report', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await sendUserAuditReportEmail({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      reason,
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error dispatching 1-Click user audit report email:', err);
+    return res.status(500).json({
+      error: 'AUDIT_REPORT_EMAIL_FAILED',
+      message: err.message || 'Failed to dispatch 1-Click user audit report email.',
+    });
+  }
+});
+
 
 /**
  * GET /api/admin/nodes
@@ -1109,6 +1141,33 @@ adminRouter.post('/network/tree/repair', async (req: AuthRequest, res: Response)
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to repair affiliate tree.' });
   }
 });
+
+/**
+ * POST /api/admin/network/seed-genealogy
+ * Admin endpoint to trigger complete genealogy tree seeding & sync to PostgreSQL, Firebase Auth & Firestore.
+ */
+adminRouter.post('/network/seed-genealogy', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const result = await seedGenealogyNetworkTree();
+
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: 'ADMIN_SEED_GENEALOGY_TREE',
+      targetType: 'SYSTEM_NETWORK_TREE',
+      targetId: 'GENEALOGY_TREE_SEED_ROUTINE',
+      details: `Admin ${admin.public_id} triggered full Genealogy Tree seed. Seeded ${result.count} accounts to PostgreSQL, Firebase Auth, and Firestore.`,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error seeding genealogy tree:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to seed genealogy tree.' });
+  }
+});
+
 
 
 

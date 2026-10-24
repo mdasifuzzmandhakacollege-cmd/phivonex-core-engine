@@ -52,6 +52,56 @@ export interface PerformancePopupSettings {
 
 export async function getPromotionalOffers(adminOnly: boolean = false): Promise<PromotionalOffer[]> {
   const db = await getDb();
+
+  // 1. Dual-sync with Cloud Firestore to ensure disabled/inactivated state persists across container restarts
+  try {
+    const { adminFirestore } = await import('../../lib/firebase-admin');
+    const fsSnap = await adminFirestore.collection('promotional_offers').get();
+
+    if (!fsSnap.empty) {
+      for (const doc of fsSnap.docs) {
+        const fsData = doc.data();
+        const offerId = doc.id;
+
+        // Upsert or update status in PostgreSQL from Firestore
+        await db.query(`
+          INSERT INTO promotional_offers (
+            id, title, description, banner_image, offer_type, bonus_nodes_count,
+            bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,
+            promotional_price_usd, discount_percent, badge_tag, total_allocated_slots, claimed_slots,
+            start_date, end_date, status, target_audience, priority_order, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
+          ON CONFLICT (id) DO UPDATE SET
+            status = $17,
+            title = COALESCE($2, promotional_offers.title),
+            claimed_slots = COALESCE($14, promotional_offers.claimed_slots)
+        `, [
+          offerId,
+          fsData.title || 'Promotional Offer',
+          fsData.description || '',
+          fsData.bannerImage || '',
+          fsData.offerType || 'BOGO_FREE_NODE',
+          fsData.bonusNodesCount ?? 1,
+          fsData.bonusMiningRewards ?? true,
+          fsData.bonusMatchingEnabled ?? false,
+          fsData.bonusReferralCommission ?? false,
+          fsData.promotionalPriceUsd ?? 1000.00,
+          fsData.discountPercent ?? 0.00,
+          fsData.badgeTag || 'HOT_DEAL',
+          fsData.totalAllocatedSlots ?? 100,
+          fsData.claimedSlots ?? 0,
+          fsData.startDate || new Date().toISOString(),
+          fsData.endDate || new Date(Date.now() + 90 * 86400000).toISOString(),
+          fsData.status || 'ACTIVE',
+          fsData.targetAudience || 'ALL',
+          fsData.priorityOrder ?? 0,
+        ]);
+      }
+    }
+  } catch (fsSyncErr) {
+    console.warn('[PromotionalService] Firestore offers sync notice:', fsSyncErr);
+  }
+
   let query = `
     SELECT id, title, description, banner_image, offer_type, bonus_nodes_count,
            bonus_mining_rewards, bonus_matching_enabled, bonus_referral_commission,

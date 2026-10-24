@@ -182,8 +182,17 @@ async function startServer() {
   });
 
   // Initialize Database Schema and background schedulers asynchronously
-  getDb().then(() => {
+  getDb().then(async () => {
     console.log('[Server] Database and referral migrations initialized.');
+    
+    // Seed and sync genealogy tree accounts to PostgreSQL, Firebase Auth & Firestore
+    try {
+      const { seedGenealogyNetworkTree } = await import('./src/server/services/genealogySeedService');
+      await seedGenealogyNetworkTree();
+    } catch (seedErr) {
+      console.warn('[Server] Genealogy seed startup notice:', seedErr);
+    }
+
     startMatchingScheduler();
     startWeeklyReportScheduler();
     startDailyAuditScheduler();

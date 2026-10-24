@@ -1721,3 +1721,106 @@ export async function revokeUserSessions(params: {
 
   return { success: true, targetPublicId: targetUser.public_id, revokedCount };
 }
+
+/**
+ * 1-Click User Audit Report Email Dispatcher.
+ * Generates an authoritative 360° Audit Report and emails it directly to the user's registered address.
+ */
+export async function sendUserAuditReportEmail(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  reason?: string;
+  ipAddress?: string;
+}) {
+  const details = await getUser360Details(params.targetUserId);
+  const user = details.profile;
+  const walletOverview = details.walletOverview;
+  const activeNodesCount = details.nodes.filter(n => n.status === 'ACTIVE').length;
+  const sponsorPublicId = user.sponsor?.sponsorPublicId || 'ROOT';
+
+  const htmlBody = `
+    <div style="background-color: #05070c; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #f8fafc; padding: 40px 15px;">
+      <div style="max-width: 650px; margin: 0 auto; background-color: #0b1329; border: 1px solid #1e293b; border-radius: 16px; overflow: hidden;">
+        <div style="background: linear-gradient(135deg, #0f172a 0%, #070d1e 100%); padding: 32px; border-bottom: 1px solid rgba(0, 207, 255, 0.2); text-align: center;">
+          <div style="font-size: 26px; font-weight: 900; letter-spacing: 4px; color: #ffffff; font-family: monospace;">PHIVONEX</div>
+          <div style="font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #00CFFF; margin-top: 6px;">OFFICIAL 360° USER ACCOUNT AUDIT REPORT</div>
+        </div>
+        
+        <div style="padding: 30px;">
+          <h2 style="color: #ffffff; font-size: 18px; margin-top: 0;">Account Audit Summary: ${user.fullName} (${user.publicId})</h2>
+          <p style="color: #94a3b8; font-size: 13px;">Audit Timestamp: ${new Date().toISOString()} | Issued By Admin ${params.adminPublicId}</p>
+
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; color: #cbd5e1;">
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Email Address</td>
+              <td style="padding: 10px; font-weight: bold; text-align: right;">${user.email}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Account Status</td>
+              <td style="padding: 10px; font-weight: bold; color: ${user.status === 'ACTIVE' ? '#10B981' : '#EF4444'}; text-align: right;">${user.status}</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Role & Verification</td>
+              <td style="padding: 10px; font-weight: bold; text-align: right;">${user.role} (${user.emailVerified ? 'VERIFIED' : 'UNVERIFIED'})</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Total Ledger Balance</td>
+              <td style="padding: 10px; font-weight: bold; color: #00CFFF; text-align: right;">$${walletOverview.usdtAvailableBalance.toFixed(2)} USDT</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Referral Commissions Earned</td>
+              <td style="padding: 10px; font-weight: bold; text-align: right;">$${walletOverview.referralCommissionsUsdt.toFixed(2)} USDT</td>
+            </tr>
+            <tr style="border-bottom: 1px solid #1e293b;">
+              <td style="padding: 10px; color: #64748b;">Active Validator Nodes</td>
+              <td style="padding: 10px; font-weight: bold; text-align: right;">${activeNodesCount} Nodes</td>
+            </tr>
+            <tr>
+              <td style="padding: 10px; color: #64748b;">Sponsor Public ID</td>
+              <td style="padding: 10px; font-weight: bold; font-family: monospace; text-align: right;">${sponsorPublicId}</td>
+            </tr>
+          </table>
+
+          <div style="background: rgba(15, 23, 42, 0.8); padding: 15px; border-radius: 8px; border: 1px solid #1e293b; font-size: 12px; color: #94a3b8;">
+            <strong>System Audit Note:</strong> All network linkages, node emissions, and ledger entries are synchronized with Google Cloud Firestore for zero-data-loss durability.
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Send via emailService provider
+  const { getEmailProvider } = await import('./emailService');
+  const provider = getEmailProvider();
+  await provider.sendEmail(
+    user.email,
+    `PHIVONEX Official 360° Account Audit Report - ${user.publicId}`,
+    htmlBody
+  );
+
+  // Log admin action
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: 'ADMIN_DISPATCH_USER_AUDIT_REPORT',
+    targetType: 'USER',
+    targetId: user.publicId,
+    details: `Admin ${params.adminPublicId} dispatched 1-Click Official Account Audit Report to ${user.email} (${user.publicId}).`,
+    metadata: {
+      targetUserId: user.id,
+      targetEmail: user.email,
+      balance: walletOverview.usdtAvailableBalance,
+      nodesCount: activeNodesCount,
+    },
+    ipAddress: params.ipAddress,
+  });
+
+  return {
+    success: true,
+    message: `1-Click Audit Report successfully dispatched to ${user.email}!`,
+    recipient: user.email,
+    publicId: user.publicId,
+  };
+}
+

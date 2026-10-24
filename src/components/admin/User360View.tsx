@@ -59,6 +59,31 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
   const [actionSubmitting, setActionSubmitting] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  // 1-Click Audit Report state
+  const [sendingAuditReport, setSendingAuditReport] = useState<boolean>(false);
+  const [auditReportSuccess, setAuditReportSuccess] = useState<string | null>(null);
+
+  const handleSendAuditReport = async () => {
+    try {
+      setSendingAuditReport(true);
+      setAuditReportSuccess(null);
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/send-audit-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to dispatch audit report.');
+      }
+      setAuditReportSuccess(`1-Click Audit Report email sent to ${json.recipient}!`);
+      setTimeout(() => setAuditReportSuccess(null), 5000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to dispatch audit report.');
+    } finally {
+      setSendingAuditReport(false);
+    }
+  };
+
   // Fetch User 360 data
   const fetchUser360 = useCallback(async () => {
     try {
@@ -254,6 +279,15 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
             </button>
 
             <button
+              onClick={handleSendAuditReport}
+              disabled={sendingAuditReport}
+              className="px-3 py-1.5 rounded-lg bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 text-[#00CFFF] text-xs font-mono font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              title="1-Click Email Full Audit Report to User"
+            >
+              <FileText className="w-3.5 h-3.5 text-[#00CFFF]" /> {sendingAuditReport ? 'Sending Email...' : 'Email Audit Report'}
+            </button>
+
+            <button
               onClick={onClose}
               className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-300 hover:text-white cursor-pointer"
             >
@@ -261,6 +295,18 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
             </button>
           </div>
         </div>
+
+        {auditReportSuccess && (
+          <div className="bg-[#32D583]/10 border-b border-[#32D583]/30 px-6 py-2.5 flex items-center justify-between text-[#32D583] text-xs font-mono font-bold animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>{auditReportSuccess}</span>
+            </div>
+            <button onClick={() => setAuditReportSuccess(null)} className="text-slate-400 hover:text-white">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* TAB NAVIGATION */}
         <div className="bg-[#05070B] border-b border-white/10 px-4 sm:px-6 flex items-center gap-2 overflow-x-auto no-scrollbar">
