@@ -122,10 +122,48 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       [user.id]
     );
 
+    let nodeRows = nodesRes.rows;
+
+    if (nodeRows.length === 0) {
+      try {
+        const { adminFirestore } = await import('../../lib/firebase-admin');
+        const snap = await adminFirestore.collection('nodes')
+          .where('ownerUserId', '==', user.id)
+          .get();
+
+        if (!snap.empty) {
+          for (const docSnap of snap.docs) {
+            const data = docSnap.data();
+            const restoredNodeId = data.id || docSnap.id;
+            const restoredNumber = data.nodeNumber || 101;
+
+            await db.query(`
+              UPDATE nodes
+              SET status = 'ACTIVE', owner_user_id = $1, activated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+              WHERE id = $2 OR node_number = $3
+            `, [user.id, restoredNodeId, restoredNumber]);
+          }
+
+          const reQuery = await db.query<any>(`
+            SELECT id, node_number, public_node_id, status, product_version, purchase_price_usd,
+                   phivo_reference_price_at_purchase, lifetime_phivo_allocation, term_days,
+                   daily_phivo_emission, purchase_timestamp, activated_at, maturity_timestamp,
+                   distributed_phivo, remaining_phivo
+            FROM nodes
+            WHERE owner_user_id = $1
+            ORDER BY node_number ASC
+          `, [user.id]);
+          nodeRows = reQuery.rows;
+        }
+      } catch (fsErr) {
+        console.warn('[Node API] Firestore node recovery notice:', fsErr);
+      }
+    }
+
     const rewardStats = await getNodeRewardStatsForUser(user.id);
     const activeProtocolDailyReward = await getNodeRewardRatePerEpoch();
 
-    const safeNodes = nodesRes.rows.map((n) => {
+    const safeNodes = nodeRows.map((n) => {
       const stat = rewardStats[n.id] || {
         totalRewards: 0,
         currentRewardState: 'READY' as const,

@@ -44,6 +44,11 @@ import {
   retryQueueItem,
   processEmailQueue
 } from '../services/emailService';
+import {
+  adminUpdateBinaryPlacement,
+  adminRepairAffiliateTree,
+  getNodeGrowthAndVolumeAnalytics,
+} from '../services/affiliateTreeService';
 
 export const adminRouter = Router();
 
@@ -1028,6 +1033,83 @@ adminRouter.post('/email/queue/retry/:id', async (req: AuthRequest, res: Respons
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retry email queue item.' });
   }
 });
+
+/**
+ * GET /api/admin/analytics/node-growth-volume
+ * Returns daily time-series node activations and transaction ledger volume for D3 Chart.
+ */
+adminRouter.get('/analytics/node-growth-volume', async (req: AuthRequest, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string, 10) || 30;
+    const analytics = await getNodeGrowthAndVolumeAnalytics(days);
+    return res.status(200).json({ success: true, ...analytics });
+  } catch (err: any) {
+    console.error('[Admin API] Error fetching node growth & volume analytics:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to retrieve analytics.' });
+  }
+});
+
+/**
+ * POST /api/admin/network/placement/update
+ * Admin endpoint to force or update binary placement (parent, side) for any user with audit log & Firestore backup.
+ */
+adminRouter.post('/network/placement/update', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { memberPublicId, targetParentPublicId, side, reason } = req.body || {};
+
+    if (!memberPublicId || !targetParentPublicId || !side) {
+      return res.status(400).json({ error: 'INVALID_INPUT', message: 'memberPublicId, targetParentPublicId, and side are required.' });
+    }
+
+    const ipAddress = (req.headers['x-forwarded-for'] as string) || req.ip;
+
+    const result = await adminUpdateBinaryPlacement({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      memberPublicId,
+      targetParentPublicId,
+      side,
+      reason,
+      ipAddress,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error updating binary placement:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to update binary placement.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/network/tree/repair
+ * Admin 1-Click Repair & Sync Routine for Affiliate & Binary Tree.
+ */
+adminRouter.post('/network/tree/repair', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const result = await adminRepairAffiliateTree();
+
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: 'ADMIN_REPAIR_AFFILIATE_TREE',
+      targetType: 'SYSTEM_NETWORK_TREE',
+      targetId: 'AFFILIATE_TREE_REPAIR_ROUTINE',
+      details: `Admin ${admin.public_id} triggered full Affiliate & Binary Tree repair. Reconciled ${result.repairedSponsors} sponsors, fixed ${result.repairedPlacements} placements, and backed up tree to Firestore.`,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error('[Admin API] Error repairing affiliate tree:', err);
+    return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to repair affiliate tree.' });
+  }
+});
+
 
 
 

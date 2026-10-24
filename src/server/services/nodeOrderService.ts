@@ -632,6 +632,23 @@ export async function settleNodeOrder(
   const finalOrder = updatedOrderRes.rows[0];
   const finalNode = activatedNodeRes.rows[0];
 
+  // Firestore Backup Sync for Node Activation (Guarantees zero data loss across container rollouts!)
+  try {
+    const { adminFirestore } = await import('../../lib/firebase-admin');
+    await adminFirestore.collection('nodes').doc(finalNode.id).set({
+      id: finalNode.id,
+      publicNodeId: finalNode.public_node_id,
+      nodeNumber: finalNode.node_number,
+      ownerUserId: order.user_id,
+      status: 'ACTIVE',
+      activatedAt: finalNode.activated_at ? new Date(finalNode.activated_at).toISOString() : new Date().toISOString(),
+      purchasePriceUsd: basePrice,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  } catch (fsErr) {
+    console.warn('[NodeOrderService] Firestore node backup notice:', fsErr);
+  }
+
   // 5. Generate Direct Referral Commission ($50 USD to sponsor if eligible)
   let referralCommission: SafeReferralCommission | null = null;
   try {

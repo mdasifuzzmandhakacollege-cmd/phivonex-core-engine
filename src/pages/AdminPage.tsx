@@ -59,6 +59,8 @@ import { User360View } from '../components/admin/User360View';
 import { KYCManagement } from '../components/admin/KYCManagement';
 import { ReconciliationReport } from '../components/admin/ReconciliationReport';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
+import { NodeGrowthAndVolumeChart } from '../components/admin/NodeGrowthAndVolumeChart';
+import { AffiliateTreeEditor } from '../components/admin/AffiliateTreeEditor';
 
 interface AdminPageProps {
   onNavigate: (route: string) => void;
@@ -68,6 +70,7 @@ interface AdminPageProps {
 export type AdminTab =
   | 'overview'
   | 'kyc'
+  | 'affiliate-tree'
   | 'treasury'
   | 'reconciliation'
   | 'economics'
@@ -105,6 +108,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   const getTabFromPath = (path: string): AdminTab => {
     const clean = path.toLowerCase().split('?')[0];
     if (clean.includes('/kyc')) return 'kyc';
+    if (clean.includes('/affiliate-tree') || clean.includes('/tree-editor')) return 'affiliate-tree';
     if (clean.includes('/communications') || clean.includes('/email')) return 'communications';
     if (clean.includes('/support') || clean.includes('/tickets')) return 'support';
     if (clean.includes('/treasury')) return 'treasury';
@@ -129,6 +133,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
   // Admin Data states
   const [summary, setSummary] = useState<any>(null);
+  const [analyticsData, setAnalyticsData] = useState<any[]>([]);
   const [usersList, setUsersList] = useState<any[]>([]);
   const [nodesList, setNodesList] = useState<any[]>([]);
   const [ordersList, setOrdersList] = useState<any[]>([]);
@@ -326,7 +331,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
       }
 
       // Fetch tab-specific data
-      if (activeTab === 'users') {
+      if (activeTab === 'overview') {
+        try {
+          const aRes = await fetch('/api/admin/analytics/node-growth-volume?days=30');
+          if (aRes.ok) {
+            const aData = await aRes.json();
+            if (aData.series) setAnalyticsData(aData.series);
+          }
+        } catch {}
+      } else if (activeTab === 'users') {
         const res = await fetch(`/api/admin/users?search=${encodeURIComponent(searchQuery)}&status=${statusFilter}`);
         if (res.ok) {
           const data = await res.json();
@@ -665,6 +678,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
   const NAV_ITEMS = [
     { id: 'overview' as AdminTab, label: 'Overview', icon: LayoutDashboard },
     { id: 'kyc' as AdminTab, label: 'KYC Verification Hub', icon: ShieldCheck, badge: summary?.pendingKycCount },
+    { id: 'affiliate-tree' as AdminTab, label: 'Affiliate & Binary Tree', icon: GitFork },
     { id: 'treasury' as AdminTab, label: 'Treasury & Reserves', icon: Wallet },
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
@@ -1046,6 +1060,13 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                 </div>
               </div>
 
+              {/* D3 Genesis Node Growth & Transaction Volume Chart */}
+              <NodeGrowthAndVolumeChart
+                data={analyticsData}
+                onRefresh={() => fetchAdminData(true)}
+                isLoading={loadingData}
+              />
+
               {/* Live Cloud SQL PostgreSQL Diagnostic Card */}
               <CloudSqlDiagnosticCard />
 
@@ -1148,6 +1169,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
               </div>
             </div>
           )}
+
+          {/* TAB: AFFILIATE & BINARY TREE EDITOR */}
+          {activeTab === 'affiliate-tree' && <AffiliateTreeEditor />}
 
           {/* TAB: TREASURY & RESERVES (SENSITIVE AUDITED OPERATIONS) */}
           {activeTab === 'treasury' && (
