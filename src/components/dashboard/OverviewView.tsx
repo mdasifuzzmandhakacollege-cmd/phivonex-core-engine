@@ -258,10 +258,12 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
 
   useEffect(() => {
     fetchDashboardData();
-    // Auto refresh every 20 seconds
+    // Auto refresh every 60 seconds when tab is visible
     const interval = setInterval(() => {
-      fetchDashboardData(false);
-    }, 20000);
+      if (document.visibilityState === 'visible') {
+        fetchDashboardData(false);
+      }
+    }, 60000);
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
@@ -271,11 +273,6 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       setPhivoRate(coinPriceUsdt);
     }
   }, [coinPriceUsdt]);
-
-  // Live refresh overview metrics on system config or promotional updates
-  useEffect(() => {
-    fetchDashboardData(false);
-  }, [lastUpdated, fetchDashboardData]);
 
   // Live refresh on balance, transaction, or notification updates
   useEffect(() => {

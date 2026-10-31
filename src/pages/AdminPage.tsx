@@ -403,8 +403,10 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     if (!loading && user) {
       fetchAdminData();
       const interval = setInterval(() => {
-        fetchAdminData();
-      }, 10000);
+        if (document.visibilityState === 'visible') {
+          fetchAdminData();
+        }
+      }, 45000);
       return () => clearInterval(interval);
     }
   }, [loading, user, fetchAdminData]);

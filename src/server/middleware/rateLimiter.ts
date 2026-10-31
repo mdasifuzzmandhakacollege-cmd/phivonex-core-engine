@@ -34,9 +34,12 @@ export function createRateLimiter(options: RateLimitOptions) {
   const { windowMs, max, keyPrefix = 'rl', includeIdentifier = false } = options;
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const ip = req.ip || req.socket.remoteAddress || 'unknown-ip';
+    const forwardedFor = req.headers['x-forwarded-for'];
+    const clientIp = typeof forwardedFor === 'string'
+      ? forwardedFor.split(',')[0].trim()
+      : req.ip || req.socket.remoteAddress || 'unknown-ip';
     const userId = (req as any).user?.id;
-    let key = `${keyPrefix}:${userId || ip}`;
+    let key = `${keyPrefix}:${userId || clientIp}`;
 
     if (includeIdentifier && req.body && req.body.identifier) {
       key += `:${String(req.body.identifier).toLowerCase().trim()}`;
@@ -66,7 +69,7 @@ export function createRateLimiter(options: RateLimitOptions) {
           logSecurityEvent(db, {
             userId: userId || null,
             eventType: 'RATE_LIMIT_EXCEEDED',
-            description: `Rate limit of ${max} requests exceeded for action '${keyPrefix}' (IP: ${ip})`,
+            description: `Rate limit of ${max} requests exceeded for action '${keyPrefix}' (IP: ${clientIp})`,
             userAgent: req.headers['user-agent'],
           }).catch(() => {});
         })
@@ -86,14 +89,14 @@ export function createRateLimiter(options: RateLimitOptions) {
 // 1. General Authentication Rate Limiter
 export const authLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 50,
+  max: 300,
   keyPrefix: 'auth',
 });
 
 // 2. Strict Login Limiter (brute force protection)
 export const loginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 60,
   keyPrefix: 'login',
   includeIdentifier: true,
 });
@@ -101,41 +104,41 @@ export const loginLimiter = createRateLimiter({
 // 3. User Registration Limiter (anti-spam account creation)
 export const registrationLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 15,
+  max: 50,
   keyPrefix: 'reg',
 });
 
 // 4. Password Reset Request Limiter
 export const passwordResetLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
-  max: 5,
+  max: 20,
   keyPrefix: 'pwd_reset',
 });
 
 // 5. Coin Swap Operation Limiter
 export const swapLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 30,
   keyPrefix: 'swap',
 });
 
 // 6. Withdrawal Request Limiter
 export const withdrawalLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 5,
+  max: 20,
   keyPrefix: 'withdrawal',
 });
 
 // 7. Blockchain Deposit Scan Limiter
 export const depositLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 15,
+  max: 60,
   keyPrefix: 'deposit',
 });
 
 // 8. Administrative Financial Actions Limiter
 export const adminFinancialLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 30,
+  max: 120,
   keyPrefix: 'admin_fin',
 });

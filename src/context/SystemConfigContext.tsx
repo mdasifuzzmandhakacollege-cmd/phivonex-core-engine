@@ -54,52 +54,78 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
         fetch('/api/public/network/summary').catch(() => null),
       ]);
 
-      if (platformRes && platformRes.ok) {
-        platformRes.json().then((data) => {
-          if (data && data.success && data.settings) {
-            const s = data.settings;
-            setConfigs((p) => ({
-              ...p,
-              coinPriceUsdt: typeof s.coinPriceUsdt === 'number' ? s.coinPriceUsdt : p.coinPriceUsdt,
-              minWithdrawalAmount: typeof s.minWithdrawalAmount === 'number' ? s.minWithdrawalAmount : p.minWithdrawalAmount,
-              autoWithdrawalEnabled: typeof s.autoWithdrawalEnabled === 'boolean' ? s.autoWithdrawalEnabled : p.autoWithdrawalEnabled,
-              nodeBasePriceUsd: typeof s.nodeBasePriceUsd === 'number' ? s.nodeBasePriceUsd : p.nodeBasePriceUsd,
-              directReferralCommissionRate: typeof s.directReferralCommissionRate === 'number' ? s.directReferralCommissionRate : p.directReferralCommissionRate,
-              cryptoDepositsEnabled: typeof s.cryptoDepositsEnabled === 'boolean' ? s.cryptoDepositsEnabled : p.cryptoDepositsEnabled,
-              cryptoWithdrawalsEnabled: typeof s.cryptoWithdrawalsEnabled === 'boolean' ? s.cryptoWithdrawalsEnabled : p.cryptoWithdrawalsEnabled,
-              internalCoinSwapEnabled: typeof s.internalCoinSwapEnabled === 'boolean' ? s.internalCoinSwapEnabled : p.internalCoinSwapEnabled,
-              nodeRewardsEnabled: typeof s.nodeRewardsEnabled === 'boolean' ? s.nodeRewardsEnabled : p.nodeRewardsEnabled,
-              lastUpdated: new Date().toISOString(),
-            }));
+      const platformData = platformRes && platformRes.ok ? await platformRes.json().catch(() => null) : null;
+      const withdrawalData = withdrawalRes && withdrawalRes.ok ? await withdrawalRes.json().catch(() => null) : null;
+      const networkData = networkRes && networkRes.ok ? await networkRes.json().catch(() => null) : null;
+
+      setConfigs((p) => {
+        let next = { ...p };
+        let changed = false;
+
+        if (platformData && platformData.success && platformData.settings) {
+          const s = platformData.settings;
+          if (typeof s.coinPriceUsdt === 'number' && s.coinPriceUsdt !== next.coinPriceUsdt) {
+            next.coinPriceUsdt = s.coinPriceUsdt;
+            changed = true;
           }
-        }).catch(() => {});
-      }
-
-      setConfigs((prev) => {
-        const next = { ...prev };
-
-        if (withdrawalRes && withdrawalRes.ok) {
-          withdrawalRes.json().then((data) => {
-            if (typeof data.minWithdrawalAmount === 'number' && data.minWithdrawalAmount !== next.minWithdrawalAmount) {
-              setConfigs((p) => ({ ...p, minWithdrawalAmount: data.minWithdrawalAmount }));
-            }
-          }).catch(() => {});
+          if (typeof s.minWithdrawalAmount === 'number' && s.minWithdrawalAmount !== next.minWithdrawalAmount) {
+            next.minWithdrawalAmount = s.minWithdrawalAmount;
+            changed = true;
+          }
+          if (typeof s.autoWithdrawalEnabled === 'boolean' && s.autoWithdrawalEnabled !== next.autoWithdrawalEnabled) {
+            next.autoWithdrawalEnabled = s.autoWithdrawalEnabled;
+            changed = true;
+          }
+          if (typeof s.nodeBasePriceUsd === 'number' && s.nodeBasePriceUsd !== next.nodeBasePriceUsd) {
+            next.nodeBasePriceUsd = s.nodeBasePriceUsd;
+            changed = true;
+          }
+          if (typeof s.directReferralCommissionRate === 'number' && s.directReferralCommissionRate !== next.directReferralCommissionRate) {
+            next.directReferralCommissionRate = s.directReferralCommissionRate;
+            changed = true;
+          }
+          if (typeof s.cryptoDepositsEnabled === 'boolean' && s.cryptoDepositsEnabled !== next.cryptoDepositsEnabled) {
+            next.cryptoDepositsEnabled = s.cryptoDepositsEnabled;
+            changed = true;
+          }
+          if (typeof s.cryptoWithdrawalsEnabled === 'boolean' && s.cryptoWithdrawalsEnabled !== next.cryptoWithdrawalsEnabled) {
+            next.cryptoWithdrawalsEnabled = s.cryptoWithdrawalsEnabled;
+            changed = true;
+          }
+          if (typeof s.internalCoinSwapEnabled === 'boolean' && s.internalCoinSwapEnabled !== next.internalCoinSwapEnabled) {
+            next.internalCoinSwapEnabled = s.internalCoinSwapEnabled;
+            changed = true;
+          }
+          if (typeof s.nodeRewardsEnabled === 'boolean' && s.nodeRewardsEnabled !== next.nodeRewardsEnabled) {
+            next.nodeRewardsEnabled = s.nodeRewardsEnabled;
+            changed = true;
+          }
         }
 
-        if (networkRes && networkRes.ok) {
-          networkRes.json().then((data) => {
-            if (data) {
-              setConfigs((p) => ({
-                ...p,
-                coinPriceUsdt: typeof data.internalCoinPriceUsdt === 'number' ? data.internalCoinPriceUsdt : p.coinPriceUsdt,
-                nodeBasePriceUsd: typeof data.nodeBasePriceUsd === 'number' ? data.nodeBasePriceUsd : p.nodeBasePriceUsd,
-                minWithdrawalAmount: typeof data.minWithdrawalAmount === 'number' ? data.minWithdrawalAmount : p.minWithdrawalAmount,
-                lastUpdated: new Date().toISOString(),
-              }));
-            }
-          }).catch(() => {});
+        if (withdrawalData && typeof withdrawalData.minWithdrawalAmount === 'number' && withdrawalData.minWithdrawalAmount !== next.minWithdrawalAmount) {
+          next.minWithdrawalAmount = withdrawalData.minWithdrawalAmount;
+          changed = true;
         }
 
+        if (networkData) {
+          if (typeof networkData.internalCoinPriceUsdt === 'number' && networkData.internalCoinPriceUsdt !== next.coinPriceUsdt) {
+            next.coinPriceUsdt = networkData.internalCoinPriceUsdt;
+            changed = true;
+          }
+          if (typeof networkData.nodeBasePriceUsd === 'number' && networkData.nodeBasePriceUsd !== next.nodeBasePriceUsd) {
+            next.nodeBasePriceUsd = networkData.nodeBasePriceUsd;
+            changed = true;
+          }
+          if (typeof networkData.minWithdrawalAmount === 'number' && networkData.minWithdrawalAmount !== next.minWithdrawalAmount) {
+            next.minWithdrawalAmount = networkData.minWithdrawalAmount;
+            changed = true;
+          }
+        }
+
+        if (!changed) {
+          return p;
+        }
+        next.lastUpdated = new Date().toISOString();
         return next;
       });
     } catch (err) {
@@ -246,12 +272,14 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
   }, []);
 
-  // 3. Fallback fast poll every 4 seconds to guarantee sync
+  // 3. Fallback poll every 60 seconds when tab is visible (SSE + Firestore handle real-time push)
   useEffect(() => {
     fetchConfigs();
     const interval = setInterval(() => {
-      fetchConfigs();
-    }, 4000);
+      if (document.visibilityState === 'visible') {
+        fetchConfigs();
+      }
+    }, 60000);
 
     const handleSync = () => {
       if (document.visibilityState === 'visible') {

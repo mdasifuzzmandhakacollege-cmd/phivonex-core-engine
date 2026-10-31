@@ -158,10 +158,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   useEffect(() => {
     if (!user) return;
 
-    // 1. Polling interval (every 8 seconds when active)
+    // 1. Polling interval (every 45 seconds when visible; SSE handles instant push)
     const interval = setInterval(() => {
-      fetchUnreadCount();
-    }, 8000);
+      if (document.visibilityState === 'visible') {
+        fetchUnreadCount();
+      }
+    }, 45000);
 
     // 2. Window focus & visibility change trigger instant refresh
     const handleVisibilityOrFocus = () => {

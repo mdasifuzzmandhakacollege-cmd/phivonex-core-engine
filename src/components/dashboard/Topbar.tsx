@@ -69,10 +69,16 @@ export const Topbar: React.FC<TopbarProps> = ({
       }
     };
     fetchBalance();
-    const interval = setInterval(fetchBalance, 10000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchBalance();
+      }
+    }, 45000);
+    window.addEventListener('phivonex:balance-or-tx-updated', fetchBalance);
     return () => {
       isMounted = false;
       clearInterval(interval);
+      window.removeEventListener('phivonex:balance-or-tx-updated', fetchBalance);
     };
   }, []);
 

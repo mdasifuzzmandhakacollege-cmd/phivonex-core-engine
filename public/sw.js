@@ -1,4 +1,4 @@
-const CACHE_NAME = 'phivonex-pwa-v3';
+const CACHE_NAME = 'phivonex-pwa-v4';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -47,19 +47,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-first strategy for HTML document requests (Always ensures fresh index.html)
+  // Network-first strategy for HTML document requests (Always ensures fresh index.html, falls back to cache on 429/5xx)
   if (event.request.mode === 'navigate') {
     event.respondWith(
       fetch(event.request, { cache: 'no-cache' })
-        .then((response) => {
+        .then(async (response) => {
           if (response && response.status === 200) {
             const responseClone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
+            return response;
+          }
+          if (response && (response.status === 429 || response.status >= 500)) {
+            const cached = (await caches.match('/index.html')) || (await caches.match(event.request));
+            if (cached) return cached;
           }
           return response;
         })
-        .catch(() => {
-          return caches.match('/index.html') || caches.match(event.request);
+        .catch(async () => {
+          return (await caches.match('/index.html')) || (await caches.match(event.request));
         })
     );
     return;
