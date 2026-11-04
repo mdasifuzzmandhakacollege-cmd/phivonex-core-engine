@@ -733,9 +733,9 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
   // PHIVO tokens swapped out into USDT/USD via Coin Swap
   const phivoSwapsRes = await db.query<{ phivo_swapped: string | number }>(
     `
-    SELECT COALESCE(SUM(from_amount), 0) AS phivo_swapped
-    FROM coin_swaps
-    WHERE user_id = $1 AND from_asset = 'PHIVO' AND status = 'COMPLETED'
+    SELECT COALESCE(SUM(coin_amount), 0) AS phivo_swapped
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND (direction = 'COIN_TO_USDT' OR direction IS NULL) AND status = 'COMPLETED'
     `,
     [userId]
   );

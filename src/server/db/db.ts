@@ -1171,6 +1171,19 @@ async function initSchema(client: DatabaseClient) {
 
         ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
 
+        CREATE OR REPLACE VIEW coin_swaps AS
+        SELECT 
+          id,
+          user_id,
+          coin_amount AS from_amount,
+          'PHIVO' AS from_asset,
+          usdt_amount AS to_amount,
+          'USDT' AS to_asset,
+          rate_usdt AS rate,
+          status,
+          created_at
+        FROM coin_swap_transactions;
+
         -- Update financial_ledger_entries constraint to support COIN_SWAP, ADMIN_ADJUSTMENT & WALLET_TRANSFER
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
         ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
