@@ -28,6 +28,9 @@ export interface WalletSummaryResponse {
   availableBalance: number;
   mainWalletBalance: number;
   nodeVaultBalance: number;
+  phivoBalance?: number;
+  phivoValueUsdt?: number;
+  phivoTotalEarned?: number;
   transactionCount: number;
   breakdown: {
     referral: number;
@@ -716,12 +719,41 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     }
   }
 
+  // Calculate PHIVO token rewards accrued/claimed from node daily mining
+  const phivoRewardsRes = await db.query<{ phivo_total: string | number }>(
+    `
+    SELECT COALESCE(SUM(amount), 0) AS phivo_total
+    FROM node_rewards
+    WHERE owner_user_id = $1 AND status IN ('ACCRUED', 'CLAIMED')
+    `,
+    [userId]
+  );
+  const totalPhivoRewards = Number(phivoRewardsRes.rows[0]?.phivo_total || 0);
+
+  // PHIVO tokens swapped out into USDT/USD via Coin Swap
+  const phivoSwapsRes = await db.query<{ phivo_swapped: string | number }>(
+    `
+    SELECT COALESCE(SUM(from_amount), 0) AS phivo_swapped
+    FROM coin_swaps
+    WHERE user_id = $1 AND from_asset = 'PHIVO' AND status = 'COMPLETED'
+    `,
+    [userId]
+  );
+  const totalPhivoSwappedOut = Number(phivoSwapsRes.rows[0]?.phivo_swapped || 0);
+  const phivoBalance = Math.max(0, Number((totalPhivoRewards - totalPhivoSwappedOut).toFixed(4)));
+
+  // Fetch current PHIVO conversion rate in USDT
+  const { getInternalCoinPrice } = await import('./economicService');
+  const coinPriceInfo = await getInternalCoinPrice();
+  const phivoRateUsdt = coinPriceInfo.priceUsdt || 0.10;
+  const nodeRewardUsd = Number((phivoBalance * phivoRateUsdt).toFixed(2));
+
   // Net breakdown per channel
   const breakdown = {
     referral: Math.max(0, grossCredits.referral - reversals.referral),
     matching: Math.max(0, grossCredits.matching - reversals.matching),
     promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
-    nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
+    nodeReward: nodeRewardUsd,
     swap: Math.max(0, grossCredits.swap - reversals.swap),
     deposit: Math.max(0, grossCredits.deposit - reversals.deposit),
   };
@@ -778,17 +810,26 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
   const nodeVaultBalance = Math.max(0, nodeVaultCredits - nodeVaultDebits);
   const mainWalletBalance = Math.max(0, ledgerBalance - nodeVaultBalance);
 
+  // Total unified earnings across all protocol income streams (USD + USDT equivalent of PHIVO mining)
+  const unifiedTotalEarned = Math.max(0, Number((breakdown.referral + breakdown.matching + breakdown.promotion + nodeRewardUsd).toFixed(2)));
+
   return {
-    totalEarned,
+    totalEarned: unifiedTotalEarned,
     totalReversed: earningReversals,
     totalWithdrawn: netWithdrawn,
     ledgerBalance,
     availableBalance: ledgerBalance,
     mainWalletBalance,
     nodeVaultBalance,
+    phivoBalance,
+    phivoValueUsdt: nodeRewardUsd,
+    phivoTotalEarned: totalPhivoRewards,
     transactionCount,
     breakdown,
-    grossBreakdown: grossCredits,
+    grossBreakdown: {
+      ...grossCredits,
+      nodeReward: nodeRewardUsd,
+    },
   };
 }
 

@@ -9,6 +9,26 @@ var __export = (target, all) => {
 };
 
 // src/server/utils/idGenerator.ts
+var idGenerator_exports = {};
+__export(idGenerator_exports, {
+  formatSafeDisplayName: () => formatSafeDisplayName,
+  generateDepositPublicId: () => generateDepositPublicId,
+  generateEpochPublicId: () => generateEpochPublicId,
+  generateLedgerTransactionPublicId: () => generateLedgerTransactionPublicId,
+  generateNotificationPublicId: () => generateNotificationPublicId,
+  generateOrderPublicId: () => generateOrderPublicId,
+  generatePromotionBonusPublicId: () => generatePromotionBonusPublicId,
+  generatePublicId: () => generatePublicId,
+  generateReconciliationPublicId: () => generateReconciliationPublicId,
+  generateReferralCode: () => generateReferralCode,
+  generateRewardPublicId: () => generateRewardPublicId,
+  generateSettlementPublicId: () => generateSettlementPublicId,
+  generateSwapPublicId: () => generateSwapPublicId,
+  generateVolumeEventPublicId: () => generateVolumeEventPublicId,
+  generateWithdrawalPublicId: () => generateWithdrawalPublicId,
+  normalizeReferralCode: () => normalizeReferralCode,
+  resolveSponsorUserId: () => resolveSponsorUserId
+});
 import crypto from "crypto";
 function getRandomCode(length = 6) {
   let result = "";
@@ -7560,11 +7580,19 @@ var init_referralConfig = __esm({
 });
 
 // src/server/services/referralCommissionService.ts
+var referralCommissionService_exports = {};
+__export(referralCommissionService_exports, {
+  getUserCommissions: () => getUserCommissions,
+  getUserDirectReferrals: () => getUserDirectReferrals,
+  processNodeActivationCommission: () => processNodeActivationCommission,
+  reconcileUnprocessedReferralCommissions: () => reconcileUnprocessedReferralCommissions,
+  reverseReferralCommission: () => reverseReferralCommission
+});
 import { v4 as uuidv412 } from "uuid";
 async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId) {
   const sponsorRes = await db.query(
     `
-    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id
+    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id, u.pending_referral_code
     FROM users u
     LEFT JOIN user_referrals ur ON u.id = ur.user_id
     WHERE u.id = $1
@@ -7574,7 +7602,28 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
   if (sponsorRes.rows.length === 0) {
     return null;
   }
-  const { sponsor_user_id: sponsorUserId, buyer_public_id: buyerPublicId } = sponsorRes.rows[0];
+  let sponsorUserId = sponsorRes.rows[0].sponsor_user_id;
+  const buyerPublicId = sponsorRes.rows[0].buyer_public_id;
+  const pendingCode = (sponsorRes.rows[0].pending_referral_code || "").trim();
+  if (!sponsorUserId && pendingCode) {
+    try {
+      const { resolveSponsorUserId: resolveSponsorUserId2 } = await Promise.resolve().then(() => (init_idGenerator(), idGenerator_exports));
+      const resolvedSponsorId = await resolveSponsorUserId2(db, pendingCode);
+      if (resolvedSponsorId && resolvedSponsorId !== buyerUserId) {
+        sponsorUserId = resolvedSponsorId;
+        await db.query(
+          `
+          INSERT INTO user_referrals (user_id, referral_code, sponsor_user_id, created_at)
+          VALUES ($1, 'PHX' || floor(random()*90000+10000)::text, $2, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id) DO UPDATE SET sponsor_user_id = EXCLUDED.sponsor_user_id
+          `,
+          [buyerUserId, resolvedSponsorId]
+        );
+      }
+    } catch (err) {
+      console.warn("[ReferralCommission] Error auto-resolving pending sponsor:", err);
+    }
+  }
   if (!sponsorUserId || sponsorUserId === buyerUserId) {
     return null;
   }
@@ -7586,17 +7635,8 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
     return null;
   }
   const sponsorUser = sponsorUserRes.rows[0];
-  const sponsorNodeRes = await db.query(
-    `
-    SELECT COUNT(*)::int AS count 
-    FROM nodes 
-    WHERE owner_user_id = $1 AND status = 'ACTIVE'
-    `,
-    [sponsorUserId]
-  );
-  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
-  if (sponsorActiveNodes === 0) {
-    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
+  if (sponsorUser.status === "DISABLED" || sponsorUser.status === "SUSPENDED") {
+    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} account is ${sponsorUser.status}. Commission skipped.`);
     return null;
   }
   const existingRes = await db.query(
@@ -7638,6 +7678,35 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
   }
   const commissionId = uuidv412();
   const commissionRate = await getDirectReferralCommissionRate();
+  const isOrderUuid = Boolean(orderId && orderId.length === 36 && orderId.includes("-"));
+  let safeOrderId = isOrderUuid ? orderId : null;
+  if (!safeOrderId) {
+    const orderCheck = await db.query(
+      `SELECT id FROM node_orders WHERE node_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [nodeId]
+    );
+    if (orderCheck.rows.length > 0) {
+      safeOrderId = orderCheck.rows[0].id;
+    } else {
+      const dummyOrderId = uuidv412();
+      const dummyPublicOrderId = `PHX-ORD-${Math.floor(1e5 + Math.random() * 899999)}`;
+      await db.query(
+        `
+        INSERT INTO node_orders (
+          id, public_order_id, user_id, node_id, node_number, amount_usd, currency,
+          status, payment_method, payment_reference, reserved_at, expires_at, completed_at, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, 1, 1000.00, 'USD',
+          'COMPLETED', 'DIRECT_ACTIVATION', 'RECONCILED_NODE_ORDER', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT DO NOTHING
+        `,
+        [dummyOrderId, dummyPublicOrderId, buyerUserId, nodeId]
+      );
+      safeOrderId = dummyOrderId;
+    }
+  }
   const insertRes = await db.query(
     `
     INSERT INTO referral_commissions (
@@ -7655,7 +7724,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
       sponsorUserId,
       buyerUserId,
       nodeId,
-      orderId,
+      safeOrderId,
       commissionRate.toFixed(2)
     ]
   );
@@ -7683,7 +7752,7 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
       [
         uuidv412(),
         sponsorUserId,
-        `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
+        `Direct referral commission ${publicCommissionId} ($${row.amount_usd} USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`
       ]
     );
   } catch (secErr) {
@@ -7708,6 +7777,145 @@ async function processNodeActivationCommission(db, orderId, nodeId, buyerUserId)
     earnedAt: row.earned_at.toISOString(),
     reversedAt: null
   };
+}
+async function reconcileUnprocessedReferralCommissions(dbClient) {
+  const db = dbClient || await getDb();
+  const activeNodesRes = await db.query(
+    `
+    SELECT 
+      n.id, 
+      n.owner_user_id, 
+      n.public_node_id,
+      (SELECT id FROM node_orders WHERE node_id = n.id AND user_id = n.owner_user_id ORDER BY created_at DESC LIMIT 1) AS order_id
+    FROM nodes n
+    WHERE n.owner_user_id IS NOT NULL 
+      AND n.status IN ('ACTIVE', 'PURCHASED', 'EMITTING', 'MATURED')
+    `
+  );
+  const comms = [];
+  let reconciledCount = 0;
+  for (const node of activeNodesRes.rows) {
+    const existing = await db.query(
+      `SELECT id FROM referral_commissions WHERE node_id = $1`,
+      [node.id]
+    );
+    if (existing.rows.length === 0) {
+      const comm = await processNodeActivationCommission(
+        db,
+        node.order_id || "AUTO_RECONCILE",
+        node.id,
+        node.owner_user_id
+      );
+      if (comm) {
+        comms.push(comm);
+        reconciledCount++;
+      }
+    }
+  }
+  if (reconciledCount > 0) {
+    console.log(`[ReferralCommission] Successfully auto-reconciled ${reconciledCount} missing referral commissions!`);
+  }
+  return {
+    reconciledCount,
+    commissions: comms
+  };
+}
+async function reverseReferralCommission(commissionIdentifier, reason) {
+  const db = await getDb();
+  const querySql = `
+    SELECT 
+      rc.id, rc.public_commission_id, rc.sponsor_user_id, rc.amount_usd,
+      rc.status, rc.earned_at, rc.reversed_at,
+      n.public_node_id, u.public_id AS buyer_public_id
+    FROM referral_commissions rc
+    JOIN nodes n ON rc.node_id = n.id
+    JOIN users u ON rc.referred_user_id = u.id
+    WHERE rc.id::text = $1 OR rc.public_commission_id = $1
+  `;
+  const comRes = await db.query(querySql, [commissionIdentifier.trim()]);
+  if (comRes.rows.length === 0) {
+    const error = new Error("Referral commission record not found.");
+    error.code = "COMMISSION_NOT_FOUND";
+    error.statusCode = 404;
+    throw error;
+  }
+  const commission = comRes.rows[0];
+  if (commission.status === "REVERSED") {
+    return {
+      publicCommissionId: commission.public_commission_id,
+      referredUserPublicId: commission.buyer_public_id,
+      nodePublicId: commission.public_node_id,
+      amountUsd: Number(commission.amount_usd),
+      status: commission.status,
+      earnedAt: commission.earned_at.toISOString(),
+      reversedAt: commission.reversed_at ? commission.reversed_at.toISOString() : (/* @__PURE__ */ new Date()).toISOString()
+    };
+  }
+  const updateRes = await db.query(
+    `
+    UPDATE referral_commissions
+    SET status = 'REVERSED', reversed_at = CURRENT_TIMESTAMP
+    WHERE id = $1
+    RETURNING id, public_commission_id, status, earned_at, reversed_at
+    `,
+    [commission.id]
+  );
+  const updated = updateRes.rows[0];
+  try {
+    await postLedgerReversal({
+      userId: commission.sponsor_user_id,
+      sourceType: "REFERRAL_COMMISSION",
+      sourceId: commission.id,
+      sourceRef: commission.public_commission_id,
+      amount: Number(commission.amount_usd),
+      description: `Direct Referral Commission Reversal - Node ${commission.public_node_id}`,
+      createdAt: updated.reversed_at ? new Date(updated.reversed_at) : /* @__PURE__ */ new Date()
+    });
+  } catch (ledgErr) {
+    console.warn("[WalletLedger] Error posting referral commission reversal to ledger:", ledgErr);
+  }
+  try {
+    await db.query(
+      `
+      INSERT INTO security_events (id, user_id, event_type, description, created_at)
+      VALUES ($1, $2, 'DIRECT_REFERRAL_COMMISSION_REVERSED', $3, CURRENT_TIMESTAMP)
+      `,
+      [
+        uuidv412(),
+        commission.sponsor_user_id,
+        `Referral commission ${commission.public_commission_id} ($50.00 USD) reversed. Reason: ${reason || "Protocol transaction adjustment"}.`
+      ]
+    );
+  } catch (secErr) {
+    console.warn("[SecurityEvent] Could not log referral commission reversal:", secErr);
+  }
+  return {
+    publicCommissionId: updated.public_commission_id,
+    referredUserPublicId: commission.buyer_public_id,
+    nodePublicId: commission.public_node_id,
+    amountUsd: Number(commission.amount_usd),
+    status: updated.status,
+    earnedAt: updated.earned_at.toISOString(),
+    reversedAt: updated.reversed_at.toISOString()
+  };
+}
+async function getUserDirectReferrals(sponsorUserId) {
+  const db = await getDb();
+  const result = await db.query(
+    `
+    SELECT u.public_id, u.full_name, ur.created_at
+    FROM user_referrals ur
+    JOIN users u ON ur.user_id = u.id
+    WHERE ur.sponsor_user_id = $1
+    ORDER BY ur.created_at DESC
+    `,
+    [sponsorUserId]
+  );
+  return result.rows.map((row) => ({
+    publicId: row.public_id,
+    displayName: formatSafeDisplayName(row.full_name),
+    joinedAt: row.created_at.toISOString()
+  }));
 }
 async function getUserCommissions(sponsorUserId) {
   const db = await getDb();
@@ -12918,9 +13126,10 @@ setInterval(() => {
 function createRateLimiter(options) {
   const { windowMs, max, keyPrefix = "rl", includeIdentifier = false } = options;
   return (req, res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || "unknown-ip";
+    const forwardedFor = req.headers["x-forwarded-for"];
+    const clientIp = typeof forwardedFor === "string" ? forwardedFor.split(",")[0].trim() : req.ip || req.socket.remoteAddress || "unknown-ip";
     const userId = req.user?.id;
-    let key = `${keyPrefix}:${userId || ip}`;
+    let key = `${keyPrefix}:${userId || clientIp}`;
     if (includeIdentifier && req.body && req.body.identifier) {
       key += `:${String(req.body.identifier).toLowerCase().trim()}`;
     }
@@ -12942,7 +13151,7 @@ function createRateLimiter(options) {
         logSecurityEvent(db, {
           userId: userId || null,
           eventType: "RATE_LIMIT_EXCEEDED",
-          description: `Rate limit of ${max} requests exceeded for action '${keyPrefix}' (IP: ${ip})`,
+          description: `Rate limit of ${max} requests exceeded for action '${keyPrefix}' (IP: ${clientIp})`,
           userAgent: req.headers["user-agent"]
         }).catch(() => {
         });
@@ -12959,43 +13168,43 @@ function createRateLimiter(options) {
 }
 var authLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
-  max: 50,
+  max: 300,
   keyPrefix: "auth"
 });
 var loginLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
-  max: 20,
+  max: 60,
   keyPrefix: "login",
   includeIdentifier: true
 });
 var registrationLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
-  max: 15,
+  max: 50,
   keyPrefix: "reg"
 });
 var passwordResetLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1e3,
-  max: 5,
+  max: 20,
   keyPrefix: "pwd_reset"
 });
 var swapLimiter = createRateLimiter({
   windowMs: 60 * 1e3,
-  max: 10,
+  max: 30,
   keyPrefix: "swap"
 });
 var withdrawalLimiter = createRateLimiter({
   windowMs: 60 * 1e3,
-  max: 5,
+  max: 20,
   keyPrefix: "withdrawal"
 });
 var depositLimiter = createRateLimiter({
   windowMs: 60 * 1e3,
-  max: 15,
+  max: 60,
   keyPrefix: "deposit"
 });
 var adminFinancialLimiter = createRateLimiter({
   windowMs: 60 * 1e3,
-  max: 30,
+  max: 120,
   keyPrefix: "admin_fin"
 });
 
@@ -23973,6 +24182,7 @@ async function startServer() {
     console.warn("[CONFIG_WARNING] Production configuration note:", configErr);
   }
   const app = express();
+  app.set("trust proxy", 1);
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3e3;
   const isProd = process.env.NODE_ENV === "production";
   app.use(securityHeadersMiddleware);
@@ -24084,8 +24294,10 @@ async function startServer() {
     try {
       const { seedGenealogyNetworkTree: seedGenealogyNetworkTree2 } = await Promise.resolve().then(() => (init_genealogySeedService(), genealogySeedService_exports));
       await seedGenealogyNetworkTree2();
+      const { reconcileUnprocessedReferralCommissions: reconcileUnprocessedReferralCommissions2 } = await Promise.resolve().then(() => (init_referralCommissionService(), referralCommissionService_exports));
+      await reconcileUnprocessedReferralCommissions2();
     } catch (seedErr) {
-      console.warn("[Server] Genealogy seed startup notice:", seedErr);
+      console.warn("[Server] Genealogy seed & referral commission startup notice:", seedErr);
     }
     startMatchingScheduler();
     startWeeklyReportScheduler();

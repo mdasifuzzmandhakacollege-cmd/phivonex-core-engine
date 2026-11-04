@@ -187,11 +187,27 @@ async function startServer() {
     console.log('[Server] Database and referral migrations initialized.');
     
     // Seed and sync genealogy tree accounts to PostgreSQL, Firebase Auth & Firestore
-    try {
-      const { seedGenealogyNetworkTree } = await import('./src/server/services/genealogySeedService');
-      await seedGenealogyNetworkTree();
-    } catch (seedErr) {
-      console.warn('[Server] Genealogy seed startup notice:', seedErr);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const { seedGenealogyNetworkTree } = await import('./src/server/services/genealogySeedService');
+        await seedGenealogyNetworkTree();
+
+        // Auto-reconcile direct referral commissions for all active node owners
+        const { reconcileUnprocessedReferralCommissions } = await import('./src/server/services/referralCommissionService');
+        await reconcileUnprocessedReferralCommissions();
+        console.log('[Server] Genealogy seed & referral commission startup completed successfully.');
+        break;
+      } catch (seedErr: any) {
+        const msg = seedErr?.message || '';
+        const isConnErr = msg.includes('Connection terminated') || seedErr?.code === '57P01' || msg.includes('socket');
+        if (attempt < 3 && isConnErr) {
+          console.warn(`[Server] Startup genealogy seed attempt ${attempt} interrupted (${msg}). Retrying in 1s...`);
+          await new Promise((r) => setTimeout(r, 1000));
+        } else {
+          console.warn('[Server] Genealogy seed & referral commission startup notice:', seedErr);
+          break;
+        }
+      }
     }
 
     startMatchingScheduler();

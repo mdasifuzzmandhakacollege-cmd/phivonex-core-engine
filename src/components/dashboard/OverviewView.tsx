@@ -33,6 +33,7 @@ import { RewardTrend30DaysChart } from './RewardTrend30DaysChart';
 import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
 import { ActiveOfferCards } from './ActiveOfferCards';
 import { Premium3DFlipCard } from './Premium3DFlipCard';
+import { RecentActivityLog } from './RecentActivityLog';
 import { useSystemConfig } from '../../context/SystemConfigContext';
 import { getTransactionUserDescription } from '../../utils/transactionDisplay';
 
@@ -1099,81 +1100,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
       </div>
 
       {/* ========================================================
-          9. RECENT ACCOUNT ACTIVITY (4-5 Latest Events)
+          9. REAL-TIME RECENT ACTIVITY LOG (Node Activations, Rewards, Commissions)
          ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-white">
-              <Activity className="w-4 h-4 text-[#00CFFF]" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Recent Account Activity</h3>
-              <p className="text-[11px] text-[#98A2B3]">Latest settled transactions and network rewards.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigateTo('wallet')}
-            className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 cursor-pointer transition-colors"
-          >
-            <span>View All Transactions</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        {recentTransactions.length === 0 ? (
-          <div className="py-8 text-center space-y-2">
-            <div className="w-10 h-10 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto text-[#98A2B3]">
-              <Clock className="w-5 h-5" />
-            </div>
-            <p className="text-xs text-[#98A2B3]">No transactions recorded yet.</p>
-            <p className="text-[11px] text-[#667085]">Activate a node or make a deposit to start earning rewards.</p>
-          </div>
-        ) : (
-          <div className="divide-y divide-white/[0.04] overflow-hidden">
-            {recentTransactions.slice(0, 5).map((tx) => {
-              const isCredit = tx.entryType === 'CREDIT';
-              return (
-                <div key={tx.id} className="py-3 flex items-center justify-between gap-3 text-xs">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 border ${
-                        isCredit
-                          ? 'bg-[#32D583]/10 border-[#32D583]/20 text-[#32D583]'
-                          : 'bg-[#F04438]/10 border-[#F04438]/20 text-[#F04438]'
-                      }`}
-                    >
-                      {isCredit ? <ArrowDownLeft className="w-4 h-4" /> : <ArrowUpRight className="w-4 h-4" />}
-                    </div>
-                    <div className="min-w-0">
-                      <span className="text-xs font-semibold text-white block truncate">
-                        {getTransactionUserDescription(tx)}
-                      </span>
-                      <span className="text-[10px] text-[#98A2B3] font-mono block">
-                        {formatDate(tx.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="text-right shrink-0">
-                    <span
-                      className={`text-xs font-mono font-bold block tabular-nums ${
-                        isCredit ? 'text-[#32D583]' : 'text-white'
-                      }`}
-                    >
-                      {isCredit ? '+' : '-'}${formatCurrency(tx.amount)} {tx.currency}
-                    </span>
-                    <span className="text-[10px] font-mono text-[#32D583] inline-flex items-center gap-1">
-                      <span className="w-1 h-1 rounded-full bg-[#32D583]" />
-                      <span>{tx.status}</span>
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      <RecentActivityLog
+        transactions={recentTransactions}
+        onNavigateTab={navigateTo}
+        onRefresh={() => fetchDashboardData(true)}
+        isRefreshing={isRefreshing}
+      />
 
       {/* ========================================================
           10. ACCOUNT PROFILE SNAPSHOT (Compact Clean Footer)

@@ -199,6 +199,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
       }
 
       setClaimSuccessMsg(data.message || 'Accrued rewards claimed successfully.');
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
       await fetchRewardsData(true);
     } catch (err: any) {
       console.error('[RewardsView] Claim failed:', err);

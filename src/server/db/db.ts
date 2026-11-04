@@ -134,18 +134,47 @@ export async function getDb(): Promise<DatabaseClient> {
             ),
           ]);
 
+          async function executeQueryWithRetry<T>(queryFn: () => Promise<T>, maxRetries = 2, delayMs = 300): Promise<T> {
+            let attempt = 0;
+            while (true) {
+              try {
+                return await queryFn();
+              } catch (err: any) {
+                attempt++;
+                const msg = err?.message || '';
+                const code = err?.code || '';
+                const isTransient =
+                  msg.includes('Connection terminated') ||
+                  msg.includes('connection terminated') ||
+                  msg.includes('socket') ||
+                  msg.includes('ECONNRESET') ||
+                  msg.includes('EPIPE') ||
+                  code === '57P01' ||
+                  code === '57P02' ||
+                  code === '57P03';
+
+                if (isTransient && attempt <= maxRetries) {
+                  console.warn(`[DB Retry] Retrying query after connection notice (attempt ${attempt}/${maxRetries}): ${msg}`);
+                  await new Promise((r) => setTimeout(r, delayMs * attempt));
+                  continue;
+                }
+                throw err;
+              }
+            }
+          }
+
           globalThis.__phivonexPool = pool;
 
           client = {
             async query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>> {
-              const res = await pool.query(sql, params);
+              const res = await executeQueryWithRetry(() => pool.query(sql, params));
               return {
                 rows: res.rows as T[],
                 rowCount: res.rowCount ?? res.rows.length,
               };
             },
             async exec(sql: string): Promise<void> {
-              await pool.query(sql);
+              await executeQueryWithRetry(() => pool.query(sql));
             },
             async transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
               const pgClient = await pool.connect();

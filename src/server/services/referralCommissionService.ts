@@ -41,19 +41,29 @@ export interface UserCommissionsResponse {
  * - If buyer has no sponsor, returns null with no error.
  * - Amount is strictly server-authoritative ($50 USD).
  */
+/**
+ * Processes and creates a Direct Referral Commission upon successful Node activation.
+ * Triggered authoritatively after verified payment settlement or node allocation.
+ * 
+ * Rules:
+ * - Buyer must have a valid sponsor_user_id (or pending_referral_code).
+ * - Commission for this exact node_id must not already exist (UNIQUE per node).
+ * - Amount is strictly server-authoritative ($25/$50 USD based on economic settings).
+ */
 export async function processNodeActivationCommission(
   db: DatabaseClient,
   orderId: string,
   nodeId: string,
   buyerUserId: string
 ): Promise<SafeReferralCommission | null> {
-  // 1. Check if buyer has a registered sponsor
+  // 1. Check if buyer has a registered sponsor in user_referrals
   const sponsorRes = await db.query<{
     sponsor_user_id: string | null;
     buyer_public_id: string;
+    pending_referral_code: string | null;
   }>(
     `
-    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id
+    SELECT ur.sponsor_user_id, u.public_id AS buyer_public_id, u.pending_referral_code
     FROM users u
     LEFT JOIN user_referrals ur ON u.id = ur.user_id
     WHERE u.id = $1
@@ -65,7 +75,30 @@ export async function processNodeActivationCommission(
     return null;
   }
 
-  const { sponsor_user_id: sponsorUserId, buyer_public_id: buyerPublicId } = sponsorRes.rows[0];
+  let sponsorUserId = sponsorRes.rows[0].sponsor_user_id;
+  const buyerPublicId = sponsorRes.rows[0].buyer_public_id;
+  const pendingCode = (sponsorRes.rows[0].pending_referral_code || '').trim();
+
+  // 1b. Auto-resolve missing sponsor from pending_referral_code if available
+  if (!sponsorUserId && pendingCode) {
+    try {
+      const { resolveSponsorUserId } = await import('../utils/idGenerator');
+      const resolvedSponsorId = await resolveSponsorUserId(db, pendingCode);
+      if (resolvedSponsorId && resolvedSponsorId !== buyerUserId) {
+        sponsorUserId = resolvedSponsorId;
+        await db.query(
+          `
+          INSERT INTO user_referrals (user_id, referral_code, sponsor_user_id, created_at)
+          VALUES ($1, 'PHX' || floor(random()*90000+10000)::text, $2, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id) DO UPDATE SET sponsor_user_id = EXCLUDED.sponsor_user_id
+          `,
+          [buyerUserId, resolvedSponsorId]
+        );
+      }
+    } catch (err) {
+      console.warn('[ReferralCommission] Error auto-resolving pending sponsor:', err);
+    }
+  }
 
   // If no sponsor registered or self-referral, no commission is generated
   if (!sponsorUserId || sponsorUserId === buyerUserId) {
@@ -88,18 +121,9 @@ export async function processNodeActivationCommission(
 
   const sponsorUser = sponsorUserRes.rows[0];
 
-  // 2b. Validate that sponsor has at least one ACTIVE Genesis Node (Upline active node requirement)
-  const sponsorNodeRes = await db.query<{ count: string | number }>(
-    `
-    SELECT COUNT(*)::int AS count 
-    FROM nodes 
-    WHERE owner_user_id = $1 AND status = 'ACTIVE'
-    `,
-    [sponsorUserId]
-  );
-  const sponsorActiveNodes = Number(sponsorNodeRes.rows[0]?.count || 0);
-  if (sponsorActiveNodes === 0) {
-    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} has no active Genesis Node. Direct referral commission skipped.`);
+  // Block disabled or suspended sponsors
+  if (sponsorUser.status === 'DISABLED' || sponsorUser.status === 'SUSPENDED') {
+    console.warn(`[ReferralCommission] Sponsor ${sponsorUserId} account is ${sponsorUser.status}. Commission skipped.`);
     return null;
   }
 
@@ -161,6 +185,37 @@ export async function processNodeActivationCommission(
   const commissionRate = await getDirectReferralCommissionRate();
 
   // 6. Insert Authoritative Commission Record
+  const isOrderUuid = Boolean(orderId && orderId.length === 36 && orderId.includes('-'));
+  let safeOrderId = isOrderUuid ? orderId : null;
+
+  if (!safeOrderId) {
+    const orderCheck = await db.query<{ id: string }>(
+      `SELECT id FROM node_orders WHERE node_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [nodeId]
+    );
+    if (orderCheck.rows.length > 0) {
+      safeOrderId = orderCheck.rows[0].id;
+    } else {
+      const dummyOrderId = uuidv4();
+      const dummyPublicOrderId = `PHX-ORD-${Math.floor(100000 + Math.random() * 899999)}`;
+      await db.query(
+        `
+        INSERT INTO node_orders (
+          id, public_order_id, user_id, node_id, node_number, amount_usd, currency,
+          status, payment_method, payment_reference, reserved_at, expires_at, completed_at, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, 1, 1000.00, 'USD',
+          'COMPLETED', 'DIRECT_ACTIVATION', 'RECONCILED_NODE_ORDER', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+        ON CONFLICT DO NOTHING
+        `,
+        [dummyOrderId, dummyPublicOrderId, buyerUserId, nodeId]
+      );
+      safeOrderId = dummyOrderId;
+    }
+  }
+
   const insertRes = await db.query<{
     id: string;
     public_commission_id: string;
@@ -185,7 +240,7 @@ export async function processNodeActivationCommission(
       sponsorUserId,
       buyerUserId,
       nodeId,
-      orderId,
+      safeOrderId,
       commissionRate.toFixed(2),
     ]
   );
@@ -218,14 +273,14 @@ export async function processNodeActivationCommission(
       [
         uuidv4(),
         sponsorUserId,
-        `Direct referral commission ${publicCommissionId} ($50.00 USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`,
+        `Direct referral commission ${publicCommissionId} ($${row.amount_usd} USD) credited for referred buyer ${buyerPublicId} activating Genesis Node ${nodePublicId}.`,
       ]
     );
   } catch (secErr) {
     console.warn('[SecurityEvent] Could not log referral commission event:', secErr);
   }
 
-  // Task #20: Trigger in-app notification for referral commission
+  // 9. Trigger in-app notification for referral commission
   try {
     await notifyReferralEarned({
       userId: sponsorUserId,
@@ -245,6 +300,67 @@ export async function processNodeActivationCommission(
     status: row.status,
     earnedAt: row.earned_at.toISOString(),
     reversedAt: null,
+  };
+}
+
+/**
+ * Scans all active/allocated nodes and auto-reconciles any missing direct referral commissions.
+ * Guarantees zero missed commissions across database seeding, admin assignments, or rollout restarts.
+ */
+export async function reconcileUnprocessedReferralCommissions(dbClient?: DatabaseClient): Promise<{
+  reconciledCount: number;
+  commissions: SafeReferralCommission[];
+}> {
+  const db = dbClient || (await getDb());
+  const activeNodesRes = await db.query<{
+    id: string;
+    owner_user_id: string;
+    public_node_id: string;
+    order_id: string | null;
+  }>(
+    `
+    SELECT 
+      n.id, 
+      n.owner_user_id, 
+      n.public_node_id,
+      (SELECT id FROM node_orders WHERE node_id = n.id AND user_id = n.owner_user_id ORDER BY created_at DESC LIMIT 1) AS order_id
+    FROM nodes n
+    WHERE n.owner_user_id IS NOT NULL 
+      AND n.status IN ('ACTIVE', 'PURCHASED', 'EMITTING', 'MATURED')
+    `
+  );
+
+  const comms: SafeReferralCommission[] = [];
+  let reconciledCount = 0;
+
+  for (const node of activeNodesRes.rows) {
+    // Check if commission already exists for this exact node
+    const existing = await db.query(
+      `SELECT id FROM referral_commissions WHERE node_id = $1`,
+      [node.id]
+    );
+
+    if (existing.rows.length === 0) {
+      const comm = await processNodeActivationCommission(
+        db,
+        node.order_id || 'AUTO_RECONCILE',
+        node.id,
+        node.owner_user_id
+      );
+      if (comm) {
+        comms.push(comm);
+        reconciledCount++;
+      }
+    }
+  }
+
+  if (reconciledCount > 0) {
+    console.log(`[ReferralCommission] Successfully auto-reconciled ${reconciledCount} missing referral commissions!`);
+  }
+
+  return {
+    reconciledCount,
+    commissions: comms,
   };
 }
 
