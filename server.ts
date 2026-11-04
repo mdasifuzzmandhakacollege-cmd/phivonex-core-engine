@@ -195,6 +195,11 @@ async function startServer() {
         // Auto-reconcile direct referral commissions for all active node owners
         const { reconcileUnprocessedReferralCommissions } = await import('./src/server/services/referralCommissionService');
         await reconcileUnprocessedReferralCommissions();
+
+        // Auto-reconcile wallet ledgers for all users in the system
+        const { reconcileAllUserBalances } = await import('./src/server/services/walletLedgerService');
+        await reconcileAllUserBalances();
+
         console.log('[Server] Genealogy seed & referral commission startup completed successfully.');
         break;
       } catch (seedErr: any) {

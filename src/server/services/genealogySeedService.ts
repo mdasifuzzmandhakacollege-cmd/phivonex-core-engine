@@ -469,20 +469,7 @@ export async function seedGenealogyNetworkTree(
     const spotSourceUuid = deterministicUuid(`SEED-SPOT-COMM:${user.id}`);
     const extraBalSourceUuid = deterministicUuid(`SEED-EXTRA-BAL:${user.id}`);
 
-    // Also remove any legacy unspent ADMIN_ADJUSTMENT seed credits from older seed versions
-    await db.query(
-      `DELETE FROM financial_ledger_entries
-       WHERE user_id = $1
-         AND source_type = 'ADMIN_ADJUSTMENT'
-         AND (
-           source_ref LIKE 'GENEALOGY-INIT-%'
-           OR source_ref LIKE 'SEED-%'
-           OR description LIKE 'Initial Node & Affiliate Wallet Balance%'
-           OR description LIKE '%Mother%Seed%'
-           OR amount = 10000
-         )`,
-      [user.id]
-    );
+    // Retain all ledger entries immutably across restarts and deployments
 
     if (spec.nodeStatus === 'ACTIVE') {
       // 1. Check if user already has an ACTIVE node
@@ -722,11 +709,6 @@ export async function seedGenealogyNetworkTree(
           spotAmount,
         ]
       );
-    } else {
-      await db.query(
-        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
-        [user.id, spotSourceUuid]
-      );
     }
 
     // Optional Extra Spendable Wallet Balance (if admin sets extraWalletBalanceUsd > 0)
@@ -751,11 +733,6 @@ export async function seedGenealogyNetworkTree(
           `Admin Master Map Wallet Credit ($${extraBalAmount.toFixed(2)} USD)`,
           extraBalAmount,
         ]
-      );
-    } else {
-      await db.query(
-        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
-        [user.id, extraBalSourceUuid]
       );
     }
 
