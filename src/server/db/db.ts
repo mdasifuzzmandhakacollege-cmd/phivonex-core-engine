@@ -88,7 +88,7 @@ export async function getDb(): Promise<DatabaseClient> {
           const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || databaseUrl.startsWith('/');
           let pool: Pool;
           const poolConfig = {
-            connectionTimeoutMillis: 3000,
+            connectionTimeoutMillis: 10000,
             idleTimeoutMillis: 30000,
             max: 20,
             keepAlive: true,
@@ -130,7 +130,7 @@ export async function getDb(): Promise<DatabaseClient> {
           await Promise.race([
             pool.query('SELECT 1'),
             new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('PostgreSQL connection probe timeout (3000ms)')), 3000)
+              setTimeout(() => reject(new Error('PostgreSQL connection probe timeout (10000ms)')), 10000)
             ),
           ]);
 
