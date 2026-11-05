@@ -5,6 +5,7 @@ import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { getWalletSummary } from './walletLedgerService';
 import { getUserCoinBalance } from './coinSwapService';
 import { createNotification, notificationEmitter } from './notificationService';
+import { needAffiliateReconciliation, reconcileSpecificAffiliateAccounts } from './affiliateAutoReconcileService';
 
 export interface AdminSummaryMetrics {
   totalUsers: number;
@@ -114,6 +115,13 @@ export async function logAdminAction(params: {
  */
 export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
   const db = await getDb();
+
+  // On-demand reconciliation for key affiliate accounts so metrics and nodes are always 100% accurate
+  try {
+    if (await needAffiliateReconciliation(db)) {
+      await reconcileSpecificAffiliateAccounts(db);
+    }
+  } catch (_reconcileErr) {}
 
   const [
     usersRes,
@@ -239,6 +247,14 @@ export async function getAdminUsersList(
   statusFilter?: string
 ): Promise<{ users: AdminUserItem[]; pagination: { page: number; limit: number; totalCount: number; totalPages: number } }> {
   const db = await getDb();
+
+  // On-demand reconciliation: guarantees target accounts never show 0 nodes or missing sponsor
+  try {
+    if (await needAffiliateReconciliation(db)) {
+      await reconcileSpecificAffiliateAccounts(db);
+    }
+  } catch (_reconcileErr) {}
+
   const safePage = Math.max(1, page);
   const safeLimit = Math.min(100, Math.max(1, limit));
   const offset = (safePage - 1) * safeLimit;

@@ -200,6 +200,10 @@ async function startServer() {
         const { reconcileAllUserBalances } = await import('./src/server/services/walletLedgerService');
         await reconcileAllUserBalances();
 
+        // Auto-reconcile specific affiliate accounts (Maya & Samrat)
+        const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
+        await reconcileSpecificAffiliateAccounts();
+
         console.log('[Server] Genealogy seed & referral commission startup completed successfully.');
         break;
       } catch (seedErr: any) {
@@ -226,7 +230,16 @@ async function startServer() {
       );
     }, 60000);
   }).catch((err) => {
-    console.error('[Server] Failed to initialize database on startup:', err);
+    console.error('[Server] Initial database connection delay on boot:', err?.message || err);
+    // Retry initialization in 3 seconds to recover if Cloud SQL socket took time to mount
+    setTimeout(() => {
+      getDb()
+        .then(async () => {
+          const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
+          await reconcileSpecificAffiliateAccounts();
+        })
+        .catch((retryErr) => console.warn('[Server] DB retry initialization notice:', retryErr?.message || retryErr));
+    }, 3000);
   });
 }
 

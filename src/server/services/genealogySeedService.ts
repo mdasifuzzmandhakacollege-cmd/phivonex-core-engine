@@ -9,6 +9,7 @@ import {
 } from '../../config/affiliateMasterMap';
 import { propagateNodeSalesVolume } from './binaryVolumeService';
 import { getNetworkTree, TreeNode } from './binaryPlacementService';
+import { reconcileSpecificAffiliateAccounts } from './affiliateAutoReconcileService';
 
 export type GenealogyNodeSpec = AffiliateMasterNodeSpec;
 
@@ -757,6 +758,11 @@ export async function seedGenealogyNetworkTree(
       firebaseSynced: user.firebaseSynced,
     });
   }
+
+  // Guarantees Talukder Maya & Nomadic Samrat specific accounts are reconciled
+  try {
+    await reconcileSpecificAffiliateAccounts(db);
+  } catch (_recErr) {}
 
   return {
     success: true,
