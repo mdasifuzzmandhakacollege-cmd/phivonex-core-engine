@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { getDb } from '../db/db';
 import { requireAdmin, AuthRequest } from '../middleware/authMiddleware';
 import { adminFinancialLimiter } from '../middleware/rateLimiter';
 import {
@@ -18,6 +19,9 @@ import {
   revokeUserSessions,
   assignUserSponsor,
   sendUserAuditReportEmail,
+  adminActivateNodeForUser,
+  adminCreditReferralCommissionForUser,
+  adminCreditMiningRewardForUser,
 } from '../services/adminService';
 import { settleWithdrawalAction } from '../services/withdrawalService';
 import {
@@ -1236,6 +1240,174 @@ adminRouter.post('/network/seed-genealogy', async (req: AuthRequest, res: Respon
   } catch (err: any) {
     console.error('[Admin API] Error seeding genealogy tree:', err);
     return res.status(500).json({ error: 'SERVER_ERROR', message: 'Failed to seed genealogy tree.' });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/impersonate
+ * Admin logs in as the specified user (impersonation), generating a fresh session cookie for that user.
+ */
+adminRouter.post('/users/:userId/impersonate', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+
+    const db = await getDb();
+    const userRes = await db.query(
+      `SELECT id, public_id, email, full_name, status FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: 'USER_NOT_FOUND', message: 'Target user account not found.' });
+    }
+
+    const targetUser = userRes.rows[0];
+
+    const { randomBytes, createHash } = await import('crypto');
+    const rawSessionToken = randomBytes(32).toString('hex');
+    const tokenHash = createHash('sha256').update(rawSessionToken).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await db.query(
+      `INSERT INTO sessions (user_id, token_hash, expires_at, user_agent, ip_address) VALUES ($1, $2, $3, $4, $5)`,
+      [
+        targetUser.id,
+        tokenHash,
+        expiresAt.toISOString(),
+        req.headers['user-agent'] || 'Admin Impersonator',
+        (req.headers['x-forwarded-for'] as string) || req.ip || '',
+      ]
+    );
+
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: 'ADMIN_IMPERSONATE_USER',
+      targetType: 'user',
+      targetId: targetUser.id,
+      details: `Admin ${admin.public_id} (${admin.email}) impersonated user ${targetUser.public_id} (${targetUser.email}).`,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    res.cookie('phx_session', rawSessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully impersonated user ${targetUser.full_name} (${targetUser.public_id})`,
+      user: {
+        id: targetUser.id,
+        publicId: targetUser.public_id,
+        email: targetUser.email,
+        fullName: targetUser.full_name,
+      },
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error impersonating user:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: err.message || 'Failed to impersonate user.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/actions/activate-node
+ * Force activate a Genesis Node for user.
+ */
+adminRouter.post('/users/:userId/actions/activate-node', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+
+    const result = await adminActivateNodeForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      reason,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json({
+      ...result,
+      message: `Successfully activated Genesis Node #${result.nodeNumber} (${result.publicNodeId}) for user.`,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error activating node:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to activate node.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/actions/credit-referral
+ * Manually credit referral / spot commission for user.
+ */
+adminRouter.post('/users/:userId/actions/credit-referral', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { amountUsd, reason } = req.body || {};
+
+    const result = await adminCreditReferralCommissionForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      amountUsd: Number(amountUsd),
+      reason,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json({
+      ...result,
+      message: `Successfully credited $${amountUsd} referral commission to user wallet.`,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error crediting referral commission:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to credit referral commission.',
+    });
+  }
+});
+
+/**
+ * POST /api/admin/users/:userId/actions/credit-reward
+ * Manually credit mining reward (PHIVO) for user.
+ */
+adminRouter.post('/users/:userId/actions/credit-reward', async (req: AuthRequest, res: Response) => {
+  try {
+    const admin = req.user!;
+    const { userId } = req.params;
+    const { amountPhivo, reason } = req.body || {};
+
+    const result = await adminCreditMiningRewardForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      amountPhivo: Number(amountPhivo),
+      reason,
+      ipAddress: (req.headers['x-forwarded-for'] as string) || req.ip,
+    });
+
+    return res.status(200).json({
+      ...result,
+      message: `Successfully credited ${amountPhivo} PHIVO mining reward to user wallet.`,
+    });
+  } catch (err: any) {
+    console.error('[Admin API] Error crediting mining reward:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || 'SERVER_ERROR',
+      message: err.message || 'Failed to credit mining reward.',
+    });
   }
 });
 

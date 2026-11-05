@@ -185,7 +185,7 @@ export const DEFAULT_AFFILIATE_MASTER_MAP: AffiliateMasterNodeSpec[] = [
     side: 'LEFT',
     nodeStatus: 'ACTIVE',
     nodePriceUsd: 1000,
-    spotCommissionUsd: 50,
+    spotCommissionUsd: 0,
     extraWalletBalanceUsd: 0,
   },
   {
@@ -198,7 +198,7 @@ export const DEFAULT_AFFILIATE_MASTER_MAP: AffiliateMasterNodeSpec[] = [
     side: 'LEFT',
     nodeStatus: 'ACTIVE',
     nodePriceUsd: 1000,
-    spotCommissionUsd: 50,
+    spotCommissionUsd: 0,
     extraWalletBalanceUsd: 0,
   },
 ];

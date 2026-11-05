@@ -160,6 +160,927 @@ var init_nodeConfig = __esm({
   }
 });
 
+// firebase-applet-config.json
+var firebase_applet_config_default;
+var init_firebase_applet_config = __esm({
+  "firebase-applet-config.json"() {
+    firebase_applet_config_default = {
+      projectId: "phivonex-core-engine",
+      appId: "1:812162791451:web:5a7080d8adbbae062860be",
+      apiKey: "AIzaSyDNhDHo4gRRjrrH8r7u6IHDqf9euPGtmX8",
+      authDomain: "phivonex-core-engine.firebaseapp.com",
+      firestoreDatabaseId: "ai-studio-phivonex-fed0bbbd-87e6-4cf5-baa9-e4b72873cc9a",
+      storageBucket: "phivonex-core-engine.firebasestorage.app",
+      messagingSenderId: "812162791451",
+      measurementId: "",
+      oAuthClientId: "812162791451-2gt6ce4599bck3320heji3itu4ku5j12.apps.googleusercontent.com",
+      recaptchaSiteKey: ""
+    };
+  }
+});
+
+// src/lib/firebase-admin.ts
+var firebase_admin_exports = {};
+__export(firebase_admin_exports, {
+  adminApp: () => adminApp,
+  adminAuth: () => adminAuth,
+  adminFirestore: () => adminFirestore,
+  adminMessaging: () => adminMessaging
+});
+import { initializeApp, getApps } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+import { getMessaging } from "firebase-admin/messaging";
+function shouldTripCircuit(err) {
+  const msg = String(err?.message || err || "");
+  return err?.code === 7 || err?.code === 16 || msg.includes("PERMISSION_DENIED") || msg.includes("Could not load the default credentials") || msg.includes("insufficient authentication scopes");
+}
+function createSafeDocProxy(docPath) {
+  return {
+    set: async (data, options) => {
+      if (!firestoreCircuitBroken) {
+        try {
+          return await rawFirestore.doc(docPath).set(data, options);
+        } catch (err) {
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
+          return { id: docPath };
+        }
+      }
+      return { id: docPath };
+    },
+    get: async () => {
+      if (!firestoreCircuitBroken) {
+        try {
+          return await rawFirestore.doc(docPath).get();
+        } catch (err) {
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
+          return { exists: false, data: () => null, id: docPath };
+        }
+      }
+      return { exists: false, data: () => null, id: docPath };
+    },
+    delete: async () => {
+      if (!firestoreCircuitBroken) {
+        try {
+          return await rawFirestore.doc(docPath).delete();
+        } catch (err) {
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
+          return {};
+        }
+      }
+      return {};
+    }
+  };
+}
+function createSafeCollectionProxy(colName) {
+  return {
+    doc: (docId) => createSafeDocProxy(`${colName}/${docId || "auto_id"}`),
+    get: async () => {
+      if (!firestoreCircuitBroken) {
+        try {
+          return await rawFirestore.collection(colName).get();
+        } catch (err) {
+          if (shouldTripCircuit(err)) {
+            firestoreCircuitBroken = true;
+          }
+          return { empty: true, docs: [], size: 0 };
+        }
+      }
+      return { empty: true, docs: [], size: 0 };
+    }
+  };
+}
+var isTestEnvironment, firestoreCircuitBroken, authCircuitBroken, adminApp, rawAuth, rawMessaging, rawFirestore, adminFirestore, adminAuth, adminMessaging;
+var init_firebase_admin = __esm({
+  "src/lib/firebase-admin.ts"() {
+    init_firebase_applet_config();
+    isTestEnvironment = process.env.NODE_ENV === "test" || Boolean(process.env.PGLITE_DATA_DIR) || Boolean(process.env.CI) || process.env.NO_FIRESTORE_SYNC === "1";
+    firestoreCircuitBroken = isTestEnvironment;
+    authCircuitBroken = isTestEnvironment;
+    if (!getApps().length) {
+      adminApp = initializeApp({
+        projectId: firebase_applet_config_default.projectId
+      });
+    } else {
+      adminApp = getApps()[0];
+    }
+    rawAuth = getAuth(adminApp);
+    rawMessaging = getMessaging(adminApp);
+    rawFirestore = getFirestore(
+      adminApp,
+      firebase_applet_config_default.firestoreDatabaseId && firebase_applet_config_default.firestoreDatabaseId !== "(default)" ? firebase_applet_config_default.firestoreDatabaseId : void 0
+    );
+    adminFirestore = {
+      collection: (colName) => createSafeCollectionProxy(colName),
+      doc: (docPath) => createSafeDocProxy(docPath)
+    };
+    adminAuth = {
+      createUser: async (properties) => {
+        if (!authCircuitBroken) {
+          try {
+            return await rawAuth.createUser(properties);
+          } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
+            return { uid: properties.uid || "mock-uid" };
+          }
+        }
+        return { uid: properties.uid || "mock-uid" };
+      },
+      updateUser: async (uid, properties) => {
+        if (!authCircuitBroken) {
+          try {
+            return await rawAuth.updateUser(uid, properties);
+          } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
+            return { uid };
+          }
+        }
+        return { uid };
+      },
+      getUser: async (uid) => {
+        if (!authCircuitBroken) {
+          try {
+            return await rawAuth.getUser(uid);
+          } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
+            return null;
+          }
+        }
+        return null;
+      },
+      getUserByEmail: async (email) => {
+        if (!authCircuitBroken) {
+          try {
+            return await rawAuth.getUserByEmail(email);
+          } catch (err) {
+            if (shouldTripCircuit(err)) {
+              authCircuitBroken = true;
+            }
+            return null;
+          }
+        }
+        return null;
+      }
+    };
+    adminMessaging = rawMessaging;
+  }
+});
+
+// src/server/services/publicNetworkService.ts
+import { EventEmitter } from "events";
+async function getPublicNetworkSummary() {
+  const db = await getDb();
+  const nodeCountRes = await db.query(
+    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
+  );
+  let activeNodes = 0;
+  let reservedNodes = 0;
+  let availableNodes = 0;
+  let retiredNodes = 0;
+  for (const row of nodeCountRes.rows) {
+    const cnt = Number(row.count || 0);
+    if (row.status === "ACTIVE") activeNodes = cnt;
+    else if (row.status === "RESERVED") reservedNodes = cnt;
+    else if (row.status === "AVAILABLE") availableNodes = cnt;
+    else if (row.status === "RETIRED") retiredNodes = cnt;
+  }
+  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
+  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
+    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
+  }
+  const allocatedNodes = activeNodes + reservedNodes;
+  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
+  const epochRes = await db.query(
+    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
+  );
+  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
+  const txnRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
+  );
+  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
+  let conversionRateUsd = null;
+  try {
+    const configRes = await db.query(
+      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
+    );
+    if (configRes.rows.length > 0 && configRes.rows[0].status === "ACTIVE") {
+      const valStr = configRes.rows[0].config_value;
+      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
+      if (val && typeof val.priceUsdt === "number" && val.priceUsdt > 0) {
+        conversionRateUsd = val.priceUsdt;
+      }
+    }
+  } catch (err) {
+    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
+  }
+  let networkStatus = "OPERATIONAL";
+  try {
+    await db.query("SELECT 1");
+  } catch {
+    networkStatus = "DEGRADED";
+  }
+  return {
+    genesisNodeCap: GENESIS_NODE_CAP,
+    activeNodes,
+    reservedNodes,
+    availableNodes,
+    retiredNodes,
+    allocationPercent,
+    currentRewardEpoch,
+    totalNetworkTransactions,
+    networkStatus,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    conversionRateUsd
+  };
+}
+async function getPublicNetworkEvents(limit = 20) {
+  const db = await getDb();
+  const events = [];
+  try {
+    const activeNodesRes = await db.query(
+      `SELECT public_node_id, activated_at 
+       FROM nodes 
+       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
+       ORDER BY activated_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of activeNodesRes.rows) {
+      const ts = new Date(row.activated_at).toISOString();
+      events.push({
+        id: `evt-node-${row.public_node_id}`,
+        type: "node.activated",
+        title: `${row.public_node_id} Activated`,
+        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_node_id
+      });
+    }
+    const epochRes = await db.query(
+      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
+       FROM reward_epochs 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of epochRes.rows) {
+      const ts = new Date(row.settled_at || row.created_at).toISOString();
+      events.push({
+        id: `evt-epoch-${row.public_epoch_id}`,
+        type: "reward.epoch.completed",
+        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
+        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
+        timestamp: ts,
+        publicId: row.public_epoch_id
+      });
+    }
+    const matchingRes = await db.query(
+      `SELECT public_settlement_id, business_date, settled_at 
+       FROM binary_matching_settlements 
+       WHERE status = 'COMPLETED' 
+       ORDER BY settled_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of matchingRes.rows) {
+      const ts = new Date(row.settled_at).toISOString();
+      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
+      events.push({
+        id: `evt-match-${row.public_settlement_id}`,
+        type: "matching.completed",
+        title: `Matching Settlement Completed`,
+        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
+        timestamp: ts,
+        publicId: row.public_settlement_id
+      });
+    }
+    const promoRes = await db.query(
+      `SELECT public_bonus_id, milestone, qualified_at 
+       FROM promotion_bonuses 
+       WHERE status = 'EARNED' 
+       ORDER BY qualified_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of promoRes.rows) {
+      const ts = new Date(row.qualified_at).toISOString();
+      events.push({
+        id: `evt-promo-${row.public_bonus_id}`,
+        type: "promotion.earned",
+        title: `Promotion Milestone (${row.milestone}) Qualified`,
+        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
+        timestamp: ts,
+        publicId: row.public_bonus_id
+      });
+    }
+    const fleRes = await db.query(
+      `SELECT public_txn_id, source_type, created_at 
+       FROM financial_ledger_entries 
+       ORDER BY created_at DESC 
+       LIMIT $1`,
+      [limit]
+    );
+    for (const row of fleRes.rows) {
+      const ts = new Date(row.created_at).toISOString();
+      events.push({
+        id: `evt-fle-${row.public_txn_id}`,
+        type: "ledger.checkpoint",
+        title: `Ledger Checkpoint ${row.public_txn_id}`,
+        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
+        timestamp: ts,
+        publicId: row.public_txn_id
+      });
+    }
+    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    return events.slice(0, limit);
+  } catch (err) {
+    console.error("[PublicNetworkService] Error fetching public network events:", err);
+    return [];
+  }
+}
+function broadcastPublicEvent(event) {
+  publicNetworkEventEmitter.emit("networkEvent", event);
+}
+var publicNetworkEventEmitter;
+var init_publicNetworkService = __esm({
+  "src/server/services/publicNetworkService.ts"() {
+    init_db();
+    init_nodeConfig();
+    publicNetworkEventEmitter = new EventEmitter();
+    publicNetworkEventEmitter.setMaxListeners(100);
+  }
+});
+
+// src/server/services/systemConfigBroadcaster.ts
+async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
+  const normalizedKey = key.toUpperCase();
+  if (process.env.NODE_ENV === "test" || process.env.APP_ENV === "test") {
+    try {
+      publicNetworkEventEmitter.emit("networkEvent", {
+        type: "system_config",
+        key: normalizedKey,
+        value,
+        category,
+        updatedAt: timestamp
+      });
+    } catch (sseErr) {
+      console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+    }
+    return;
+  }
+  try {
+    await adminFirestore.collection("system_settings").doc("configs").set(
+      {
+        [normalizedKey]: value,
+        updatedAt: timestamp,
+        lastUpdatedKey: normalizedKey
+      },
+      { merge: true }
+    );
+    if (normalizedKey.includes("WITHDRAWAL")) {
+      await adminFirestore.collection("system_settings").doc("withdrawals").set(
+        {
+          [normalizedKey]: value,
+          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
+          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
+      await adminFirestore.collection("system_settings").doc("economic").set(
+        {
+          [normalizedKey]: value,
+          updatedAt: timestamp
+        },
+        { merge: true }
+      );
+    }
+  } catch (fsErr) {
+    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
+  }
+  try {
+    publicNetworkEventEmitter.emit("networkEvent", {
+      type: "system_config",
+      key: normalizedKey,
+      value,
+      category,
+      updatedAt: timestamp
+    });
+  } catch (sseErr) {
+    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
+  }
+}
+var init_systemConfigBroadcaster = __esm({
+  "src/server/services/systemConfigBroadcaster.ts"() {
+    init_firebase_admin();
+    init_publicNetworkService();
+  }
+});
+
+// src/server/services/economicService.ts
+var economicService_exports = {};
+__export(economicService_exports, {
+  getAllEconomicConfigs: () => getAllEconomicConfigs,
+  getBnbPriceUsd: () => getBnbPriceUsd,
+  getDirectReferralCommissionRate: () => getDirectReferralCommissionRate,
+  getEconomicAuditLogs: () => getEconomicAuditLogs,
+  getEconomicConfigByKey: () => getEconomicConfigByKey,
+  getGatewaySettings: () => getGatewaySettings,
+  getInternalCoinPrice: () => getInternalCoinPrice,
+  getMatchingTiersConfig: () => getMatchingTiersConfig,
+  getNodeBasePrice: () => getNodeBasePrice,
+  getNodeRewardRatePerEpoch: () => getNodeRewardRatePerEpoch,
+  getPromotionMilestonesConfig: () => getPromotionMilestonesConfig,
+  getTokenPriceTrend: () => getTokenPriceTrend,
+  isCoinSwapEnabled: () => isCoinSwapEnabled,
+  isNodeRewardsEnabled: () => isNodeRewardsEnabled,
+  isNodeSalesEnabled: () => isNodeSalesEnabled,
+  updateEconomicConfig: () => updateEconomicConfig
+});
+import { v4 as uuidv4 } from "uuid";
+function parseConfigValue(val) {
+  if (typeof val === "string") {
+    try {
+      return JSON.parse(val);
+    } catch {
+      return val;
+    }
+  }
+  return val;
+}
+function mapRowToConfigRecord(row) {
+  return {
+    id: row.id,
+    configKey: row.config_key,
+    configValue: parseConfigValue(row.config_value),
+    category: row.category,
+    description: row.description,
+    status: row.status,
+    version: Number(row.version || 1),
+    effectiveFrom: row.effective_from ? new Date(row.effective_from).toISOString() : new Date(row.updated_at).toISOString(),
+    updatedByAdminId: row.updated_by_admin_id || null,
+    updatedByAdminPublicId: row.updated_by_admin_public_id || "SYSTEM_INIT",
+    createdAt: new Date(row.created_at).toISOString(),
+    updatedAt: new Date(row.updated_at).toISOString()
+  };
+}
+function mapRowToAuditRecord(row) {
+  return {
+    id: row.id,
+    configKey: row.config_key,
+    category: row.category,
+    oldValue: parseConfigValue(row.old_value),
+    newValue: parseConfigValue(row.new_value),
+    version: Number(row.version),
+    adminUserId: row.admin_user_id || null,
+    adminPublicId: row.admin_public_id,
+    reason: row.reason || null,
+    effectiveFrom: new Date(row.effective_from).toISOString(),
+    ipAddress: row.ip_address || null,
+    createdAt: new Date(row.created_at).toISOString()
+  };
+}
+async function getAllEconomicConfigs() {
+  const db = await getDb();
+  const res = await db.query(`
+    SELECT * FROM system_economic_configs
+    ORDER BY category ASC, config_key ASC
+  `);
+  return res.rows.map(mapRowToConfigRecord);
+}
+async function getEconomicConfigByKey(configKey, dbClient) {
+  const db = dbClient || await getDb();
+  const res = await db.query(
+    `SELECT * FROM system_economic_configs WHERE config_key = $1`,
+    [configKey.trim().toUpperCase()]
+  );
+  if (res.rows.length === 0) return null;
+  return mapRowToConfigRecord(res.rows[0]);
+}
+async function updateEconomicConfig(params) {
+  const {
+    configKey,
+    configValue,
+    status,
+    effectiveFrom,
+    reason,
+    adminUserId,
+    adminPublicId,
+    ipAddress
+  } = params;
+  const keyUpper = configKey.trim().toUpperCase();
+  if (keyUpper === "GENESIS_NODE_CAP") {
+    throw new Error("IMMUTABLE_PARAMETER_ERROR: Genesis Node Cap (10,000) is strictly immutable and cannot be modified.");
+  }
+  const current = await getEconomicConfigByKey(keyUpper);
+  if (!current) {
+    throw new Error(`NOT_FOUND: Economic configuration parameter '${keyUpper}' does not exist.`);
+  }
+  validateEconomicValue(keyUpper, configValue);
+  const db = await getDb();
+  const now = /* @__PURE__ */ new Date();
+  const effectiveDate = effectiveFrom ? new Date(effectiveFrom) : now;
+  const newVersion = current.version + 1;
+  const serializedValue = JSON.stringify(configValue);
+  const newStatus = status || current.status;
+  const updateRes = await db.query(
+    `
+    UPDATE system_economic_configs
+    SET 
+      config_value = $1,
+      status = $2,
+      version = $3,
+      effective_from = $4,
+      updated_by_admin_id = $5,
+      updated_by_admin_public_id = $6,
+      updated_at = $7
+    WHERE config_key = $8
+    RETURNING *
+    `,
+    [
+      serializedValue,
+      newStatus,
+      newVersion,
+      effectiveDate,
+      adminUserId || null,
+      adminPublicId,
+      now,
+      keyUpper
+    ]
+  );
+  if (updateRes.rows.length === 0) {
+    throw new Error("CONCURRENCY_ERROR: Economic config update failed due to concurrent modification.");
+  }
+  const updatedConfig = mapRowToConfigRecord(updateRes.rows[0]);
+  const auditId = uuidv4();
+  const auditRes = await db.query(
+    `
+    INSERT INTO economic_config_audit_logs (
+      id, config_key, category, old_value, new_value, version, admin_user_id, admin_public_id, reason, effective_from, ip_address, created_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    RETURNING *
+    `,
+    [
+      auditId,
+      keyUpper,
+      current.category,
+      JSON.stringify(current.configValue),
+      serializedValue,
+      newVersion,
+      adminUserId || null,
+      adminPublicId,
+      reason || "Administrative economic parameter adjustment",
+      effectiveDate,
+      ipAddress || null,
+      now
+    ]
+  );
+  const auditLog = mapRowToAuditRecord(auditRes.rows[0]);
+  try {
+    await broadcastSystemConfigChange(keyUpper, updatedConfig.configValue, current.category);
+  } catch (bcErr) {
+    console.warn("[EconomicService] Config broadcast warning:", bcErr);
+  }
+  return { config: updatedConfig, auditLog };
+}
+function validateEconomicValue(key, value) {
+  if (key === "NODE_BASE_PRICE_USD") {
+    const num = Number(value);
+    if (isNaN(num) || num <= 0) {
+      throw new Error("INVALID_VALUE: Node base price must be a positive number greater than 0.");
+    }
+  }
+  if (key === "DIRECT_REFERRAL_COMMISSION_USD") {
+    const num = Number(value);
+    if (isNaN(num) || num < 0) {
+      throw new Error("INVALID_VALUE: Direct referral commission must be a non-negative number.");
+    }
+  }
+  if (key === "BSC_REQUIRED_CONFIRMATIONS") {
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < 1) {
+      throw new Error("INVALID_VALUE: Required confirmations must be an integer >= 1.");
+    }
+  }
+  if (key === "NODE_REWARD_RATE_PER_EPOCH") {
+    if (value !== null && value !== void 0) {
+      let num;
+      if (typeof value === "object" && value !== null) {
+        num = Number(value.rateUsd !== void 0 ? value.rateUsd : value.rewardPerNode !== void 0 ? value.rewardPerNode : NaN);
+      } else {
+        num = Number(value);
+      }
+      if (isNaN(num) || num <= 0) {
+        throw new Error("INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.");
+      }
+    }
+  }
+  if (key === "INTERNAL_COIN_PRICE_USDT") {
+    if (typeof value === "object" && value !== null) {
+      const price = Number(value.priceUsdt);
+      const isEnabled = value.swapEnabled !== false;
+      if (isEnabled && (isNaN(price) || price <= 0)) {
+        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
+      }
+    } else {
+      const price = Number(value);
+      if (isNaN(price) || price <= 0) {
+        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
+      }
+    }
+  }
+  if (key === "MATCHING_TIERS_CONFIG") {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("INVALID_VALUE: Matching tiers configuration must be a non-empty array of tier objects.");
+    }
+    for (const tier of value) {
+      if (!tier.units || Number(tier.units) <= 0 || !tier.rewardUsd || Number(tier.rewardUsd) <= 0) {
+        throw new Error("INVALID_VALUE: Each matching tier must have positive units and rewardUsd.");
+      }
+    }
+  }
+  if (key === "PROMOTION_MILESTONES_CONFIG") {
+    if (!Array.isArray(value) || value.length === 0) {
+      throw new Error("INVALID_VALUE: Promotion milestones configuration must be a non-empty array of milestone objects.");
+    }
+    for (const m of value) {
+      if (!m.milestone || !m.units || Number(m.units) <= 0 || !m.rewardUsd || Number(m.rewardUsd) <= 0) {
+        throw new Error("INVALID_VALUE: Each promotion milestone must contain milestone key, positive units, and positive rewardUsd.");
+      }
+    }
+  }
+}
+async function getEconomicAuditLogs(page = 1, limit = 20, configKey) {
+  const db = await getDb();
+  const safePage = Math.max(1, page);
+  const safeLimit = Math.min(100, Math.max(1, limit));
+  const offset = (safePage - 1) * safeLimit;
+  let whereClauses = ["1=1"];
+  let queryParams = [];
+  let paramIdx = 1;
+  if (configKey && configKey.trim() && configKey !== "ALL") {
+    whereClauses.push(`config_key = $${paramIdx}`);
+    queryParams.push(configKey.trim().toUpperCase());
+    paramIdx++;
+  }
+  const whereSql = whereClauses.join(" AND ");
+  const countRes = await db.query(
+    `SELECT COUNT(*)::int AS count FROM economic_config_audit_logs WHERE ${whereSql}`,
+    queryParams
+  );
+  const totalCount = Number(countRes.rows[0]?.count || 0);
+  const txQueryParams = [...queryParams, safeLimit, offset];
+  const listRes = await db.query(
+    `
+    SELECT * FROM economic_config_audit_logs
+    WHERE ${whereSql}
+    ORDER BY created_at DESC
+    LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
+    `,
+    txQueryParams
+  );
+  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
+  return {
+    logs: listRes.rows.map(mapRowToAuditRecord),
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      totalCount,
+      totalPages
+    }
+  };
+}
+async function getNodeBasePrice(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD", dbClient);
+  if (cfg && typeof cfg.configValue === "number") {
+    return cfg.configValue;
+  }
+  return 1e3;
+}
+async function getBnbPriceUsd() {
+  const cfg = await getEconomicConfigByKey("BNB_PRICE_USD");
+  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
+    const price = Number(cfg.configValue);
+    if (!isNaN(price) && price > 0) return price;
+  }
+  if (process.env.BNB_PRICE_USD) {
+    const envPrice = Number(process.env.BNB_PRICE_USD);
+    if (!isNaN(envPrice) && envPrice > 0) return envPrice;
+  }
+  return null;
+}
+async function isNodeSalesEnabled(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED", dbClient);
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getDirectReferralCommissionRate() {
+  const cfg = await getEconomicConfigByKey("DIRECT_REFERRAL_COMMISSION_USD");
+  if (cfg && typeof cfg.configValue === "number") {
+    return cfg.configValue;
+  }
+  return 50;
+}
+async function getMatchingTiersConfig() {
+  const cfg = await getEconomicConfigByKey("MATCHING_TIERS_CONFIG");
+  if (cfg && Array.isArray(cfg.configValue)) {
+    return cfg.configValue;
+  }
+  return [
+    { units: 2, rewardUsd: 20 },
+    { units: 4, rewardUsd: 40 },
+    { units: 8, rewardUsd: 80 },
+    { units: 20, rewardUsd: 200 },
+    { units: 50, rewardUsd: 500 },
+    { units: 100, rewardUsd: 1e3 }
+  ];
+}
+async function getPromotionMilestonesConfig() {
+  const cfg = await getEconomicConfigByKey("PROMOTION_MILESTONES_CONFIG");
+  if (cfg && Array.isArray(cfg.configValue)) {
+    return cfg.configValue;
+  }
+  return [
+    { milestone: "20_20", units: 20, rewardUsd: 500 },
+    { milestone: "50_50", units: 50, rewardUsd: 1500 },
+    { milestone: "100_100", units: 100, rewardUsd: 3500 }
+  ];
+}
+async function isNodeRewardsEnabled() {
+  const cfg = await getEconomicConfigByKey("NODE_REWARDS_ENABLED");
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getNodeRewardRatePerEpoch(dbClient) {
+  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH", dbClient);
+  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
+    if (typeof cfg.configValue === "object" && cfg.configValue !== null) {
+      const val = cfg.configValue;
+      const num = Number(
+        val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
+      );
+      return isNaN(num) || num <= 0 ? null : num;
+    }
+    const rate = Number(cfg.configValue);
+    return isNaN(rate) || rate <= 0 ? null : rate;
+  }
+  return null;
+}
+async function getInternalCoinPrice() {
+  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
+  if (cfg && cfg.status === "ACTIVE" && typeof cfg.configValue === "object" && cfg.configValue !== null) {
+    const price = Number(cfg.configValue.priceUsdt);
+    if (!isNaN(price) && price > 0) {
+      return {
+        coinSymbol: "PHIVO",
+        priceUsdt: price,
+        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
+        swapEnabled: cfg.configValue.swapEnabled !== false,
+        configured: true
+      };
+    }
+  }
+  return {
+    coinSymbol: "PHIVO",
+    priceUsdt: null,
+    effectiveFrom: null,
+    swapEnabled: false,
+    configured: false
+  };
+}
+async function isCoinSwapEnabled() {
+  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_SWAP_ENABLED");
+  if (cfg) {
+    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
+  }
+  return true;
+}
+async function getGatewaySettings() {
+  const [depCfg, wdrCfg, confCfg, autoCfg] = await Promise.all([
+    getEconomicConfigByKey("CRYPTO_DEPOSITS_ENABLED"),
+    getEconomicConfigByKey("CRYPTO_WITHDRAWALS_ENABLED"),
+    getEconomicConfigByKey("BSC_REQUIRED_CONFIRMATIONS"),
+    getEconomicConfigByKey("AUTO_WITHDRAWAL_ENABLED")
+  ]);
+  return {
+    depositsEnabled: depCfg ? depCfg.status === "ACTIVE" && Boolean(depCfg.configValue) : true,
+    withdrawalsEnabled: wdrCfg ? wdrCfg.status === "ACTIVE" && Boolean(wdrCfg.configValue) : true,
+    requiredConfirmations: confCfg ? Number(confCfg.configValue || 3) : 3,
+    autoWithdrawalEnabled: autoCfg ? autoCfg.status === "ACTIVE" && Boolean(autoCfg.configValue) : false
+  };
+}
+async function getTokenPriceTrend(timeframe = "24h") {
+  const db = await getDb();
+  const coinConfig = await getInternalCoinPrice();
+  const supplyRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
+     FROM financial_ledger_entries 
+     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
+  );
+  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
+  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
+    return {
+      tokenSymbol: "PHIVO",
+      tokenName: "PHIVONEX Protocol Token",
+      currentPrice: null,
+      open24h: null,
+      high24h: null,
+      low24h: null,
+      change24h: 0,
+      change24hPercent: 0,
+      volume24h: 0,
+      marketCap: 0,
+      circulatingSupply,
+      timeframe,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      points: [],
+      configured: false
+    };
+  }
+  const currentPrice = coinConfig.priceUsdt;
+  const marketCap = Math.round(circulatingSupply * currentPrice);
+  const swapVolRes = await db.query(
+    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
+     FROM financial_ledger_entries 
+     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
+  );
+  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
+  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
+  const now = Date.now();
+  let stepMinutes = 60;
+  let numSteps = 24;
+  if (timeframe === "1h") {
+    stepMinutes = 2.5;
+    numSteps = 24;
+  } else if (timeframe === "6h") {
+    stepMinutes = 15;
+    numSteps = 24;
+  } else if (timeframe === "7d") {
+    stepMinutes = 7 * 60;
+    numSteps = 24;
+  }
+  const points = [];
+  for (let i = 0; i < numSteps; i++) {
+    const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1e3);
+    const timeLabel = timeframe === "1h" || timeframe === "6h" || timeframe === "24h" ? pointTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : pointTime.toLocaleDateString([], { month: "short", day: "numeric" });
+    points.push({
+      timestamp: pointTime.toISOString(),
+      timeLabel,
+      price: currentPrice,
+      open: currentPrice,
+      high: currentPrice,
+      low: currentPrice,
+      close: currentPrice,
+      volume: Math.round(totalSwapPhivo / numSteps),
+      volumeUsd: Number((totalSwapPhivo / numSteps * currentPrice).toFixed(2)),
+      change: 0,
+      changePercent: 0
+    });
+  }
+  return {
+    tokenSymbol: "PHIVO",
+    tokenName: "PHIVONEX Protocol Token",
+    currentPrice: Number(currentPrice.toFixed(4)),
+    open24h: Number(currentPrice.toFixed(4)),
+    high24h: Number(currentPrice.toFixed(4)),
+    low24h: Number(currentPrice.toFixed(4)),
+    change24h: 0,
+    change24hPercent: 0,
+    volume24h,
+    marketCap,
+    circulatingSupply,
+    timeframe,
+    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    points,
+    configured: true
+  };
+}
+var init_economicService = __esm({
+  "src/server/services/economicService.ts"() {
+    init_db();
+    init_systemConfigBroadcaster();
+  }
+});
+
 // src/server/services/walletLedgerService.ts
 var walletLedgerService_exports = {};
 __export(walletLedgerService_exports, {
@@ -169,14 +1090,15 @@ __export(walletLedgerService_exports, {
   postLedgerCredit: () => postLedgerCredit,
   postLedgerDebit: () => postLedgerDebit,
   postLedgerReversal: () => postLedgerReversal,
+  reconcileAllUserBalances: () => reconcileAllUserBalances,
   syncUserLedger: () => syncUserLedger
 });
-import { v4 as uuidv4 } from "uuid";
+import { v4 as uuidv42 } from "uuid";
 async function postLedgerCredit(params) {
   const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
   const db = dbClient || await getDb();
-  const id = uuidv4();
+  const id = uuidv42();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
   const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
@@ -239,7 +1161,7 @@ async function postLedgerReversal(params) {
   const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
   const db = dbClient || await getDb();
-  const id = uuidv4();
+  const id = uuidv42();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
   const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
@@ -302,7 +1224,7 @@ async function postLedgerDebit(params) {
   const { userId, sourceType, sourceId, sourceRef, amount, description, currency, createdAt, dbClient } = params;
   if (!amount || amount <= 0) return null;
   const db = dbClient || await getDb();
-  const id = uuidv4();
+  const id = uuidv42();
   const publicTxnId = generateLedgerTransactionPublicId();
   const effectiveTime = createdAt || /* @__PURE__ */ new Date();
   const resolvedCurrency = currency || (sourceType === "COIN_SWAP" || sourceType === "WITHDRAWAL" || sourceType === "BLOCKCHAIN_DEPOSIT" ? "USDT" : "USD");
@@ -518,6 +1440,19 @@ async function syncUserLedger(userId, dbClient) {
     });
   }
 }
+async function reconcileAllUserBalances(dbClient) {
+  const db = dbClient || await getDb();
+  const usersRes = await db.query(`SELECT id FROM users`);
+  let synced = 0;
+  for (const u of usersRes.rows) {
+    try {
+      await syncUserLedger(u.id, db);
+      synced++;
+    } catch (_err) {
+    }
+  }
+  return synced;
+}
 async function getWalletSummary(userId) {
   await syncUserLedger(userId);
   const db = await getDb();
@@ -529,7 +1464,7 @@ async function getWalletSummary(userId) {
       COALESCE(SUM(amount), 0) AS total_amount,
       COUNT(*) AS count
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
+    WHERE user_id = $1 AND (status = 'SETTLED' OR status IS NULL) AND (UPPER(currency) IN ('USDT', 'USD') OR currency IS NULL OR currency = '')
     GROUP BY entry_type, source_type
     `,
     [userId]
@@ -589,11 +1524,34 @@ async function getWalletSummary(userId) {
       totalDebited += amt;
     }
   }
+  const phivoRewardsRes = await db.query(
+    `
+    SELECT COALESCE(SUM(amount), 0) AS phivo_total
+    FROM node_rewards
+    WHERE owner_user_id = $1 AND status IN ('ACCRUED', 'CLAIMED')
+    `,
+    [userId]
+  );
+  const totalPhivoRewards = Number(phivoRewardsRes.rows[0]?.phivo_total || 0);
+  const phivoSwapsRes = await db.query(
+    `
+    SELECT COALESCE(SUM(coin_amount), 0) AS phivo_swapped
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND (direction = 'COIN_TO_USDT' OR direction IS NULL) AND status = 'COMPLETED'
+    `,
+    [userId]
+  );
+  const totalPhivoSwappedOut = Number(phivoSwapsRes.rows[0]?.phivo_swapped || 0);
+  const phivoBalance = Math.max(0, Number((totalPhivoRewards - totalPhivoSwappedOut).toFixed(4)));
+  const { getInternalCoinPrice: getInternalCoinPrice2 } = await Promise.resolve().then(() => (init_economicService(), economicService_exports));
+  const coinPriceInfo = await getInternalCoinPrice2();
+  const phivoRateUsdt = coinPriceInfo.priceUsdt || 0.1;
+  const nodeRewardUsd = Number((phivoBalance * phivoRateUsdt).toFixed(2));
   const breakdown = {
     referral: Math.max(0, grossCredits.referral - reversals.referral),
     matching: Math.max(0, grossCredits.matching - reversals.matching),
     promotion: Math.max(0, grossCredits.promotion - reversals.promotion),
-    nodeReward: Math.max(0, grossCredits.nodeReward - reversals.nodeReward),
+    nodeReward: nodeRewardUsd,
     swap: Math.max(0, grossCredits.swap - reversals.swap),
     deposit: Math.max(0, grossCredits.deposit - reversals.deposit)
   };
@@ -609,7 +1567,7 @@ async function getWalletSummary(userId) {
         ELSE 0 
       END), 0) AS available_balance
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND status = 'SETTLED' AND (currency = 'USDT' OR currency = 'USD')
+    WHERE user_id = $1 AND (status = 'SETTLED' OR status IS NULL) AND (UPPER(currency) IN ('USDT', 'USD') OR currency IS NULL OR currency = '')
     `,
     [userId]
   );
@@ -637,17 +1595,24 @@ async function getWalletSummary(userId) {
   }
   const nodeVaultBalance = Math.max(0, nodeVaultCredits - nodeVaultDebits);
   const mainWalletBalance = Math.max(0, ledgerBalance - nodeVaultBalance);
+  const unifiedTotalEarned = Math.max(0, Number((breakdown.referral + breakdown.matching + breakdown.promotion + nodeRewardUsd).toFixed(2)));
   return {
-    totalEarned,
+    totalEarned: unifiedTotalEarned,
     totalReversed: earningReversals,
     totalWithdrawn: netWithdrawn,
     ledgerBalance,
     availableBalance: ledgerBalance,
     mainWalletBalance,
     nodeVaultBalance,
+    phivoBalance,
+    phivoValueUsdt: nodeRewardUsd,
+    phivoTotalEarned: totalPhivoRewards,
     transactionCount,
     breakdown,
-    grossBreakdown: grossCredits
+    grossBreakdown: {
+      ...grossCredits,
+      nodeReward: nodeRewardUsd
+    }
   };
 }
 async function getWalletTransactions(userId, page = 1, limit = 20, typeFilter, searchQuery, entryTypeFilter) {
@@ -778,11 +1743,11 @@ async function executeEcosystemWalletTransfer(userId, fromVault, toVault, amount
     if (available < amount) {
       throw new Error(`INSUFFICIENT_BALANCE: Available balance of $${available.toFixed(2)} USDT is insufficient for $${amount.toFixed(2)} USDT transfer.`);
     }
-    const transferId = `TRF-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const transferId = `TRF-${uuidv42().substring(0, 8).toUpperCase()}`;
     const now = /* @__PURE__ */ new Date();
     const fromLabel = fromVault === "MAIN_WALLET" ? "Main Earnings Wallet" : fromVault === "NODE_VAULT" ? "Node Purchase Vault" : "Mining Yield Vault";
     const toLabel = toVault === "NODE_VAULT" ? "Node Activation Vault" : toVault === "MAIN_WALLET" ? "Main Earnings Wallet" : "Mining Yield Vault";
-    const debitTxnId = `TXN-TRF-OUT-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const debitTxnId = `TXN-TRF-OUT-${uuidv42().substring(0, 8).toUpperCase()}`;
     await trx.query(
       `
       INSERT INTO financial_ledger_entries (
@@ -791,10 +1756,10 @@ async function executeEcosystemWalletTransfer(userId, fromVault, toVault, amount
       ) VALUES ($1, $2, $3, 'DEBIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
       `,
       [
-        uuidv4(),
+        uuidv42(),
         debitTxnId,
         userId,
-        uuidv4(),
+        uuidv42(),
         transferId,
         `Ecosystem Transfer to ${toLabel}`,
         amount,
@@ -802,7 +1767,7 @@ async function executeEcosystemWalletTransfer(userId, fromVault, toVault, amount
         now
       ]
     );
-    const creditTxnId = `TXN-TRF-IN-${uuidv4().substring(0, 8).toUpperCase()}`;
+    const creditTxnId = `TXN-TRF-IN-${uuidv42().substring(0, 8).toUpperCase()}`;
     await trx.query(
       `
       INSERT INTO financial_ledger_entries (
@@ -811,10 +1776,10 @@ async function executeEcosystemWalletTransfer(userId, fromVault, toVault, amount
       ) VALUES ($1, $2, $3, 'CREDIT', 'WALLET_TRANSFER', $4, $5, $6, $7, $8, 'SETTLED', $9)
       `,
       [
-        uuidv4(),
+        uuidv42(),
         creditTxnId,
         userId,
-        uuidv4(),
+        uuidv42(),
         transferId,
         `Ecosystem Transfer from ${fromLabel}`,
         amount,
@@ -840,184 +1805,6 @@ var init_walletLedgerService = __esm({
   }
 });
 
-// firebase-applet-config.json
-var firebase_applet_config_default;
-var init_firebase_applet_config = __esm({
-  "firebase-applet-config.json"() {
-    firebase_applet_config_default = {
-      projectId: "phivonex-core-engine",
-      appId: "1:812162791451:web:5a7080d8adbbae062860be",
-      apiKey: "AIzaSyDNhDHo4gRRjrrH8r7u6IHDqf9euPGtmX8",
-      authDomain: "phivonex-core-engine.firebaseapp.com",
-      firestoreDatabaseId: "ai-studio-phivonex-fed0bbbd-87e6-4cf5-baa9-e4b72873cc9a",
-      storageBucket: "phivonex-core-engine.firebasestorage.app",
-      messagingSenderId: "812162791451",
-      measurementId: "",
-      oAuthClientId: "812162791451-2gt6ce4599bck3320heji3itu4ku5j12.apps.googleusercontent.com",
-      recaptchaSiteKey: ""
-    };
-  }
-});
-
-// src/lib/firebase-admin.ts
-var firebase_admin_exports = {};
-__export(firebase_admin_exports, {
-  adminApp: () => adminApp,
-  adminAuth: () => adminAuth,
-  adminFirestore: () => adminFirestore,
-  adminMessaging: () => adminMessaging
-});
-import { initializeApp, getApps } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
-import { getMessaging } from "firebase-admin/messaging";
-function shouldTripCircuit(err) {
-  const msg = String(err?.message || err || "");
-  return err?.code === 7 || err?.code === 16 || msg.includes("PERMISSION_DENIED") || msg.includes("Could not load the default credentials") || msg.includes("insufficient authentication scopes");
-}
-function createSafeDocProxy(docPath) {
-  return {
-    set: async (data, options) => {
-      if (!firestoreCircuitBroken) {
-        try {
-          return await rawFirestore.doc(docPath).set(data, options);
-        } catch (err) {
-          if (shouldTripCircuit(err)) {
-            firestoreCircuitBroken = true;
-          }
-          return { id: docPath };
-        }
-      }
-      return { id: docPath };
-    },
-    get: async () => {
-      if (!firestoreCircuitBroken) {
-        try {
-          return await rawFirestore.doc(docPath).get();
-        } catch (err) {
-          if (shouldTripCircuit(err)) {
-            firestoreCircuitBroken = true;
-          }
-          return { exists: false, data: () => null, id: docPath };
-        }
-      }
-      return { exists: false, data: () => null, id: docPath };
-    },
-    delete: async () => {
-      if (!firestoreCircuitBroken) {
-        try {
-          return await rawFirestore.doc(docPath).delete();
-        } catch (err) {
-          if (shouldTripCircuit(err)) {
-            firestoreCircuitBroken = true;
-          }
-          return {};
-        }
-      }
-      return {};
-    }
-  };
-}
-function createSafeCollectionProxy(colName) {
-  return {
-    doc: (docId) => createSafeDocProxy(`${colName}/${docId || "auto_id"}`),
-    get: async () => {
-      if (!firestoreCircuitBroken) {
-        try {
-          return await rawFirestore.collection(colName).get();
-        } catch (err) {
-          if (shouldTripCircuit(err)) {
-            firestoreCircuitBroken = true;
-          }
-          return { empty: true, docs: [], size: 0 };
-        }
-      }
-      return { empty: true, docs: [], size: 0 };
-    }
-  };
-}
-var isTestEnvironment, firestoreCircuitBroken, authCircuitBroken, adminApp, rawAuth, rawMessaging, rawFirestore, adminFirestore, adminAuth, adminMessaging;
-var init_firebase_admin = __esm({
-  "src/lib/firebase-admin.ts"() {
-    init_firebase_applet_config();
-    isTestEnvironment = process.env.NODE_ENV === "test" || Boolean(process.env.PGLITE_DATA_DIR) || Boolean(process.env.CI) || process.env.NO_FIRESTORE_SYNC === "1";
-    firestoreCircuitBroken = isTestEnvironment;
-    authCircuitBroken = isTestEnvironment;
-    if (!getApps().length) {
-      adminApp = initializeApp({
-        projectId: firebase_applet_config_default.projectId
-      });
-    } else {
-      adminApp = getApps()[0];
-    }
-    rawAuth = getAuth(adminApp);
-    rawMessaging = getMessaging(adminApp);
-    rawFirestore = getFirestore(
-      adminApp,
-      firebase_applet_config_default.firestoreDatabaseId && firebase_applet_config_default.firestoreDatabaseId !== "(default)" ? firebase_applet_config_default.firestoreDatabaseId : void 0
-    );
-    adminFirestore = {
-      collection: (colName) => createSafeCollectionProxy(colName),
-      doc: (docPath) => createSafeDocProxy(docPath)
-    };
-    adminAuth = {
-      createUser: async (properties) => {
-        if (!authCircuitBroken) {
-          try {
-            return await rawAuth.createUser(properties);
-          } catch (err) {
-            if (shouldTripCircuit(err)) {
-              authCircuitBroken = true;
-            }
-            return { uid: properties.uid || "mock-uid" };
-          }
-        }
-        return { uid: properties.uid || "mock-uid" };
-      },
-      updateUser: async (uid, properties) => {
-        if (!authCircuitBroken) {
-          try {
-            return await rawAuth.updateUser(uid, properties);
-          } catch (err) {
-            if (shouldTripCircuit(err)) {
-              authCircuitBroken = true;
-            }
-            return { uid };
-          }
-        }
-        return { uid };
-      },
-      getUser: async (uid) => {
-        if (!authCircuitBroken) {
-          try {
-            return await rawAuth.getUser(uid);
-          } catch (err) {
-            if (shouldTripCircuit(err)) {
-              authCircuitBroken = true;
-            }
-            return null;
-          }
-        }
-        return null;
-      },
-      getUserByEmail: async (email) => {
-        if (!authCircuitBroken) {
-          try {
-            return await rawAuth.getUserByEmail(email);
-          } catch (err) {
-            if (shouldTripCircuit(err)) {
-              authCircuitBroken = true;
-            }
-            return null;
-          }
-        }
-        return null;
-      }
-    };
-    adminMessaging = rawMessaging;
-  }
-});
-
 // src/server/services/webPushServerService.ts
 var webPushServerService_exports = {};
 __export(webPushServerService_exports, {
@@ -1027,12 +1814,12 @@ __export(webPushServerService_exports, {
   saveUserPushToken: () => saveUserPushToken,
   sendPushNotificationToUser: () => sendPushNotificationToUser
 });
-import { v4 as uuidv42 } from "uuid";
+import { v4 as uuidv43 } from "uuid";
 async function saveUserPushToken(params) {
   const { userId, token, platform = "WEB", userAgent = "" } = params;
   if (!userId || !token) return false;
   const db = await getDb();
-  const id = uuidv42();
+  const id = uuidv43();
   const now = /* @__PURE__ */ new Date();
   try {
     await db.query(
@@ -1204,15 +1991,15 @@ __export(notificationService_exports, {
   notifyUsdtDepositConfirmed: () => notifyUsdtDepositConfirmed,
   notifyWithdrawalStatus: () => notifyWithdrawalStatus
 });
-import { EventEmitter } from "events";
-import { v4 as uuidv43 } from "uuid";
+import { EventEmitter as EventEmitter2 } from "events";
+import { v4 as uuidv44 } from "uuid";
 async function createNotification(params) {
   const { userId, type, title, message, sourceType, sourceId, dbClient } = params;
   if (!userId || !type || !title || !message) {
     return null;
   }
   const db = dbClient || await getDb();
-  const id = uuidv43();
+  const id = uuidv44();
   const publicId = generateNotificationPublicId();
   try {
     let query;
@@ -1516,7 +2303,7 @@ var init_notificationService = __esm({
   "src/server/services/notificationService.ts"() {
     init_db();
     init_idGenerator();
-    notificationEmitter = new EventEmitter();
+    notificationEmitter = new EventEmitter2();
     notificationEmitter.setMaxListeners(1e3);
   }
 });
@@ -1534,7 +2321,7 @@ __export(leadershipRankService_exports, {
   getUserPromotionState: () => getUserPromotionState,
   updatePromotionRule: () => updatePromotionRule
 });
-import { v4 as uuidv44 } from "uuid";
+import { v4 as uuidv45 } from "uuid";
 function generatePublicPromotionId() {
   const rand = Math.floor(1e5 + Math.random() * 9e5);
   return `PRM-RANK-${rand}`;
@@ -1788,7 +2575,7 @@ async function updatePromotionRule(adminId, adminPublicId, ruleId, updates, dbCl
     VALUES ($1, $2, 'ADMIN_RULE_UPDATED', $3, $3, $4, 'ADMIN', $5, $6, CURRENT_TIMESTAMP)
     `,
     [
-      uuidv44(),
+      uuidv45(),
       adminId,
       current.rank_key,
       JSON.stringify({
@@ -1903,7 +2690,7 @@ async function getUserPromotionState(userId, dbClient) {
     VALUES ($1, $2, 'STANDARD', 0, 'NODE_BUILDER', 1, 0, 0, 0, 0, 20, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT (user_id) DO NOTHING
     `,
-    [uuidv44(), userId]
+    [uuidv45(), userId]
   );
   const stateRes = await db.query(
     `SELECT * FROM user_promotion_states WHERE user_id = $1`,
@@ -2072,7 +2859,7 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
       VALUES ($1, $2, 'STANDARD', 0, 'NODE_BUILDER', 1, 0, 0, 0, 0, 20, 20, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (user_id) DO NOTHING
       `,
-      [uuidv44(), userId]
+      [uuidv45(), userId]
     );
     const lockedRes = await db.query(
       `SELECT * FROM user_promotion_states WHERE user_id = $1 FOR UPDATE`,
@@ -2201,7 +2988,7 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
         VALUES ($1, $2, 'EVALUATION_INCOMPLETE', $3, $4, $5, 'SYSTEM', 'Requirements not yet met', CURRENT_TIMESTAMP)
         `,
         [
-          uuidv44(),
+          uuidv45(),
           userId,
           currentRank,
           nextRank,
@@ -2226,7 +3013,7 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
         state: currentState
       };
     }
-    const eventId = uuidv44();
+    const eventId = uuidv45();
     const publicPromotionId = generatePublicPromotionId();
     const rewardType = targetRule.reward_type || "USDT";
     const rewardUsd = rewardType === "NON_CASH" ? 0 : Number(targetRule.reward_usd || 0);
@@ -2351,7 +3138,7 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
       VALUES ($1, $2, 'RANK_COMPLETED', $3, $4, $5, 'SYSTEM', 'Promotion requirements verified and completed', CURRENT_TIMESTAMP)
       `,
       [
-        uuidv44(),
+        uuidv45(),
         userId,
         currentRank,
         targetRule.rank_key,
@@ -2377,7 +3164,7 @@ async function evaluateUserRankPromotionInternal(userId, dbClient) {
       else if (targetRule.rank_key === "NODE_MASTER") milestoneKey = "50/50";
       else if (targetRule.rank_key === "NODE_CAPTAIN") milestoneKey = "100/100";
       try {
-        const bonusId = uuidv44();
+        const bonusId = uuidv45();
         const publicBonusId = generatePromotionBonusPublicId();
         await db.query(
           `
@@ -2543,7 +3330,7 @@ async function adminManualRankCorrection(adminId, adminPublicId, userId, targetR
       VALUES ($1, $2, 'ADMIN_MANUAL_ADJUSTMENT', $3, $4, $5, 'ADMIN', $6, $7, CURRENT_TIMESTAMP)
       `,
       [
-        uuidv44(),
+        uuidv45(),
         userId,
         fromRank,
         targetRule.rankKey,
@@ -2581,7 +3368,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import fs from "fs";
 import path from "path";
-import { v4 as uuidv45 } from "uuid";
+import { v4 as uuidv46 } from "uuid";
 function getEffectiveDatabaseUrl() {
   if (process.env.DATABASE_URL?.trim()) {
     return process.env.DATABASE_URL.trim();
@@ -2665,17 +3452,36 @@ async function getDb() {
               (_, reject) => setTimeout(() => reject(new Error("PostgreSQL connection probe timeout (3000ms)")), 3e3)
             )
           ]);
+          async function executeQueryWithRetry(queryFn, maxRetries = 2, delayMs = 300) {
+            let attempt = 0;
+            while (true) {
+              try {
+                return await queryFn();
+              } catch (err) {
+                attempt++;
+                const msg = err?.message || "";
+                const code = err?.code || "";
+                const isTransient = msg.includes("Connection terminated") || msg.includes("connection terminated") || msg.includes("socket") || msg.includes("ECONNRESET") || msg.includes("EPIPE") || code === "57P01" || code === "57P02" || code === "57P03";
+                if (isTransient && attempt <= maxRetries) {
+                  console.warn(`[DB Retry] Retrying query after connection notice (attempt ${attempt}/${maxRetries}): ${msg}`);
+                  await new Promise((r) => setTimeout(r, delayMs * attempt));
+                  continue;
+                }
+                throw err;
+              }
+            }
+          }
           globalThis.__phivonexPool = pool;
           client = {
             async query(sql, params) {
-              const res = await pool.query(sql, params);
+              const res = await executeQueryWithRetry(() => pool.query(sql, params));
               return {
                 rows: res.rows,
                 rowCount: res.rowCount ?? res.rows.length
               };
             },
             async exec(sql) {
-              await pool.query(sql);
+              await executeQueryWithRetry(() => pool.query(sql));
             },
             async transaction(callback) {
               const pgClient = await pool.connect();
@@ -3605,6 +4411,19 @@ async function initSchema(client) {
 
         ALTER TABLE coin_swap_transactions ADD COLUMN IF NOT EXISTS direction VARCHAR(20) NOT NULL DEFAULT 'COIN_TO_USDT';
 
+        CREATE OR REPLACE VIEW coin_swaps AS
+        SELECT 
+          id,
+          user_id,
+          coin_amount AS from_amount,
+          'PHIVO' AS from_asset,
+          usdt_amount AS to_amount,
+          'USDT' AS to_asset,
+          rate_usdt AS rate,
+          status,
+          created_at
+        FROM coin_swap_transactions;
+
         -- Update financial_ledger_entries constraint to support COIN_SWAP, ADMIN_ADJUSTMENT & WALLET_TRANSFER
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
         ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
@@ -4164,7 +4983,7 @@ async function seedGenesisNodes(client) {
           const placeholders = [];
           let paramIdx = 1;
           for (let n = start; n <= end; n++) {
-            const id = uuidv45();
+            const id = uuidv46();
             const publicId = formatPublicNodeId(n);
             placeholders.push(`($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2}, 'AVAILABLE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`);
             values.push(id, n, publicId);
@@ -4309,7 +5128,7 @@ async function seedEconomicConfigs(client) {
       }
     ];
     for (const cfg of defaultConfigs) {
-      const id = uuidv45();
+      const id = uuidv46();
       await client.query(
         `
         INSERT INTO system_economic_configs (
@@ -4365,691 +5184,6 @@ function hashToken(token) {
 }
 var init_crypto = __esm({
   "src/server/utils/crypto.ts"() {
-  }
-});
-
-// src/server/services/publicNetworkService.ts
-import { EventEmitter as EventEmitter2 } from "events";
-async function getPublicNetworkSummary() {
-  const db = await getDb();
-  const nodeCountRes = await db.query(
-    `SELECT status, COUNT(*)::int AS count FROM nodes GROUP BY status`
-  );
-  let activeNodes = 0;
-  let reservedNodes = 0;
-  let availableNodes = 0;
-  let retiredNodes = 0;
-  for (const row of nodeCountRes.rows) {
-    const cnt = Number(row.count || 0);
-    if (row.status === "ACTIVE") activeNodes = cnt;
-    else if (row.status === "RESERVED") reservedNodes = cnt;
-    else if (row.status === "AVAILABLE") availableNodes = cnt;
-    else if (row.status === "RETIRED") retiredNodes = cnt;
-  }
-  const totalAllocated = activeNodes + reservedNodes + retiredNodes;
-  if (availableNodes === 0 && totalAllocated < GENESIS_NODE_CAP) {
-    availableNodes = Math.max(0, GENESIS_NODE_CAP - totalAllocated);
-  }
-  const allocatedNodes = activeNodes + reservedNodes;
-  const allocationPercent = Number((allocatedNodes / GENESIS_NODE_CAP * 100).toFixed(2));
-  const epochRes = await db.query(
-    `SELECT COALESCE(MAX(epoch_number), 1)::int AS max_epoch FROM reward_epochs`
-  );
-  const currentRewardEpoch = Number(epochRes.rows[0]?.max_epoch || 1);
-  const txnRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM financial_ledger_entries`
-  );
-  const totalNetworkTransactions = Number(txnRes.rows[0]?.count || 0);
-  let conversionRateUsd = null;
-  try {
-    const configRes = await db.query(
-      `SELECT config_value, status FROM system_economic_configs WHERE config_key = 'INTERNAL_COIN_PRICE_USDT'`
-    );
-    if (configRes.rows.length > 0 && configRes.rows[0].status === "ACTIVE") {
-      const valStr = configRes.rows[0].config_value;
-      const val = typeof valStr === "string" ? JSON.parse(valStr) : valStr;
-      if (val && typeof val.priceUsdt === "number" && val.priceUsdt > 0) {
-        conversionRateUsd = val.priceUsdt;
-      }
-    }
-  } catch (err) {
-    console.warn("[Public API] Error loading INTERNAL_COIN_PRICE_USDT config value for summary:", err);
-  }
-  let networkStatus = "OPERATIONAL";
-  try {
-    await db.query("SELECT 1");
-  } catch {
-    networkStatus = "DEGRADED";
-  }
-  return {
-    genesisNodeCap: GENESIS_NODE_CAP,
-    activeNodes,
-    reservedNodes,
-    availableNodes,
-    retiredNodes,
-    allocationPercent,
-    currentRewardEpoch,
-    totalNetworkTransactions,
-    networkStatus,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    conversionRateUsd
-  };
-}
-async function getPublicNetworkEvents(limit = 20) {
-  const db = await getDb();
-  const events = [];
-  try {
-    const activeNodesRes = await db.query(
-      `SELECT public_node_id, activated_at 
-       FROM nodes 
-       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
-       ORDER BY activated_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of activeNodesRes.rows) {
-      const ts = new Date(row.activated_at).toISOString();
-      events.push({
-        id: `evt-node-${row.public_node_id}`,
-        type: "node.activated",
-        title: `${row.public_node_id} Activated`,
-        description: `Genesis validator node ${row.public_node_id} successfully activated on protocol ledger.`,
-        timestamp: ts,
-        publicId: row.public_node_id
-      });
-    }
-    const epochRes = await db.query(
-      `SELECT public_epoch_id, epoch_number, status, settled_at, created_at 
-       FROM reward_epochs 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of epochRes.rows) {
-      const ts = new Date(row.settled_at || row.created_at).toISOString();
-      events.push({
-        id: `evt-epoch-${row.public_epoch_id}`,
-        type: "reward.epoch.completed",
-        title: `Reward Epoch #${row.epoch_number} ${row.status === "COMPLETED" ? "Completed" : "Initiated"}`,
-        description: `Mining reward epoch #${row.epoch_number} state verified on protocol ledger.`,
-        timestamp: ts,
-        publicId: row.public_epoch_id
-      });
-    }
-    const matchingRes = await db.query(
-      `SELECT public_settlement_id, business_date, settled_at 
-       FROM binary_matching_settlements 
-       WHERE status = 'COMPLETED' 
-       ORDER BY settled_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of matchingRes.rows) {
-      const ts = new Date(row.settled_at).toISOString();
-      const dateStr = typeof row.business_date === "string" ? row.business_date.split("T")[0] : new Date(row.business_date).toISOString().split("T")[0];
-      events.push({
-        id: `evt-match-${row.public_settlement_id}`,
-        type: "matching.completed",
-        title: `Matching Settlement Completed`,
-        description: `Binary team network consensus settlement finalized for date ${dateStr}.`,
-        timestamp: ts,
-        publicId: row.public_settlement_id
-      });
-    }
-    const promoRes = await db.query(
-      `SELECT public_bonus_id, milestone, qualified_at 
-       FROM promotion_bonuses 
-       WHERE status = 'EARNED' 
-       ORDER BY qualified_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of promoRes.rows) {
-      const ts = new Date(row.qualified_at).toISOString();
-      events.push({
-        id: `evt-promo-${row.public_bonus_id}`,
-        type: "promotion.earned",
-        title: `Promotion Milestone (${row.milestone}) Qualified`,
-        description: `Network operator volume qualification reached milestone Tier ${row.milestone}.`,
-        timestamp: ts,
-        publicId: row.public_bonus_id
-      });
-    }
-    const fleRes = await db.query(
-      `SELECT public_txn_id, source_type, created_at 
-       FROM financial_ledger_entries 
-       ORDER BY created_at DESC 
-       LIMIT $1`,
-      [limit]
-    );
-    for (const row of fleRes.rows) {
-      const ts = new Date(row.created_at).toISOString();
-      events.push({
-        id: `evt-fle-${row.public_txn_id}`,
-        type: "ledger.checkpoint",
-        title: `Ledger Checkpoint ${row.public_txn_id}`,
-        description: `Cryptographic financial ledger entry posted for channel ${row.source_type}.`,
-        timestamp: ts,
-        publicId: row.public_txn_id
-      });
-    }
-    events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-    return events.slice(0, limit);
-  } catch (err) {
-    console.error("[PublicNetworkService] Error fetching public network events:", err);
-    return [];
-  }
-}
-function broadcastPublicEvent(event) {
-  publicNetworkEventEmitter.emit("networkEvent", event);
-}
-var publicNetworkEventEmitter;
-var init_publicNetworkService = __esm({
-  "src/server/services/publicNetworkService.ts"() {
-    init_db();
-    init_nodeConfig();
-    publicNetworkEventEmitter = new EventEmitter2();
-    publicNetworkEventEmitter.setMaxListeners(100);
-  }
-});
-
-// src/server/services/systemConfigBroadcaster.ts
-async function broadcastSystemConfigChange(key, value, category = "SYSTEM") {
-  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
-  const normalizedKey = key.toUpperCase();
-  if (process.env.NODE_ENV === "test" || process.env.APP_ENV === "test") {
-    try {
-      publicNetworkEventEmitter.emit("networkEvent", {
-        type: "system_config",
-        key: normalizedKey,
-        value,
-        category,
-        updatedAt: timestamp
-      });
-    } catch (sseErr) {
-      console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
-    }
-    return;
-  }
-  try {
-    await adminFirestore.collection("system_settings").doc("configs").set(
-      {
-        [normalizedKey]: value,
-        updatedAt: timestamp,
-        lastUpdatedKey: normalizedKey
-      },
-      { merge: true }
-    );
-    if (normalizedKey.includes("WITHDRAWAL")) {
-      await adminFirestore.collection("system_settings").doc("withdrawals").set(
-        {
-          [normalizedKey]: value,
-          minWithdrawalAmount: normalizedKey === "MIN_WITHDRAWAL_AMOUNT" ? Number(value) : void 0,
-          autoWithdrawalEnabled: normalizedKey === "AUTO_WITHDRAWAL_ENABLED" ? Boolean(value) : void 0,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-    if (normalizedKey.includes("COIN") || normalizedKey.includes("PRICE") || normalizedKey.includes("NODE")) {
-      await adminFirestore.collection("system_settings").doc("economic").set(
-        {
-          [normalizedKey]: value,
-          updatedAt: timestamp
-        },
-        { merge: true }
-      );
-    }
-  } catch (fsErr) {
-    console.warn("[SystemConfigBroadcaster] Firestore real-time sync warning:", fsErr);
-  }
-  try {
-    publicNetworkEventEmitter.emit("networkEvent", {
-      type: "system_config",
-      key: normalizedKey,
-      value,
-      category,
-      updatedAt: timestamp
-    });
-  } catch (sseErr) {
-    console.warn("[SystemConfigBroadcaster] SSE broadcast warning:", sseErr);
-  }
-}
-var init_systemConfigBroadcaster = __esm({
-  "src/server/services/systemConfigBroadcaster.ts"() {
-    init_firebase_admin();
-    init_publicNetworkService();
-  }
-});
-
-// src/server/services/economicService.ts
-import { v4 as uuidv47 } from "uuid";
-function parseConfigValue(val) {
-  if (typeof val === "string") {
-    try {
-      return JSON.parse(val);
-    } catch {
-      return val;
-    }
-  }
-  return val;
-}
-function mapRowToConfigRecord(row) {
-  return {
-    id: row.id,
-    configKey: row.config_key,
-    configValue: parseConfigValue(row.config_value),
-    category: row.category,
-    description: row.description,
-    status: row.status,
-    version: Number(row.version || 1),
-    effectiveFrom: row.effective_from ? new Date(row.effective_from).toISOString() : new Date(row.updated_at).toISOString(),
-    updatedByAdminId: row.updated_by_admin_id || null,
-    updatedByAdminPublicId: row.updated_by_admin_public_id || "SYSTEM_INIT",
-    createdAt: new Date(row.created_at).toISOString(),
-    updatedAt: new Date(row.updated_at).toISOString()
-  };
-}
-function mapRowToAuditRecord(row) {
-  return {
-    id: row.id,
-    configKey: row.config_key,
-    category: row.category,
-    oldValue: parseConfigValue(row.old_value),
-    newValue: parseConfigValue(row.new_value),
-    version: Number(row.version),
-    adminUserId: row.admin_user_id || null,
-    adminPublicId: row.admin_public_id,
-    reason: row.reason || null,
-    effectiveFrom: new Date(row.effective_from).toISOString(),
-    ipAddress: row.ip_address || null,
-    createdAt: new Date(row.created_at).toISOString()
-  };
-}
-async function getAllEconomicConfigs() {
-  const db = await getDb();
-  const res = await db.query(`
-    SELECT * FROM system_economic_configs
-    ORDER BY category ASC, config_key ASC
-  `);
-  return res.rows.map(mapRowToConfigRecord);
-}
-async function getEconomicConfigByKey(configKey, dbClient) {
-  const db = dbClient || await getDb();
-  const res = await db.query(
-    `SELECT * FROM system_economic_configs WHERE config_key = $1`,
-    [configKey.trim().toUpperCase()]
-  );
-  if (res.rows.length === 0) return null;
-  return mapRowToConfigRecord(res.rows[0]);
-}
-async function updateEconomicConfig(params) {
-  const {
-    configKey,
-    configValue,
-    status,
-    effectiveFrom,
-    reason,
-    adminUserId,
-    adminPublicId,
-    ipAddress
-  } = params;
-  const keyUpper = configKey.trim().toUpperCase();
-  if (keyUpper === "GENESIS_NODE_CAP") {
-    throw new Error("IMMUTABLE_PARAMETER_ERROR: Genesis Node Cap (10,000) is strictly immutable and cannot be modified.");
-  }
-  const current = await getEconomicConfigByKey(keyUpper);
-  if (!current) {
-    throw new Error(`NOT_FOUND: Economic configuration parameter '${keyUpper}' does not exist.`);
-  }
-  validateEconomicValue(keyUpper, configValue);
-  const db = await getDb();
-  const now = /* @__PURE__ */ new Date();
-  const effectiveDate = effectiveFrom ? new Date(effectiveFrom) : now;
-  const newVersion = current.version + 1;
-  const serializedValue = JSON.stringify(configValue);
-  const newStatus = status || current.status;
-  const updateRes = await db.query(
-    `
-    UPDATE system_economic_configs
-    SET 
-      config_value = $1,
-      status = $2,
-      version = $3,
-      effective_from = $4,
-      updated_by_admin_id = $5,
-      updated_by_admin_public_id = $6,
-      updated_at = $7
-    WHERE config_key = $8
-    RETURNING *
-    `,
-    [
-      serializedValue,
-      newStatus,
-      newVersion,
-      effectiveDate,
-      adminUserId || null,
-      adminPublicId,
-      now,
-      keyUpper
-    ]
-  );
-  if (updateRes.rows.length === 0) {
-    throw new Error("CONCURRENCY_ERROR: Economic config update failed due to concurrent modification.");
-  }
-  const updatedConfig = mapRowToConfigRecord(updateRes.rows[0]);
-  const auditId = uuidv47();
-  const auditRes = await db.query(
-    `
-    INSERT INTO economic_config_audit_logs (
-      id, config_key, category, old_value, new_value, version, admin_user_id, admin_public_id, reason, effective_from, ip_address, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-    RETURNING *
-    `,
-    [
-      auditId,
-      keyUpper,
-      current.category,
-      JSON.stringify(current.configValue),
-      serializedValue,
-      newVersion,
-      adminUserId || null,
-      adminPublicId,
-      reason || "Administrative economic parameter adjustment",
-      effectiveDate,
-      ipAddress || null,
-      now
-    ]
-  );
-  const auditLog = mapRowToAuditRecord(auditRes.rows[0]);
-  try {
-    await broadcastSystemConfigChange(keyUpper, updatedConfig.configValue, current.category);
-  } catch (bcErr) {
-    console.warn("[EconomicService] Config broadcast warning:", bcErr);
-  }
-  return { config: updatedConfig, auditLog };
-}
-function validateEconomicValue(key, value) {
-  if (key === "NODE_BASE_PRICE_USD") {
-    const num = Number(value);
-    if (isNaN(num) || num <= 0) {
-      throw new Error("INVALID_VALUE: Node base price must be a positive number greater than 0.");
-    }
-  }
-  if (key === "DIRECT_REFERRAL_COMMISSION_USD") {
-    const num = Number(value);
-    if (isNaN(num) || num < 0) {
-      throw new Error("INVALID_VALUE: Direct referral commission must be a non-negative number.");
-    }
-  }
-  if (key === "BSC_REQUIRED_CONFIRMATIONS") {
-    const num = Number(value);
-    if (!Number.isInteger(num) || num < 1) {
-      throw new Error("INVALID_VALUE: Required confirmations must be an integer >= 1.");
-    }
-  }
-  if (key === "NODE_REWARD_RATE_PER_EPOCH") {
-    if (value !== null && value !== void 0) {
-      let num;
-      if (typeof value === "object" && value !== null) {
-        num = Number(value.rateUsd !== void 0 ? value.rateUsd : value.rewardPerNode !== void 0 ? value.rewardPerNode : NaN);
-      } else {
-        num = Number(value);
-      }
-      if (isNaN(num) || num <= 0) {
-        throw new Error("INVALID_VALUE: Reward rate must be null (unconfigured) or a positive number greater than 0.");
-      }
-    }
-  }
-  if (key === "INTERNAL_COIN_PRICE_USDT") {
-    if (typeof value === "object" && value !== null) {
-      const price = Number(value.priceUsdt);
-      const isEnabled = value.swapEnabled !== false;
-      if (isEnabled && (isNaN(price) || price <= 0)) {
-        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
-      }
-    } else {
-      const price = Number(value);
-      if (isNaN(price) || price <= 0) {
-        throw new Error("INVALID_VALUE: Internal coin price in USDT must be a positive number.");
-      }
-    }
-  }
-  if (key === "MATCHING_TIERS_CONFIG") {
-    if (!Array.isArray(value) || value.length === 0) {
-      throw new Error("INVALID_VALUE: Matching tiers configuration must be a non-empty array of tier objects.");
-    }
-    for (const tier of value) {
-      if (!tier.units || Number(tier.units) <= 0 || !tier.rewardUsd || Number(tier.rewardUsd) <= 0) {
-        throw new Error("INVALID_VALUE: Each matching tier must have positive units and rewardUsd.");
-      }
-    }
-  }
-  if (key === "PROMOTION_MILESTONES_CONFIG") {
-    if (!Array.isArray(value) || value.length === 0) {
-      throw new Error("INVALID_VALUE: Promotion milestones configuration must be a non-empty array of milestone objects.");
-    }
-    for (const m of value) {
-      if (!m.milestone || !m.units || Number(m.units) <= 0 || !m.rewardUsd || Number(m.rewardUsd) <= 0) {
-        throw new Error("INVALID_VALUE: Each promotion milestone must contain milestone key, positive units, and positive rewardUsd.");
-      }
-    }
-  }
-}
-async function getEconomicAuditLogs(page = 1, limit = 20, configKey) {
-  const db = await getDb();
-  const safePage = Math.max(1, page);
-  const safeLimit = Math.min(100, Math.max(1, limit));
-  const offset = (safePage - 1) * safeLimit;
-  let whereClauses = ["1=1"];
-  let queryParams = [];
-  let paramIdx = 1;
-  if (configKey && configKey.trim() && configKey !== "ALL") {
-    whereClauses.push(`config_key = $${paramIdx}`);
-    queryParams.push(configKey.trim().toUpperCase());
-    paramIdx++;
-  }
-  const whereSql = whereClauses.join(" AND ");
-  const countRes = await db.query(
-    `SELECT COUNT(*)::int AS count FROM economic_config_audit_logs WHERE ${whereSql}`,
-    queryParams
-  );
-  const totalCount = Number(countRes.rows[0]?.count || 0);
-  const txQueryParams = [...queryParams, safeLimit, offset];
-  const listRes = await db.query(
-    `
-    SELECT * FROM economic_config_audit_logs
-    WHERE ${whereSql}
-    ORDER BY created_at DESC
-    LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
-    `,
-    txQueryParams
-  );
-  const totalPages = Math.ceil(totalCount / safeLimit) || 1;
-  return {
-    logs: listRes.rows.map(mapRowToAuditRecord),
-    pagination: {
-      page: safePage,
-      limit: safeLimit,
-      totalCount,
-      totalPages
-    }
-  };
-}
-async function getNodeBasePrice(dbClient) {
-  const cfg = await getEconomicConfigByKey("NODE_BASE_PRICE_USD", dbClient);
-  if (cfg && typeof cfg.configValue === "number") {
-    return cfg.configValue;
-  }
-  return 1e3;
-}
-async function getBnbPriceUsd() {
-  const cfg = await getEconomicConfigByKey("BNB_PRICE_USD");
-  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
-    const price = Number(cfg.configValue);
-    if (!isNaN(price) && price > 0) return price;
-  }
-  if (process.env.BNB_PRICE_USD) {
-    const envPrice = Number(process.env.BNB_PRICE_USD);
-    if (!isNaN(envPrice) && envPrice > 0) return envPrice;
-  }
-  return null;
-}
-async function isNodeSalesEnabled(dbClient) {
-  const cfg = await getEconomicConfigByKey("NODE_SALES_ENABLED", dbClient);
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getDirectReferralCommissionRate() {
-  const cfg = await getEconomicConfigByKey("DIRECT_REFERRAL_COMMISSION_USD");
-  if (cfg && typeof cfg.configValue === "number") {
-    return cfg.configValue;
-  }
-  return 50;
-}
-async function isNodeRewardsEnabled() {
-  const cfg = await getEconomicConfigByKey("NODE_REWARDS_ENABLED");
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getNodeRewardRatePerEpoch(dbClient) {
-  const cfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH", dbClient);
-  if (cfg && cfg.status === "ACTIVE" && cfg.configValue !== null && cfg.configValue !== void 0) {
-    if (typeof cfg.configValue === "object" && cfg.configValue !== null) {
-      const val = cfg.configValue;
-      const num = Number(
-        val.ratePhivo !== void 0 ? val.ratePhivo : val.rateUsd !== void 0 ? val.rateUsd : val.rewardPerNode !== void 0 ? val.rewardPerNode : NaN
-      );
-      return isNaN(num) || num <= 0 ? null : num;
-    }
-    const rate = Number(cfg.configValue);
-    return isNaN(rate) || rate <= 0 ? null : rate;
-  }
-  return null;
-}
-async function getInternalCoinPrice() {
-  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_PRICE_USDT");
-  if (cfg && cfg.status === "ACTIVE" && typeof cfg.configValue === "object" && cfg.configValue !== null) {
-    const price = Number(cfg.configValue.priceUsdt);
-    if (!isNaN(price) && price > 0) {
-      return {
-        coinSymbol: "PHIVO",
-        priceUsdt: price,
-        effectiveFrom: cfg.configValue.effectiveFrom || cfg.effectiveFrom,
-        swapEnabled: cfg.configValue.swapEnabled !== false,
-        configured: true
-      };
-    }
-  }
-  return {
-    coinSymbol: "PHIVO",
-    priceUsdt: null,
-    effectiveFrom: null,
-    swapEnabled: false,
-    configured: false
-  };
-}
-async function isCoinSwapEnabled() {
-  const cfg = await getEconomicConfigByKey("INTERNAL_COIN_SWAP_ENABLED");
-  if (cfg) {
-    return cfg.status === "ACTIVE" && Boolean(cfg.configValue);
-  }
-  return true;
-}
-async function getTokenPriceTrend(timeframe = "24h") {
-  const db = await getDb();
-  const coinConfig = await getInternalCoinPrice();
-  const supplyRes = await db.query(
-    `SELECT COALESCE(SUM(amount), 0)::float AS sum 
-     FROM financial_ledger_entries 
-     WHERE currency = 'PHIVO' AND entry_type = 'CREDIT' AND status = 'SETTLED'`
-  );
-  const circulatingSupply = Math.max(0, Number(supplyRes.rows[0]?.sum || 0));
-  if (!coinConfig.configured || coinConfig.priceUsdt === null || coinConfig.priceUsdt <= 0) {
-    return {
-      tokenSymbol: "PHIVO",
-      tokenName: "PHIVONEX Protocol Token",
-      currentPrice: null,
-      open24h: null,
-      high24h: null,
-      low24h: null,
-      change24h: 0,
-      change24hPercent: 0,
-      volume24h: 0,
-      marketCap: 0,
-      circulatingSupply,
-      timeframe,
-      updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      points: [],
-      configured: false
-    };
-  }
-  const currentPrice = coinConfig.priceUsdt;
-  const marketCap = Math.round(circulatingSupply * currentPrice);
-  const swapVolRes = await db.query(
-    `SELECT COALESCE(SUM(amount), 0)::float AS vol 
-     FROM financial_ledger_entries 
-     WHERE source_type = 'COIN_SWAP' AND entry_type = 'DEBIT' AND currency = 'PHIVO' AND status = 'SETTLED'`
-  );
-  const totalSwapPhivo = Number(swapVolRes.rows[0]?.vol || 0);
-  const volume24h = Number((totalSwapPhivo * currentPrice).toFixed(2));
-  const now = Date.now();
-  let stepMinutes = 60;
-  let numSteps = 24;
-  if (timeframe === "1h") {
-    stepMinutes = 2.5;
-    numSteps = 24;
-  } else if (timeframe === "6h") {
-    stepMinutes = 15;
-    numSteps = 24;
-  } else if (timeframe === "7d") {
-    stepMinutes = 7 * 60;
-    numSteps = 24;
-  }
-  const points = [];
-  for (let i = 0; i < numSteps; i++) {
-    const pointTime = new Date(now - (numSteps - 1 - i) * stepMinutes * 60 * 1e3);
-    const timeLabel = timeframe === "1h" || timeframe === "6h" || timeframe === "24h" ? pointTime.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : pointTime.toLocaleDateString([], { month: "short", day: "numeric" });
-    points.push({
-      timestamp: pointTime.toISOString(),
-      timeLabel,
-      price: currentPrice,
-      open: currentPrice,
-      high: currentPrice,
-      low: currentPrice,
-      close: currentPrice,
-      volume: Math.round(totalSwapPhivo / numSteps),
-      volumeUsd: Number((totalSwapPhivo / numSteps * currentPrice).toFixed(2)),
-      change: 0,
-      changePercent: 0
-    });
-  }
-  return {
-    tokenSymbol: "PHIVO",
-    tokenName: "PHIVONEX Protocol Token",
-    currentPrice: Number(currentPrice.toFixed(4)),
-    open24h: Number(currentPrice.toFixed(4)),
-    high24h: Number(currentPrice.toFixed(4)),
-    low24h: Number(currentPrice.toFixed(4)),
-    change24h: 0,
-    change24hPercent: 0,
-    volume24h,
-    marketCap,
-    circulatingSupply,
-    timeframe,
-    updatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    points,
-    configured: true
-  };
-}
-var init_economicService = __esm({
-  "src/server/services/economicService.ts"() {
-    init_db();
-    init_systemConfigBroadcaster();
   }
 });
 
@@ -6883,6 +7017,76 @@ async function sendUserAuditReportEmail(params) {
     recipient: user.email,
     publicId: user.publicId
   };
+}
+async function adminActivateNodeForUser(params) {
+  const db = await getDb();
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err = new Error("Admin reason is mandatory (minimum 5 characters).");
+    err.statusCode = 400;
+    throw err;
+  }
+  const nodeRes = await db.query(`SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`);
+  if (nodeRes.rows.length === 0) {
+    const err = new Error("No available Genesis Nodes in pool to activate.");
+    err.statusCode = 400;
+    throw err;
+  }
+  const node = nodeRes.rows[0];
+  await db.query(`UPDATE nodes SET status = 'ACTIVE', owner_user_id = $1, activated_at = CURRENT_TIMESTAMP WHERE id = $2`, [params.targetUserId, node.id]);
+  const orderId = uuidv49();
+  const publicOrderId = `PHX-ORD-${Math.floor(1e5 + Math.random() * 9e5)}`;
+  await db.query(
+    `INSERT INTO node_orders (id, public_order_id, user_id, node_number, amount_usd, currency, status, payment_method, completed_at) VALUES ($1, $2, $3, $4, 1000, 'USDT', 'COMPLETED', 'ADMIN_ACTIVATION', CURRENT_TIMESTAMP)`,
+    [orderId, publicOrderId, params.targetUserId, node.node_number]
+  );
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: "ADMIN_ACTIVATE_NODE",
+    targetType: "NODE",
+    targetId: node.public_node_id,
+    details: `Admin ${params.adminPublicId} force-activated Genesis Node ${node.public_node_id} (Node #${node.node_number}). Reason: ${params.reason}`,
+    ipAddress: params.ipAddress
+  });
+  return { success: true, nodeNumber: node.node_number, publicNodeId: node.public_node_id };
+}
+async function adminCreditReferralCommissionForUser(params) {
+  const amount = Number(params.amountUsd);
+  if (isNaN(amount) || amount <= 0) {
+    const err = new Error("Commission amount must be a positive number.");
+    err.statusCode = 400;
+    throw err;
+  }
+  return executeAdminWalletAdjustment({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    targetUserId: params.targetUserId,
+    asset: "USDT",
+    direction: "CREDIT",
+    amount,
+    reason: `Referral Commission Credit: ${params.reason}`,
+    idempotencyKey: `adm-comm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    ipAddress: params.ipAddress
+  });
+}
+async function adminCreditMiningRewardForUser(params) {
+  const amount = Number(params.amountPhivo);
+  if (isNaN(amount) || amount <= 0) {
+    const err = new Error("Reward amount must be a positive number.");
+    err.statusCode = 400;
+    throw err;
+  }
+  return executeAdminWalletAdjustment({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    targetUserId: params.targetUserId,
+    asset: "PHIVO",
+    direction: "CREDIT",
+    amount,
+    reason: `Mining Reward Credit: ${params.reason}`,
+    idempotencyKey: `adm-rew-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    ipAddress: params.ipAddress
+  });
 }
 var init_adminService = __esm({
   "src/server/services/adminService.ts"() {
@@ -12189,6 +12393,32 @@ var init_affiliateMasterMap = __esm({
         nodePriceUsd: 1e3,
         spotCommissionUsd: 25,
         extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L8-A",
+        fullName: "Talukder Maya",
+        email: "talukdermaya26@gmail.com",
+        role: "USER",
+        sponsorEmail: "mariya.rahman067@gmail.com",
+        binaryParentEmail: "mariya.rahman067@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 0,
+        extraWalletBalanceUsd: 0
+      },
+      {
+        levelLabel: "L9-A",
+        fullName: "Nomadic Samrat",
+        email: "nomadicsamrat26@gmail.com",
+        role: "USER",
+        sponsorEmail: "talukdermaya26@gmail.com",
+        binaryParentEmail: "talukdermaya26@gmail.com",
+        side: "LEFT",
+        nodeStatus: "ACTIVE",
+        nodePriceUsd: 1e3,
+        spotCommissionUsd: 0,
+        extraWalletBalanceUsd: 0
       }
     ];
   }
@@ -12500,24 +12730,11 @@ async function seedGenealogyNetworkTree(customSpecs) {
     const purchaseSourceUuid = deterministicUuid(`SEED-NODE-PURCHASE:${user.id}`);
     const spotSourceUuid = deterministicUuid(`SEED-SPOT-COMM:${user.id}`);
     const extraBalSourceUuid = deterministicUuid(`SEED-EXTRA-BAL:${user.id}`);
-    await db.query(
-      `DELETE FROM financial_ledger_entries
-       WHERE user_id = $1
-         AND source_type = 'ADMIN_ADJUSTMENT'
-         AND (
-           source_ref LIKE 'GENEALOGY-INIT-%'
-           OR source_ref LIKE 'SEED-%'
-           OR description LIKE 'Initial Node & Affiliate Wallet Balance%'
-           OR description LIKE '%Mother%Seed%'
-           OR amount = 10000
-         )`,
-      [user.id]
-    );
     if (spec.nodeStatus === "ACTIVE") {
       const existingNodeRes = await db.query(
         `SELECT id, public_node_id, node_number
          FROM nodes
-         WHERE owner_user_id = $1 AND status = 'ACTIVE'
+         WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'PURCHASED', 'EMITTING', 'MATURED')
          ORDER BY activated_at ASC NULLS LAST
          LIMIT 1`,
         [user.id]
@@ -12711,11 +12928,6 @@ async function seedGenealogyNetworkTree(customSpecs) {
           spotAmount
         ]
       );
-    } else {
-      await db.query(
-        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
-        [user.id, spotSourceUuid]
-      );
     }
     const extraBalAmount = Number(spec.extraWalletBalanceUsd || 0);
     if (extraBalAmount > 0) {
@@ -12738,11 +12950,6 @@ async function seedGenealogyNetworkTree(customSpecs) {
           `Admin Master Map Wallet Credit ($${extraBalAmount.toFixed(2)} USD)`,
           extraBalAmount
         ]
-      );
-    } else {
-      await db.query(
-        `DELETE FROM financial_ledger_entries WHERE user_id = $1 AND source_id = $2`,
-        [user.id, extraBalSourceUuid]
       );
     }
     seededAccounts.push({
@@ -13065,7 +13272,7 @@ async function requireAdmin(req, res, next) {
 init_db();
 
 // src/server/utils/securityLogger.ts
-import { v4 as uuidv46 } from "uuid";
+import { v4 as uuidv47 } from "uuid";
 function parseUserAgentSummary(uaStr) {
   if (!uaStr) return "Standard Client";
   let browser = "Web Browser";
@@ -13106,7 +13313,7 @@ async function logSecurityEvent(db, params) {
     await db.query(
       `INSERT INTO security_events (id, user_id, event_type, description, user_agent_summary, created_at)
        VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
-      [uuidv46(), params.userId, params.eventType, safeDescription, summary]
+      [uuidv47(), params.userId, params.eventType, safeDescription, summary]
     );
   } catch (err) {
     console.warn("[SecurityLogger] Failed to record security event:", err);
@@ -18929,6 +19136,7 @@ withdrawalRouter.post("/admin/instant-payout", requireAdmin, adminFinancialLimit
 });
 
 // src/server/routes/adminRoutes.ts
+init_db();
 import { Router as Router14 } from "express";
 init_adminService();
 init_withdrawalService();
@@ -21319,6 +21527,140 @@ adminRouter.post("/network/seed-genealogy", async (req, res) => {
   } catch (err) {
     console.error("[Admin API] Error seeding genealogy tree:", err);
     return res.status(500).json({ error: "SERVER_ERROR", message: "Failed to seed genealogy tree." });
+  }
+});
+adminRouter.post("/users/:userId/impersonate", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const db = await getDb();
+    const userRes = await db.query(
+      `SELECT id, public_id, email, full_name, status FROM users WHERE id = $1 LIMIT 1`,
+      [userId]
+    );
+    if (userRes.rows.length === 0) {
+      return res.status(404).json({ error: "USER_NOT_FOUND", message: "Target user account not found." });
+    }
+    const targetUser = userRes.rows[0];
+    const { randomBytes, createHash } = await import("crypto");
+    const rawSessionToken = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(rawSessionToken).digest("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1e3);
+    await db.query(
+      `INSERT INTO sessions (user_id, token_hash, expires_at, user_agent, ip_address) VALUES ($1, $2, $3, $4, $5)`,
+      [
+        targetUser.id,
+        tokenHash,
+        expiresAt.toISOString(),
+        req.headers["user-agent"] || "Admin Impersonator",
+        req.headers["x-forwarded-for"] || req.ip || ""
+      ]
+    );
+    await logAdminAction({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      action: "ADMIN_IMPERSONATE_USER",
+      targetType: "user",
+      targetId: targetUser.id,
+      details: `Admin ${admin.public_id} (${admin.email}) impersonated user ${targetUser.public_id} (${targetUser.email}).`,
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    res.cookie("phx_session", rawSessionToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      maxAge: 24 * 60 * 60 * 1e3
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Successfully impersonated user ${targetUser.full_name} (${targetUser.public_id})`,
+      user: {
+        id: targetUser.id,
+        publicId: targetUser.public_id,
+        email: targetUser.email,
+        fullName: targetUser.full_name
+      }
+    });
+  } catch (err) {
+    console.error("[Admin API] Error impersonating user:", err);
+    return res.status(500).json({
+      error: "SERVER_ERROR",
+      message: err.message || "Failed to impersonate user."
+    });
+  }
+});
+adminRouter.post("/users/:userId/actions/activate-node", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { reason } = req.body || {};
+    const result = await adminActivateNodeForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      reason,
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    return res.status(200).json({
+      ...result,
+      message: `Successfully activated Genesis Node #${result.nodeNumber} (${result.publicNodeId}) for user.`
+    });
+  } catch (err) {
+    console.error("[Admin API] Error activating node:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || "SERVER_ERROR",
+      message: err.message || "Failed to activate node."
+    });
+  }
+});
+adminRouter.post("/users/:userId/actions/credit-referral", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { amountUsd, reason } = req.body || {};
+    const result = await adminCreditReferralCommissionForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      amountUsd: Number(amountUsd),
+      reason,
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    return res.status(200).json({
+      ...result,
+      message: `Successfully credited $${amountUsd} referral commission to user wallet.`
+    });
+  } catch (err) {
+    console.error("[Admin API] Error crediting referral commission:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || "SERVER_ERROR",
+      message: err.message || "Failed to credit referral commission."
+    });
+  }
+});
+adminRouter.post("/users/:userId/actions/credit-reward", async (req, res) => {
+  try {
+    const admin = req.user;
+    const { userId } = req.params;
+    const { amountPhivo, reason } = req.body || {};
+    const result = await adminCreditMiningRewardForUser({
+      adminUserId: admin.id,
+      adminPublicId: admin.public_id,
+      targetUserId: userId,
+      amountPhivo: Number(amountPhivo),
+      reason,
+      ipAddress: req.headers["x-forwarded-for"] || req.ip
+    });
+    return res.status(200).json({
+      ...result,
+      message: `Successfully credited ${amountPhivo} PHIVO mining reward to user wallet.`
+    });
+  } catch (err) {
+    console.error("[Admin API] Error crediting mining reward:", err);
+    return res.status(err.statusCode || 500).json({
+      error: err.code || "SERVER_ERROR",
+      message: err.message || "Failed to credit mining reward."
+    });
   }
 });
 
@@ -24291,13 +24633,27 @@ async function startServer() {
   });
   getDb().then(async () => {
     console.log("[Server] Database and referral migrations initialized.");
-    try {
-      const { seedGenealogyNetworkTree: seedGenealogyNetworkTree2 } = await Promise.resolve().then(() => (init_genealogySeedService(), genealogySeedService_exports));
-      await seedGenealogyNetworkTree2();
-      const { reconcileUnprocessedReferralCommissions: reconcileUnprocessedReferralCommissions2 } = await Promise.resolve().then(() => (init_referralCommissionService(), referralCommissionService_exports));
-      await reconcileUnprocessedReferralCommissions2();
-    } catch (seedErr) {
-      console.warn("[Server] Genealogy seed & referral commission startup notice:", seedErr);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const { seedGenealogyNetworkTree: seedGenealogyNetworkTree2 } = await Promise.resolve().then(() => (init_genealogySeedService(), genealogySeedService_exports));
+        await seedGenealogyNetworkTree2();
+        const { reconcileUnprocessedReferralCommissions: reconcileUnprocessedReferralCommissions2 } = await Promise.resolve().then(() => (init_referralCommissionService(), referralCommissionService_exports));
+        await reconcileUnprocessedReferralCommissions2();
+        const { reconcileAllUserBalances: reconcileAllUserBalances2 } = await Promise.resolve().then(() => (init_walletLedgerService(), walletLedgerService_exports));
+        await reconcileAllUserBalances2();
+        console.log("[Server] Genealogy seed & referral commission startup completed successfully.");
+        break;
+      } catch (seedErr) {
+        const msg = seedErr?.message || "";
+        const isConnErr = msg.includes("Connection terminated") || seedErr?.code === "57P01" || msg.includes("socket");
+        if (attempt < 3 && isConnErr) {
+          console.warn(`[Server] Startup genealogy seed attempt ${attempt} interrupted (${msg}). Retrying in 1s...`);
+          await new Promise((r) => setTimeout(r, 1e3));
+        } else {
+          console.warn("[Server] Genealogy seed & referral commission startup notice:", seedErr);
+          break;
+        }
+      }
     }
     startMatchingScheduler();
     startWeeklyReportScheduler();

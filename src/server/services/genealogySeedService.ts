@@ -480,7 +480,7 @@ export async function seedGenealogyNetworkTree(
       }>(
         `SELECT id, public_node_id, node_number
          FROM nodes
-         WHERE owner_user_id = $1 AND status = 'ACTIVE'
+         WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'PURCHASED', 'EMITTING', 'MATURED')
          ORDER BY activated_at ASC NULLS LAST
          LIMIT 1`,
         [user.id]

@@ -6,6 +6,7 @@ import {
   Server,
   ShoppingBag,
   ArrowUpRight,
+  ArrowDownLeft,
   ArrowLeftRight,
   GitFork,
   FileText,
@@ -212,6 +213,26 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
       alert(err.message || 'Network error updating user profile.');
     } finally {
       setSavingUserEdit(false);
+    }
+  };
+
+  const handleImpersonateUser = async (u: any) => {
+    if (!confirm(`Are you sure you want to log in as user ${u.fullName} (${u.email})? You can return to admin mode anytime.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/users/${u.id}/impersonate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        window.location.href = '/dashboard';
+      } else {
+        alert(data.message || 'Failed to impersonate user.');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Network error impersonating user.');
     }
   };
 
@@ -959,7 +980,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
           {/* TAB 1: OVERVIEW */}
           {activeTab === 'overview' && (
             <div className="space-y-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
                 <div className="p-4 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-1">
                   <div className="text-xs text-[#98A2B3] flex items-center justify-between">
                     <span>Total Registered Users</span>
@@ -976,6 +997,15 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                   </div>
                   <div className="text-2xl font-extrabold text-white font-mono">{summary?.activeNodes || 0} / 10,000</div>
                   <div className="text-[11px] text-[#98A2B3]">{summary?.availableNodes || 0} Available</div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-1">
+                  <div className="text-xs text-[#98A2B3] flex items-center justify-between">
+                    <span>Total Lifetime Deposits</span>
+                    <ArrowDownLeft className="w-4 h-4 text-[#00CFFF]" />
+                  </div>
+                  <div className="text-2xl font-extrabold text-white font-mono">${(summary?.totalDepositsUsdt || 0).toFixed(2)}</div>
+                  <div className="text-[11px] text-[#00CFFF]">USDT Verified Lifetime</div>
                 </div>
 
                 <div className="p-4 rounded-xl bg-[#07101D] border border-white/[0.08] space-y-1">
@@ -1488,6 +1518,14 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
                         <td className="py-3 px-3 text-[#98A2B3]">{new Date(u.createdAt).toLocaleDateString()}</td>
                         <td className="py-3 px-3 text-right">
                           <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => handleImpersonateUser(u)}
+                              className="px-2.5 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-400 text-[10px] font-bold border border-amber-500/30 flex items-center gap-1 cursor-pointer"
+                              title="Login as User (Impersonate)"
+                            >
+                              <Key className="w-3 h-3" /> Login as User
+                            </button>
+
                             <button
                               onClick={() => setSelectedUser360Id(u.id)}
                               className="px-2.5 py-1 rounded bg-[#00CFFF] hover:bg-[#00b8e6] text-slate-950 text-[10px] font-bold flex items-center gap-1 cursor-pointer shadow"

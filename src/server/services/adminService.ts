@@ -33,6 +33,7 @@ export interface AdminSummaryMetrics {
   failedWithdrawalsCount: number;
   failedWithdrawalsAmount: number;
   totalWithdrawalsAmount: number;
+  totalDepositsUsdt: number;
   pendingKycCount?: number;
   updatedAt: string;
 }
@@ -124,6 +125,7 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
     ledgerRes,
     withdrawalsRes,
     kycRes,
+    depositsRes,
   ] = await Promise.all([
     db.query(`
       SELECT 
@@ -182,6 +184,10 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
         COUNT(CASE WHEN status = 'PENDING' THEN 1 END)::int AS pending_kyc
       FROM kyc_verifications
     `).catch(() => ({ rows: [{ pending_kyc: 0 }] })),
+    db.query(`
+      SELECT COALESCE(SUM(amount), 0)::float AS total
+      FROM blockchain_deposits
+    `).catch(() => ({ rows: [{ total: 0 }] })),
   ]);
 
   const uRow = usersRes.rows[0] || {};
@@ -216,6 +222,7 @@ export async function getAdminSummaryMetrics(): Promise<AdminSummaryMetrics> {
     failedWithdrawalsCount: Number(wRow.failed_count || 0),
     failedWithdrawalsAmount: Number(wRow.failed_amount || 0),
     totalWithdrawalsAmount: Number(wRow.total_withdrawal_amount || 0),
+    totalDepositsUsdt: Number(depositsRes.rows[0]?.total || 0),
     pendingKycCount: Number(kycRes.rows[0]?.pending_kyc || 0),
     updatedAt: new Date().toISOString(),
   };
@@ -1822,5 +1829,112 @@ export async function sendUserAuditReportEmail(params: {
     recipient: user.email,
     publicId: user.publicId,
   };
+}
+
+/**
+ * Force Activate Genesis Node for User with Audit Log & Order creation
+ */
+export async function adminActivateNodeForUser(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  reason: string;
+  ipAddress?: string;
+}) {
+  const db = await getDb();
+  if (!params.reason || params.reason.trim().length < 5) {
+    const err: any = new Error('Admin reason is mandatory (minimum 5 characters).');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const nodeRes = await db.query(`SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`);
+  if (nodeRes.rows.length === 0) {
+    const err: any = new Error('No available Genesis Nodes in pool to activate.');
+    err.statusCode = 400;
+    throw err;
+  }
+  const node = nodeRes.rows[0];
+
+  await db.query(`UPDATE nodes SET status = 'ACTIVE', owner_user_id = $1, activated_at = CURRENT_TIMESTAMP WHERE id = $2`, [params.targetUserId, node.id]);
+
+  const orderId = uuidv4();
+  const publicOrderId = `PHX-ORD-${Math.floor(100000 + Math.random() * 900000)}`;
+  await db.query(
+    `INSERT INTO node_orders (id, public_order_id, user_id, node_number, amount_usd, currency, status, payment_method, completed_at) VALUES ($1, $2, $3, $4, 1000, 'USDT', 'COMPLETED', 'ADMIN_ACTIVATION', CURRENT_TIMESTAMP)`,
+    [orderId, publicOrderId, params.targetUserId, node.node_number]
+  );
+
+  await logAdminAction({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    action: 'ADMIN_ACTIVATE_NODE',
+    targetType: 'NODE',
+    targetId: node.public_node_id,
+    details: `Admin ${params.adminPublicId} force-activated Genesis Node ${node.public_node_id} (Node #${node.node_number}). Reason: ${params.reason}`,
+    ipAddress: params.ipAddress,
+  });
+
+  return { success: true, nodeNumber: node.node_number, publicNodeId: node.public_node_id };
+}
+
+/**
+ * Credit Referral Commission for User
+ */
+export async function adminCreditReferralCommissionForUser(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  amountUsd: number;
+  reason: string;
+  ipAddress?: string;
+}) {
+  const amount = Number(params.amountUsd);
+  if (isNaN(amount) || amount <= 0) {
+    const err: any = new Error('Commission amount must be a positive number.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return executeAdminWalletAdjustment({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    targetUserId: params.targetUserId,
+    asset: 'USDT',
+    direction: 'CREDIT',
+    amount,
+    reason: `Referral Commission Credit: ${params.reason}`,
+    idempotencyKey: `adm-comm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    ipAddress: params.ipAddress,
+  });
+}
+
+/**
+ * Credit Mining Reward (PHIVO) for User
+ */
+export async function adminCreditMiningRewardForUser(params: {
+  adminUserId: string;
+  adminPublicId: string;
+  targetUserId: string;
+  amountPhivo: number;
+  reason: string;
+  ipAddress?: string;
+}) {
+  const amount = Number(params.amountPhivo);
+  if (isNaN(amount) || amount <= 0) {
+    const err: any = new Error('Reward amount must be a positive number.');
+    err.statusCode = 400;
+    throw err;
+  }
+  return executeAdminWalletAdjustment({
+    adminUserId: params.adminUserId,
+    adminPublicId: params.adminPublicId,
+    targetUserId: params.targetUserId,
+    asset: 'PHIVO',
+    direction: 'CREDIT',
+    amount,
+    reason: `Mining Reward Credit: ${params.reason}`,
+    idempotencyKey: `adm-rew-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    ipAddress: params.ipAddress,
+  });
 }
 

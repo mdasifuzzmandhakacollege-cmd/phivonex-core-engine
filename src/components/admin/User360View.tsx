@@ -27,7 +27,8 @@ import {
   DollarSign,
   Box,
   Layers,
-  LogOut
+  LogOut,
+  Zap
 } from 'lucide-react';
 
 interface User360ViewProps {
@@ -37,7 +38,7 @@ interface User360ViewProps {
 }
 
 export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUserUpdated }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'wallet' | 'transactions' | 'nodes' | 'security' | 'audit'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'wallet' | 'transactions' | 'nodes' | 'security' | 'audit' | 'actions'>('profile');
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +63,105 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
   // 1-Click Audit Report state
   const [sendingAuditReport, setSendingAuditReport] = useState<boolean>(false);
   const [auditReportSuccess, setAuditReportSuccess] = useState<string | null>(null);
+
+  // A-to-Z Control states & handlers
+  const [nodeActivateReason, setNodeActivateReason] = useState<string>('');
+  const [nodeActivating, setNodeActivating] = useState<boolean>(false);
+  const [nodeActivateSuccess, setNodeActivateSuccess] = useState<string | null>(null);
+
+  const [commAmount, setCommAmount] = useState<string>('50');
+  const [commReason, setCommReason] = useState<string>('');
+  const [commCrediting, setCommCrediting] = useState<boolean>(false);
+  const [commSuccess, setCommSuccess] = useState<string | null>(null);
+
+  const [rewardAmount, setRewardAmount] = useState<string>('100');
+  const [rewardReason, setRewardReason] = useState<string>('');
+  const [rewardCrediting, setRewardCrediting] = useState<boolean>(false);
+  const [rewardSuccess, setRewardSuccess] = useState<string | null>(null);
+
+  const handleAdminActivateNode = async () => {
+    if (!nodeActivateReason || nodeActivateReason.trim().length < 5) {
+      alert('Admin reason is mandatory (minimum 5 characters).');
+      return;
+    }
+    try {
+      setNodeActivating(true);
+      setNodeActivateSuccess(null);
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/activate-node`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: nodeActivateReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to activate node.');
+      }
+      setNodeActivateSuccess(`Successfully activated Genesis Node #${json.nodeNumber} (${json.publicNodeId})!`);
+      setNodeActivateReason('');
+      fetchUser360();
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Failed to activate node.');
+    } finally {
+      setNodeActivating(false);
+    }
+  };
+
+  const handleAdminCreditComm = async () => {
+    if (!commAmount || Number(commAmount) <= 0 || !commReason || commReason.trim().length < 5) {
+      alert('Please enter a valid amount and reason (minimum 5 characters).');
+      return;
+    }
+    try {
+      setCommCrediting(true);
+      setCommSuccess(null);
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/credit-referral`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountUsd: Number(commAmount), reason: commReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to credit referral commission.');
+      }
+      setCommSuccess(`Successfully credited $${commAmount} referral commission!`);
+      setCommReason('');
+      fetchUser360();
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Failed to credit referral commission.');
+    } finally {
+      setCommCrediting(false);
+    }
+  };
+
+  const handleAdminCreditReward = async () => {
+    if (!rewardAmount || Number(rewardAmount) <= 0 || !rewardReason || rewardReason.trim().length < 5) {
+      alert('Please enter a valid PHIVO amount and reason (minimum 5 characters).');
+      return;
+    }
+    try {
+      setRewardCrediting(true);
+      setRewardSuccess(null);
+      const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/credit-reward`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountPhivo: Number(rewardAmount), reason: rewardReason.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.message || 'Failed to credit mining reward.');
+      }
+      setRewardSuccess(`Successfully credited ${rewardAmount} PHIVO mining reward!`);
+      setRewardReason('');
+      fetchUser360();
+      if (onUserUpdated) onUserUpdated();
+    } catch (err: any) {
+      alert(err.message || 'Failed to credit mining reward.');
+    } finally {
+      setRewardCrediting(false);
+    }
+  };
 
   const handleSendAuditReport = async () => {
     try {
@@ -317,6 +417,7 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
             { id: 'nodes', label: 'Nodes & Orders', icon: Box },
             { id: 'security', label: 'Security & Sessions', icon: Shield },
             { id: 'audit', label: 'Admin Audit History', icon: History },
+            { id: 'actions', label: 'A-to-Z Adjustments & Actions', icon: Zap },
           ].map((tab) => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
@@ -790,6 +891,169 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
               ) : (
                 <p className="text-xs font-mono text-slate-400">No administrative audit records found for this user.</p>
               )}
+            </div>
+          )}
+
+          {/* TAB 7: A-TO-Z ADJUSTMENTS & ACTIONS */}
+          {activeTab === 'actions' && (
+            <div className="space-y-6">
+              <div className="p-4 rounded-xl bg-gradient-to-r from-[#00CFFF]/10 via-[#0b1528] to-[#07101D] border border-[#00CFFF]/30 space-y-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-[#00CFFF]" />
+                  A-to-Z Administrative Adjustment & Control Center
+                </h3>
+                <p className="text-xs text-slate-300">
+                  Perform comprehensive administrative actions for user <strong className="text-white">{profile.fullName} ({profile.publicId})</strong>. Every adjustment is recorded in the immutable audit log and financial ledger.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* 1. Force Activate Genesis Node */}
+                <div className="bg-[#0B1528]/80 border border-white/10 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center gap-2 text-white font-bold text-xs uppercase font-mono">
+                    <Box className="w-4 h-4 text-[#32D583]" />
+                    <span>1. Force Activate Genesis Node ($1,000)</span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Assigns the next available Genesis Node from pool and creates a completed node order for this user.
+                  </p>
+                  {nodeActivateSuccess && (
+                    <div className="p-2.5 rounded-lg bg-[#32D583]/10 text-[#32D583] text-xs font-mono">
+                      {nodeActivateSuccess}
+                    </div>
+                  )}
+                  <div className="space-y-3 text-xs font-mono">
+                    <div>
+                      <label className="text-slate-400 block mb-1">Administrative Reason *</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Manual node purchase reconciliation..."
+                        value={nodeActivateReason}
+                        onChange={(e) => setNodeActivateReason(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white outline-none focus:border-[#32D583]"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAdminActivateNode}
+                      disabled={nodeActivating}
+                      className="w-full py-2.5 rounded-xl bg-[#32D583] text-slate-950 font-bold hover:bg-[#28b86e] cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {nodeActivating && <RefreshCw className="w-4 h-4 animate-spin" />}
+                      <span>Activate Genesis Node for User</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2. Credit Referral / Spot Commission */}
+                <div className="bg-[#0B1528]/80 border border-white/10 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center gap-2 text-white font-bold text-xs uppercase font-mono">
+                    <DollarSign className="w-4 h-4 text-[#00CFFF]" />
+                    <span>2. Credit Referral / Spot Commission (USDT)</span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Manually credit missing referral or spot commissions ($25 / $50 / custom) directly to user USDT wallet.
+                  </p>
+                  {commSuccess && (
+                    <div className="p-2.5 rounded-lg bg-[#32D583]/10 text-[#32D583] text-xs font-mono">
+                      {commSuccess}
+                    </div>
+                  )}
+                  <div className="space-y-3 text-xs font-mono">
+                    <div>
+                      <label className="text-slate-400 block mb-1">Amount (USDT) *</label>
+                      <input
+                        type="number"
+                        value={commAmount}
+                        onChange={(e) => setCommAmount(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white outline-none focus:border-[#00CFFF]"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">Administrative Reason *</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Downline node activation referral adjustment..."
+                        value={commReason}
+                        onChange={(e) => setCommReason(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white outline-none focus:border-[#00CFFF]"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAdminCreditComm}
+                      disabled={commCrediting}
+                      className="w-full py-2.5 rounded-xl bg-[#00CFFF] text-slate-950 font-bold hover:bg-[#00b8e6] cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {commCrediting && <RefreshCw className="w-4 h-4 animate-spin" />}
+                      <span>Credit Referral Commission</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 3. Credit Mining Reward (PHIVO) */}
+                <div className="bg-[#0B1528]/80 border border-white/10 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center gap-2 text-white font-bold text-xs uppercase font-mono">
+                    <Coins className="w-4 h-4 text-amber-400" />
+                    <span>3. Credit Mining Reward (PHIVO)</span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Manually credit PHIVO node mining rewards or daily emission tokens to user balance.
+                  </p>
+                  {rewardSuccess && (
+                    <div className="p-2.5 rounded-lg bg-[#32D583]/10 text-[#32D583] text-xs font-mono">
+                      {rewardSuccess}
+                    </div>
+                  )}
+                  <div className="space-y-3 text-xs font-mono">
+                    <div>
+                      <label className="text-slate-400 block mb-1">PHIVO Amount *</label>
+                      <input
+                        type="number"
+                        value={rewardAmount}
+                        onChange={(e) => setRewardAmount(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white outline-none focus:border-amber-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-400 block mb-1">Administrative Reason *</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Manual daily mining reward reconciliation..."
+                        value={rewardReason}
+                        onChange={(e) => setRewardReason(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#05070B] border border-white/10 rounded-lg text-white outline-none focus:border-amber-400"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAdminCreditReward}
+                      disabled={rewardCrediting}
+                      className="w-full py-2.5 rounded-xl bg-amber-400 text-slate-950 font-bold hover:bg-amber-300 cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {rewardCrediting && <RefreshCw className="w-4 h-4 animate-spin" />}
+                      <span>Credit PHIVO Mining Reward</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4. Quick Wallet Adjustment Shortcut */}
+                <div className="bg-[#0B1528]/80 border border-white/10 rounded-xl p-5 space-y-4 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center gap-2 text-white font-bold text-xs uppercase font-mono">
+                      <Wallet className="w-4 h-4 text-[#00CFFF]" />
+                      <span>4. General Ledger Balance Adjustment</span>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-2">
+                      Execute standard credit or debit adjustments on USDT or PHIVO ledger balance with full idempotency protection.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => { setIsAdjustModalOpen(true); setAdjustAsset('USDT'); setAdjustDirection('CREDIT'); }}
+                    className="w-full py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold font-mono text-xs cursor-pointer flex items-center justify-center gap-2 border border-white/10"
+                  >
+                    <Wallet className="w-4 h-4 text-[#00CFFF]" />
+                    <span>Open General Wallet Adjustment Modal</span>
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
