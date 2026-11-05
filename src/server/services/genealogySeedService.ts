@@ -492,6 +492,12 @@ export async function seedGenealogyNetworkTree(
         nodeId = existingNodeRes.rows[0].id;
         activeNodePublicId = existingNodeRes.rows[0].public_node_id;
         nodeNumber = existingNodeRes.rows[0].node_number;
+
+        // Force re-sync if node is not ACTIVE but should be
+        await db.query(
+          `UPDATE nodes SET status = 'ACTIVE', purchase_price_usd = $1, activated_at = COALESCE(activated_at, NOW()), maturity_timestamp = COALESCE(maturity_timestamp, NOW() + INTERVAL '200 days') WHERE id = $2`,
+          [nodePrice, nodeId]
+        );
       } else {
         // Claim an AVAILABLE node within valid 1..10000 range
         const availNodeRes = await db.query<{
