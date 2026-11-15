@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DatabaseClient, getDb } from '../db/db';
 import { formatSafeDisplayName } from '../utils/idGenerator';
 import { backfillNodeSalesVolumeForPlacedMember } from './binaryVolumeService';
+import { needAffiliateReconciliation, reconcileSpecificAffiliateAccounts } from './affiliateAutoReconcileService';
 
 export type BinarySide = 'LEFT' | 'RIGHT';
 export type BinaryPlacementStatus = 'UNPLACED' | 'PLACED';
@@ -463,6 +464,12 @@ export async function getNetworkTree(rootUserId: string, requestedDepth: number 
   const depth = Math.max(1, Math.min(12, requestedDepth || 8));
   const db = await getDb();
 
+  try {
+    if (await needAffiliateReconciliation(db)) {
+      await reconcileSpecificAffiliateAccounts(db);
+    }
+  } catch (_recErr) {}
+
   // 1. Fetch root user info
   const rootUserRes = await db.query<{
     id: string;
@@ -595,6 +602,12 @@ async function countSubtreeMembers(db: DatabaseClient, rootParentId: string, sid
  */
 export async function getNetworkSummary(userId: string): Promise<NetworkSummary> {
   const db = await getDb();
+
+  try {
+    if (await needAffiliateReconciliation(db)) {
+      await reconcileSpecificAffiliateAccounts(db);
+    }
+  } catch (_recErr) {}
 
   // 1. Direct referrals count
   const directsRes = await db.query<{ count: string }>(

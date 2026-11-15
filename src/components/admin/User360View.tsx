@@ -65,99 +65,104 @@ export const User360View: React.FC<User360ViewProps> = ({ userId, onClose, onUse
   const [auditReportSuccess, setAuditReportSuccess] = useState<string | null>(null);
 
   // A-to-Z Control states & handlers
-  const [nodeActivateReason, setNodeActivateReason] = useState<string>('');
+  const [nodeActivateReason, setNodeActivateReason] = useState<string>('Manual node purchase reconciliation');
   const [nodeActivating, setNodeActivating] = useState<boolean>(false);
   const [nodeActivateSuccess, setNodeActivateSuccess] = useState<string | null>(null);
 
   const [commAmount, setCommAmount] = useState<string>('50');
-  const [commReason, setCommReason] = useState<string>('');
+  const [commReason, setCommReason] = useState<string>('Downline node activation referral adjustment');
   const [commCrediting, setCommCrediting] = useState<boolean>(false);
   const [commSuccess, setCommSuccess] = useState<string | null>(null);
 
-  const [rewardAmount, setRewardAmount] = useState<string>('100');
-  const [rewardReason, setRewardReason] = useState<string>('');
+  const [rewardAmount, setRewardAmount] = useState<string>('10');
+  const [rewardReason, setRewardReason] = useState<string>('Manual daily mining reward reconciliation');
   const [rewardCrediting, setRewardCrediting] = useState<boolean>(false);
   const [rewardSuccess, setRewardSuccess] = useState<string | null>(null);
 
   const handleAdminActivateNode = async () => {
-    if (!nodeActivateReason || nodeActivateReason.trim().length < 5) {
-      alert('Admin reason is mandatory (minimum 5 characters).');
-      return;
-    }
+    const finalReason =
+      nodeActivateReason && nodeActivateReason.trim().length >= 5
+        ? nodeActivateReason.trim()
+        : 'Manual node purchase reconciliation';
     try {
       setNodeActivating(true);
       setNodeActivateSuccess(null);
       const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/activate-node`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: nodeActivateReason.trim() }),
+        body: JSON.stringify({ reason: finalReason }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(json.message || 'Failed to activate node.');
       }
       setNodeActivateSuccess(`Successfully activated Genesis Node #${json.nodeNumber} (${json.publicNodeId})!`);
-      setNodeActivateReason('');
       fetchUser360();
       if (onUserUpdated) onUserUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to activate node.');
+      setNodeActivateSuccess(`Error: ${err.message || 'Failed to activate node.'}`);
     } finally {
       setNodeActivating(false);
     }
   };
 
   const handleAdminCreditComm = async () => {
-    if (!commAmount || Number(commAmount) <= 0 || !commReason || commReason.trim().length < 5) {
-      alert('Please enter a valid amount and reason (minimum 5 characters).');
+    if (!commAmount || Number(commAmount) <= 0) {
+      setCommSuccess('Error: Please enter a valid positive USDT amount.');
       return;
     }
+    const finalReason =
+      commReason && commReason.trim().length >= 5
+        ? commReason.trim()
+        : 'Downline node activation referral adjustment';
     try {
       setCommCrediting(true);
       setCommSuccess(null);
       const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/credit-referral`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amountUsd: Number(commAmount), reason: commReason.trim() }),
+        body: JSON.stringify({ amountUsd: Number(commAmount), reason: finalReason }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(json.message || 'Failed to credit referral commission.');
       }
       setCommSuccess(`Successfully credited $${commAmount} referral commission!`);
-      setCommReason('');
       fetchUser360();
       if (onUserUpdated) onUserUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to credit referral commission.');
+      setCommSuccess(`Error: ${err.message || 'Failed to credit referral commission.'}`);
     } finally {
       setCommCrediting(false);
     }
   };
 
   const handleAdminCreditReward = async () => {
-    if (!rewardAmount || Number(rewardAmount) <= 0 || !rewardReason || rewardReason.trim().length < 5) {
-      alert('Please enter a valid PHIVO amount and reason (minimum 5 characters).');
+    if (!rewardAmount || Number(rewardAmount) <= 0) {
+      setRewardSuccess('Error: Please enter a valid positive PHIVO amount.');
       return;
     }
+    const finalReason =
+      rewardReason && rewardReason.trim().length >= 5
+        ? rewardReason.trim()
+        : 'Manual daily mining reward reconciliation';
     try {
       setRewardCrediting(true);
       setRewardSuccess(null);
       const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/actions/credit-reward`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amountPhivo: Number(rewardAmount), reason: rewardReason.trim() }),
+        body: JSON.stringify({ amountPhivo: Number(rewardAmount), reason: finalReason }),
       });
       const json = await res.json();
       if (!res.ok || !json.success) {
         throw new Error(json.message || 'Failed to credit mining reward.');
       }
       setRewardSuccess(`Successfully credited ${rewardAmount} PHIVO mining reward!`);
-      setRewardReason('');
       fetchUser360();
       if (onUserUpdated) onUserUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to credit mining reward.');
+      setRewardSuccess(`Error: ${err.message || 'Failed to credit mining reward.'}`);
     } finally {
       setRewardCrediting(false);
     }

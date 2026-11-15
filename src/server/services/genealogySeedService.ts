@@ -55,20 +55,6 @@ function deterministicUuid(key: string): string {
  * falling back to DEFAULT_AFFILIATE_MASTER_MAP from src/config/affiliateMasterMap.ts
  */
 export async function loadSavedMasterMapSpecs(): Promise<AffiliateMasterNodeSpec[]> {
-  try {
-    const docSnap = await adminFirestore
-      .collection('system_configs')
-      .doc('affiliate_master_map')
-      .get();
-    if (docSnap.exists) {
-      const data = docSnap.data();
-      if (data && Array.isArray(data.specs) && data.specs.length > 0) {
-        return data.specs as AffiliateMasterNodeSpec[];
-      }
-    }
-  } catch (_err) {
-    // Ignore in test / offline environments
-  }
   return DEFAULT_AFFILIATE_MASTER_MAP;
 }
 
@@ -171,7 +157,7 @@ export async function seedGenealogyNetworkTree(
       publicId = existingRes.rows[0].public_id;
 
       await db.query(
-        `UPDATE users SET full_name = $1, role = $2, status = 'ACTIVE', updated_at = NOW() WHERE id = $3`,
+        `UPDATE users SET full_name = CASE WHEN COALESCE(TRIM(full_name), '') = '' THEN $1 ELSE full_name END, role = $2, status = 'ACTIVE', updated_at = NOW() WHERE id = $3`,
         [spec.fullName.trim(), spec.role, userId]
       );
     } else {

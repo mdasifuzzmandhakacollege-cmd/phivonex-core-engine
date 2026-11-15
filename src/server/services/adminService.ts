@@ -1854,32 +1854,124 @@ export async function adminActivateNodeForUser(params: {
   adminUserId: string;
   adminPublicId: string;
   targetUserId: string;
-  reason: string;
+  reason?: string;
   ipAddress?: string;
 }) {
   const db = await getDb();
-  if (!params.reason || params.reason.trim().length < 5) {
-    const err: any = new Error('Admin reason is mandatory (minimum 5 characters).');
-    err.statusCode = 400;
+  const safeReason =
+    params.reason && params.reason.trim().length >= 3
+      ? params.reason.trim()
+      : 'Admin manual Genesis Node activation';
+
+  // Resolve target user by UUID or public_id
+  const userLookup = await db.query<{ id: string; public_id: string; email: string }>(
+    `SELECT id, public_id, email FROM users WHERE id::text = $1 OR public_id = $1 LIMIT 1`,
+    [params.targetUserId]
+  );
+  if (userLookup.rows.length === 0) {
+    const err: any = new Error('Target user not found.');
+    err.statusCode = 404;
     throw err;
   }
+  const targetUser = userLookup.rows[0];
 
-  const nodeRes = await db.query(`SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' ORDER BY node_number ASC LIMIT 1`);
-  if (nodeRes.rows.length === 0) {
-    const err: any = new Error('No available Genesis Nodes in pool to activate.');
-    err.statusCode = 400;
-    throw err;
+  // Check if user already has an ACTIVE node to prevent accidental duplicates
+  const existingActive = await db.query<{ id: string; node_number: number; public_node_id: string }>(
+    `SELECT id, node_number, public_node_id FROM nodes WHERE owner_user_id = $1 AND status = 'ACTIVE' ORDER BY node_number ASC LIMIT 1`,
+    [targetUser.id]
+  );
+
+  let node: { id: string; node_number: number; public_node_id: string };
+  if (existingActive.rows.length > 0) {
+    node = existingActive.rows[0];
+  } else {
+    const nodeRes = await db.query<{ id: string; node_number: number; public_node_id: string }>(
+      `SELECT id, node_number, public_node_id FROM nodes WHERE status = 'AVAILABLE' AND owner_user_id IS NULL ORDER BY node_number ASC LIMIT 1`
+    );
+    if (nodeRes.rows.length === 0) {
+      const err: any = new Error('No available Genesis Nodes in pool to activate.');
+      err.statusCode = 400;
+      throw err;
+    }
+    node = nodeRes.rows[0];
+
+    await db.query(
+      `UPDATE nodes
+       SET status = 'ACTIVE',
+           owner_user_id = $1,
+           purchase_price_usd = 1000,
+           purchase_timestamp = CURRENT_TIMESTAMP,
+           activated_at = CURRENT_TIMESTAMP,
+           maturity_timestamp = CURRENT_TIMESTAMP + INTERVAL '200 days',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [targetUser.id, node.id]
+    );
   }
-  const node = nodeRes.rows[0];
-
-  await db.query(`UPDATE nodes SET status = 'ACTIVE', owner_user_id = $1, activated_at = CURRENT_TIMESTAMP WHERE id = $2`, [params.targetUserId, node.id]);
 
   const orderId = uuidv4();
   const publicOrderId = `PHX-ORD-${Math.floor(100000 + Math.random() * 900000)}`;
   await db.query(
-    `INSERT INTO node_orders (id, public_order_id, user_id, node_number, amount_usd, currency, status, payment_method, completed_at) VALUES ($1, $2, $3, $4, 1000, 'USDT', 'COMPLETED', 'ADMIN_ACTIVATION', CURRENT_TIMESTAMP)`,
-    [orderId, publicOrderId, params.targetUserId, node.node_number]
+    `INSERT INTO node_orders (
+       id, public_order_id, user_id, node_id, node_number, amount_usd,
+       currency, status, payment_method, payment_reference,
+       reserved_at, expires_at, completed_at, created_at, updated_at
+     ) VALUES ($1, $2, $3, $4, $5, 1000, 'USD', 'COMPLETED', 'ADMIN_ACTIVATION', $6, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP + INTERVAL '1 day', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    [orderId, publicOrderId, targetUser.id, node.id, node.node_number, safeReason]
   );
+
+  await db.query(
+    `INSERT INTO node_owners (id, node_id, user_id, acquired_via, acquired_at, is_current_owner)
+     VALUES ($1, $2, $3, 'PURCHASE', CURRENT_TIMESTAMP, TRUE)
+     ON CONFLICT (node_id, user_id) DO UPDATE SET is_current_owner = TRUE`,
+    [uuidv4(), node.id, targetUser.id]
+  );
+
+  // Record $1,000 funding credit + $1,000 node purchase debit in financial ledger
+  const depSourceId = uuidv4();
+  const purSourceId = uuidv4();
+  await db.query(
+    `INSERT INTO financial_ledger_entries (
+       id, public_txn_id, user_id, entry_type, source_type, source_id,
+       source_ref, description, amount, currency, status, created_at
+     ) VALUES ($1, $2, $3, 'CREDIT', 'BLOCKCHAIN_DEPOSIT', $4, $5, $6, 1000, 'USDT', 'SETTLED', CURRENT_TIMESTAMP)
+     ON CONFLICT (source_type, source_id, entry_type) DO NOTHING`,
+    [
+      uuidv4(),
+      generateLedgerTransactionPublicId(),
+      targetUser.id,
+      depSourceId,
+      `DEP-${targetUser.public_id}-${node.node_number}`,
+      `Genesis Node Activation Deposit ($1,000 USDT) — ${safeReason}`,
+    ]
+  );
+
+  await db.query(
+    `INSERT INTO financial_ledger_entries (
+       id, public_txn_id, user_id, entry_type, source_type, source_id,
+       source_ref, description, amount, currency, status, created_at
+     ) VALUES ($1, $2, $3, 'DEBIT', 'NODE_PURCHASE', $4, $5, $6, 1000, 'USD', 'SETTLED', CURRENT_TIMESTAMP)
+     ON CONFLICT (source_type, source_id, entry_type) DO NOTHING`,
+    [
+      uuidv4(),
+      generateLedgerTransactionPublicId(),
+      targetUser.id,
+      purSourceId,
+      publicOrderId,
+      `Genesis Node Activation (${node.public_node_id}) — Deducted $1,000`,
+    ]
+  );
+
+  // Propagate binary sales volume & process direct sponsor referral commission automatically
+  try {
+    const { propagateNodeSalesVolume } = await import('./binaryVolumeService');
+    await propagateNodeSalesVolume(db, node.id, targetUser.id);
+  } catch (_volErr) {}
+
+  try {
+    const { processNodeActivationCommission } = await import('./referralCommissionService');
+    await processNodeActivationCommission(db, orderId, node.id, targetUser.id);
+  } catch (_commErr) {}
 
   await logAdminAction({
     adminUserId: params.adminUserId,
@@ -1887,7 +1979,7 @@ export async function adminActivateNodeForUser(params: {
     action: 'ADMIN_ACTIVATE_NODE',
     targetType: 'NODE',
     targetId: node.public_node_id,
-    details: `Admin ${params.adminPublicId} force-activated Genesis Node ${node.public_node_id} (Node #${node.node_number}). Reason: ${params.reason}`,
+    details: `Admin ${params.adminPublicId} force-activated Genesis Node ${node.public_node_id} (Node #${node.node_number}) for ${targetUser.public_id}. Reason: ${safeReason}`,
     ipAddress: params.ipAddress,
   });
 
