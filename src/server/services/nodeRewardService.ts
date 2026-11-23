@@ -203,6 +203,7 @@ export async function closeAndSettleEpoch(
     configuredRewardPerNode?: number;
     targetNodeId?: string;
     dedupeByBusinessDate?: boolean;
+    excludeLumpSumRange?: boolean;
     settleTimestamp?: Date;
     suppressEmails?: boolean;
   }
@@ -313,6 +314,7 @@ export async function closeAndSettleEpoch(
     ? new Date(epoch.end_at)
     : new Date(`${businessDate}T23:59:59.999Z`);
   const dedupeByBusinessDate = options?.dedupeByBusinessDate === true;
+  const excludeLumpSumRange = options?.excludeLumpSumRange === true;
 
   // Snapshot active config version and rate onto the epoch record immediately before node loop
   await db.query(
@@ -351,9 +353,18 @@ export async function closeAndSettleEpoch(
             AND nr.status != 'REVERSED'
         )
       )
+      AND (
+        $5::boolean = false
+        OR NOT EXISTS (
+          SELECT 1 FROM node_rewards rwd
+          WHERE rwd.node_id = nodes.id
+            AND rwd.public_reward_id LIKE 'RWD-%'
+            AND rwd.status != 'REVERSED'
+        )
+      )
     ORDER BY node_number ASC
     `,
-    [options?.targetNodeId || null, epochEndAt, dedupeByBusinessDate, businessDate]
+    [options?.targetNodeId || null, epochEndAt, dedupeByBusinessDate, businessDate, excludeLumpSumRange]
   );
 
   const eligibleNodes = activeNodesRes.rows;
@@ -1042,13 +1053,212 @@ function buildUtcDateRange(startDateStr: string, endDateStr: string): string[] {
 }
 
 /**
+ * Ensures consistency between financial_ledger_entries, node_rewards, reward_epochs, and nodes:
+ * 1. Normalizes any stale 'EMITTING' node status to 'ACTIVE'.
+ * 2. Backfills missing node_rewards.business_date from reward_epochs.start_at.
+ * 3. Converts any orphan NODE_REWARD PHIVO ledger credits (e.g. legacy PHX-RWD-*) into ACCRUED node_rewards
+ *    preserving source_id so they are visible & claimable in the Claim UI with 0 ledger orphans.
+ * 4. Ensures every non-reversed node_rewards row has a matching financial_ledger_entries CREDIT.
+ * 5. Keeps nodes.distributed_phivo and nodes.remaining_phivo synced with node_rewards.
+ */
+export async function reconcileNodeRewardsConsistency(): Promise<{
+  normalizedNodes: number;
+  backfilledDates: number;
+  convertedOrphans: number;
+  syncedLedgerCredits: number;
+}> {
+  const db = await getDb();
+
+  const normRes = await db.query(
+    `UPDATE nodes SET status = 'ACTIVE', updated_at = CURRENT_TIMESTAMP WHERE status = 'EMITTING'`
+  );
+
+  const bdateRes = await db.query(
+    `
+    UPDATE node_rewards nr
+    SET business_date = (re.start_at AT TIME ZONE 'UTC')::date::text
+    FROM reward_epochs re
+    WHERE nr.epoch_id = re.id
+      AND (nr.business_date IS NULL OR nr.business_date = '')
+    `
+  );
+
+  // Convert any orphan PHIVO NODE_REWARD ledger entries into ACCRUED node_rewards (preserving source_id)
+  const orphanRes = await db.query<{
+    id: string;
+    user_id: string;
+    source_id: string;
+    source_ref: string | null;
+    amount: string | number;
+    created_at: Date;
+  }>(
+    `
+    SELECT fle.id, fle.user_id, fle.source_id, fle.source_ref, fle.amount, fle.created_at
+    FROM financial_ledger_entries fle
+    WHERE fle.source_type = 'NODE_REWARD'
+      AND fle.currency = 'PHIVO'
+      AND fle.entry_type = 'CREDIT'
+      AND fle.status = 'SETTLED'
+      AND NOT EXISTS (
+        SELECT 1 FROM node_rewards nr
+        WHERE nr.id::text = fle.source_id::text
+           OR (fle.source_ref IS NOT NULL AND fle.source_ref != '' AND nr.public_reward_id = fle.source_ref)
+      )
+    ORDER BY fle.created_at ASC
+    `
+  );
+
+  let convertedOrphans = 0;
+  for (const orph of orphanRes.rows) {
+    const nodeRes = await db.query<{ id: string; public_node_id: string }>(
+      `
+      SELECT id, public_node_id
+      FROM nodes
+      WHERE owner_user_id = $1 AND status IN ('ACTIVE', 'MATURED')
+      ORDER BY activated_at ASC NULLS LAST, node_number ASC
+      LIMIT 1
+      `,
+      [orph.user_id]
+    );
+    if (nodeRes.rows.length === 0) continue;
+
+    const node = nodeRes.rows[0];
+    const amt = Number(orph.amount);
+    const createdAt = orph.created_at ? new Date(orph.created_at) : new Date();
+    const bDate = getUtcBusinessDate(createdAt);
+
+    // Find or create a COMPLETED epoch matching that UTC date and rate
+    const epLookup = await db.query<{ id: string }>(
+      `
+      SELECT id FROM reward_epochs
+      WHERE status = 'COMPLETED'
+        AND (start_at AT TIME ZONE 'UTC')::date = $1::date
+        AND (reward_per_node = $2 OR public_epoch_id LIKE 'EPOCH-%')
+      ORDER BY CASE WHEN reward_per_node = $2 THEN 0 ELSE 1 END, epoch_number ASC
+      LIMIT 1
+      `,
+      [bDate, amt]
+    );
+
+    let epochId: string;
+    if (epLookup.rows.length > 0) {
+      epochId = epLookup.rows[0].id;
+    } else {
+      const createdEp = await createRewardEpoch({
+        businessDateStr: bDate,
+        rewardPerNode: amt,
+        startAt: createdAt,
+      });
+      epochId = createdEp.id;
+      await db.query(
+        `UPDATE reward_epochs SET status = 'COMPLETED', settled_at = $1 WHERE id = $2`,
+        [createdAt, epochId]
+      );
+    }
+
+    const publicRewardId =
+      orph.source_ref && orph.source_ref.trim()
+        ? orph.source_ref.trim()
+        : `RWD-${node.public_node_id}`;
+
+    const insRes = await db.query(
+      `
+      INSERT INTO node_rewards (
+        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency,
+        status, accrued_at, reward_rate_used, economic_config_version, business_date, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', $7, $8, 1, $9, $7)
+      ON CONFLICT DO NOTHING
+      RETURNING id
+      `,
+      [orph.source_id, publicRewardId, epochId, node.id, orph.user_id, amt, createdAt, amt, bDate]
+    );
+    if (insRes.rows.length > 0) {
+      convertedOrphans++;
+    }
+  }
+
+  // Ensure all non-reversed node_rewards have a matching financial_ledger_entries CREDIT
+  const missingFleRes = await db.query<{
+    id: string;
+    public_reward_id: string;
+    owner_user_id: string;
+    amount: string | number;
+    accrued_at: Date;
+    epoch_number: number;
+    public_node_id: string;
+  }>(
+    `
+    SELECT nr.id, nr.public_reward_id, nr.owner_user_id, nr.amount, nr.accrued_at, re.epoch_number, n.public_node_id
+    FROM node_rewards nr
+    JOIN reward_epochs re ON nr.epoch_id = re.id
+    JOIN nodes n ON nr.node_id = n.id
+    WHERE nr.status != 'REVERSED'
+      AND NOT EXISTS (
+        SELECT 1 FROM financial_ledger_entries fle
+        WHERE fle.source_type = 'NODE_REWARD'
+          AND fle.entry_type = 'CREDIT'
+          AND fle.source_id = nr.id
+      )
+    `
+  );
+
+  let syncedLedgerCredits = 0;
+  for (const m of missingFleRes.rows) {
+    const res = await postLedgerCredit({
+      userId: m.owner_user_id,
+      sourceType: 'NODE_REWARD',
+      sourceId: m.id,
+      sourceRef: m.public_reward_id,
+      amount: Number(m.amount),
+      currency: 'PHIVO',
+      description: `Genesis Node Mining Reward (Epoch #${m.epoch_number}, Node ${m.public_node_id})`,
+      createdAt: m.accrued_at ? new Date(m.accrued_at) : new Date(),
+    });
+    if (res) syncedLedgerCredits++;
+  }
+
+  // Sync nodes.distributed_phivo and nodes.remaining_phivo if any differ from node_rewards sum
+  await db.query(
+    `
+    WITH agg AS (
+      SELECT node_id, COALESCE(SUM(amount), 0) AS total_amt
+      FROM node_rewards
+      WHERE status != 'REVERSED'
+      GROUP BY node_id
+    )
+    UPDATE nodes n
+    SET
+      distributed_phivo = COALESCE(agg.total_amt, 0),
+      remaining_phivo = GREATEST(0, COALESCE(n.lifetime_phivo_allocation, 10000) - COALESCE(agg.total_amt, 0)),
+      updated_at = CURRENT_TIMESTAMP
+    FROM agg
+    WHERE n.id = agg.node_id
+      AND (
+        COALESCE(n.distributed_phivo, 0) <> COALESCE(agg.total_amt, 0)
+        OR COALESCE(n.remaining_phivo, 0) <> GREATEST(0, COALESCE(n.lifetime_phivo_allocation, 10000) - COALESCE(agg.total_amt, 0))
+      )
+    `
+  );
+
+  return {
+    normalizedNodes: normRes.rowCount || 0,
+    backfilledDates: bdateRes.rowCount || 0,
+    convertedOrphans,
+    syncedLedgerCredits,
+  };
+}
+
+/**
  * Scheduled check executed on startup and every 60 seconds.
  * Only executes if mode === 'AUTOMATIC' and NODE_REWARDS_ENABLED === true and reward rate > 0.
- * Automatically catches up any missed UTC business dates cleanly without double-crediting.
+ * Automatically repairs reward/ledger consistency and catches up any missed UTC business dates cleanly without double-crediting.
  */
 export async function executeDailyAutomaticRewardCheck(): Promise<void> {
   return withRewardSettlementLock(async () => {
     try {
+      await reconcileNodeRewardsConsistency();
+
       const config = await getRewardAutomationConfig();
 
       if (config.mode !== 'AUTOMATIC' || !config.autoEnabled) {
@@ -1081,27 +1291,16 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
         `
       );
 
-      // Determine missed UTC dates range
-      const latestCompletedRes = await db.query<{ latest_date: string | null }>(
-        `SELECT MAX((start_at AT TIME ZONE 'UTC')::date)::text AS latest_date FROM reward_epochs WHERE status = 'COMPLETED'`
-      );
+      // Determine missed UTC dates range across the automated daily window (starting >= 2026-11-06)
       const earliestNodeRes = await db.query<{ earliest_date: string | null }>(
         `SELECT MIN((COALESCE(activated_at, created_at) AT TIME ZONE 'UTC')::date)::text AS earliest_date FROM nodes WHERE status IN ('ACTIVE', 'EMITTING') AND owner_user_id IS NOT NULL`
       );
 
-      const latestCompletedDate = latestCompletedRes.rows[0]?.latest_date?.slice(0, 10) || null;
       const earliestNodeDate = earliestNodeRes.rows[0]?.earliest_date?.slice(0, 10) || todayDate;
-
-      let rangeStartDate = earliestNodeDate;
-      if (latestCompletedDate) {
-        const d = new Date(`${latestCompletedDate}T00:00:00.000Z`);
-        d.setUTCDate(d.getUTCDate() + 1);
-        const nextAfterLatest = d.toISOString().split('T')[0];
-        rangeStartDate = nextAfterLatest > earliestNodeDate ? nextAfterLatest : earliestNodeDate;
-      }
-
-      // Clamp catch-up lookback to at most 45 days on automatic ticks
+      const dailyCadenceFloor = '2026-11-06';
       const minAllowedLookback = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+      let rangeStartDate = earliestNodeDate > dailyCadenceFloor ? earliestNodeDate : dailyCadenceFloor;
       if (rangeStartDate < minAllowedLookback) {
         rangeStartDate = minAllowedLookback;
       }
@@ -1115,9 +1314,21 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
           continue;
         }
 
-        // Skip if a COMPLETED epoch already exists for this UTC business date
+        // Skip if a COMPLETED epoch already exists on this UTC date WITH actual daily NRW-% rewards settled
         const existingDateEpoch = await db.query<{ id: string }>(
-          `SELECT id FROM reward_epochs WHERE status = 'COMPLETED' AND (start_at AT TIME ZONE 'UTC')::date = $1::date LIMIT 1`,
+          `
+          SELECT re.id
+          FROM reward_epochs re
+          WHERE re.status = 'COMPLETED'
+            AND (re.start_at AT TIME ZONE 'UTC')::date = $1::date
+            AND EXISTS (
+              SELECT 1 FROM node_rewards nr
+              WHERE nr.epoch_id = re.id
+                AND nr.status != 'REVERSED'
+                AND nr.public_reward_id NOT LIKE 'RWD-%'
+            )
+          LIMIT 1
+          `,
           [dateStr]
         );
         if (existingDateEpoch.rows.length > 0) {
@@ -1125,22 +1336,46 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
         }
 
         const isCatchup = dateStr < todayDate;
+        const excludeLumpSumRange = isCatchup && dateStr >= '2026-11-06' && dateStr <= '2026-11-15';
         console.log(`[RewardAutomation] ⏰ Automatic daily mining reward settlement for UTC date ${dateStr}${isCatchup ? ' (catch-up)' : ''}`);
 
-        // Reuse matching OPEN epoch if it matches the date, else create a dedicated epoch for this UTC date
+        // Reuse matching OPEN epoch OR reopen an empty 0-reward epoch on this UTC date before creating a fresh one
+        let epochId: string | null = null;
         const matchingOpen = await db.query<{ id: string }>(
           `SELECT id FROM reward_epochs WHERE status = 'OPEN' AND (start_at AT TIME ZONE 'UTC')::date = $1::date ORDER BY created_at DESC LIMIT 1`,
           [dateStr]
         );
+        if (matchingOpen.rows.length > 0) {
+          epochId = matchingOpen.rows[0].id;
+        } else {
+          const emptyCompleted = await db.query<{ id: string }>(
+            `
+            SELECT re.id
+            FROM reward_epochs re
+            WHERE re.status = 'COMPLETED'
+              AND (re.start_at AT TIME ZONE 'UTC')::date = $1::date
+              AND NOT EXISTS (SELECT 1 FROM node_rewards nr WHERE nr.epoch_id = re.id)
+            ORDER BY re.epoch_number ASC
+            LIMIT 1
+            `,
+            [dateStr]
+          );
+          if (emptyCompleted.rows.length > 0) {
+            epochId = emptyCompleted.rows[0].id;
+            await db.query(`UPDATE reward_epochs SET status = 'OPEN' WHERE id = $1`, [epochId]);
+          }
+        }
 
-        const epochId = matchingOpen.rows.length > 0
-          ? matchingOpen.rows[0].id
-          : (await createRewardEpoch({ businessDateStr: dateStr, rewardPerNode: activeRate })).id;
+        if (!epochId) {
+          const created = await createRewardEpoch({ businessDateStr: dateStr, rewardPerNode: activeRate });
+          epochId = created.id;
+        }
 
         const settleTimestamp = isCatchup ? new Date(`${dateStr}T00:05:00.000Z`) : new Date();
         const result = await closeAndSettleEpoch(epochId, {
           configuredRewardPerNode: activeRate,
           dedupeByBusinessDate: true,
+          excludeLumpSumRange,
           settleTimestamp,
           suppressEmails: isCatchup,
         });
