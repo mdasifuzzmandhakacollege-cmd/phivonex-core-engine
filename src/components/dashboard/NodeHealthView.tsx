@@ -106,8 +106,8 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
     }
   };
 
-  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE');
-  const attentionNodes = nodes.filter((n) => n.status !== 'ACTIVE');
+  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE' || n.status === 'EMITTING');
+  const attentionNodes = nodes.filter((n) => n.status !== 'ACTIVE' && n.status !== 'EMITTING' && n.status !== 'MATURED');
 
   return (
     <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
@@ -319,7 +319,7 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
           /* Real Owned Node Cards Grid */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {nodes.map((node) => {
-              const isActive = node.status === 'ACTIVE';
+              const isActive = node.status === 'ACTIVE' || node.status === 'EMITTING';
               const isPending = node.status === 'PENDING' || node.status === 'RESERVED';
               return (
                 <div

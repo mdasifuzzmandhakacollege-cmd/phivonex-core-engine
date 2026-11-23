@@ -223,7 +223,10 @@ async function startServer() {
     startWeeklyReportScheduler();
     startDailyAuditScheduler();
 
-    // Start Daily Mining Reward Automation Check (Every 60 seconds)
+    // Run initial automatic daily reward catch-up immediately on startup, then every 60 seconds
+    executeDailyAutomaticRewardCheck().catch((err) =>
+      console.error('[RewardScheduler] Startup check error:', err)
+    );
     setInterval(() => {
       executeDailyAutomaticRewardCheck().catch((err) =>
         console.error('[RewardScheduler] Interval error:', err)

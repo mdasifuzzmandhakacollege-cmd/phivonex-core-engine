@@ -32,9 +32,9 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     maxDailyWithdrawalAmount: 10000,
     autoWithdrawalEnabled: false,
     coinPriceUsdt: 0.10,
-    nodeBasePriceUsd: 50.0,
-    directReferralCommissionRate: 10,
-    genesisNodeCap: 1000,
+    nodeBasePriceUsd: 1000.0,
+    directReferralCommissionRate: 50,
+    genesisNodeCap: 10000,
     captchaEnabled: false,
     cryptoDepositsEnabled: true,
     cryptoWithdrawalsEnabled: true,
@@ -253,7 +253,12 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
               if (key === 'INTERNAL_COIN_SWAP_ENABLED') updated.internalCoinSwapEnabled = Boolean(val);
               if (key === 'NODE_REWARDS_ENABLED') updated.nodeRewardsEnabled = Boolean(val);
               if (key === 'SYSTEM_NOTICE') updated.systemNotice = val ? String(val) : null;
-              if (key === 'PROMOTIONAL_OFFERS_UPDATED' || key === 'PROMOTIONAL_BANNERS_UPDATED') {
+              if (
+                key === 'DAILY_REWARD_AUTOMATION' ||
+                key === 'NODE_REWARD_RATE_PER_EPOCH' ||
+                key === 'PROMOTIONAL_OFFERS_UPDATED' ||
+                key === 'PROMOTIONAL_BANNERS_UPDATED'
+              ) {
                 updated.lastUpdated = new Date().toISOString();
               }
               return updated;

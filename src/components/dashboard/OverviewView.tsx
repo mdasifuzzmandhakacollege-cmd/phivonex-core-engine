@@ -87,6 +87,8 @@ interface NodeSummaryData {
   totalNodes: number;
   activeNodes: number;
   totalRewardsPhivo: number;
+  unclaimedPhivo?: number;
+  claimedPhivo?: number;
   latestRewardEpoch?: string | null;
 }
 
@@ -206,14 +208,18 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
         const data = await nodesRes.value.json();
         const userNodes = data.nodes || [];
         totalNodesCount = userNodes.length;
-        activeNodesCount = userNodes.filter((n: any) => n.status === 'ACTIVE').length;
+        activeNodesCount = userNodes.filter((n: any) => n.status === 'ACTIVE' || n.status === 'EMITTING').length;
       }
 
       let totalMiningRewards = 0;
+      let unclaimedPhivo = 0;
+      let claimedPhivo = 0;
       let latestEpoch = null;
       if (rewardsRes.status === 'fulfilled' && rewardsRes.value.ok) {
         const rData = await rewardsRes.value.json();
-        totalMiningRewards = rData.totalAccrued || rData.totalRewards || 0;
+        unclaimedPhivo = Number(rData.totalAccrued || 0);
+        claimedPhivo = Number(rData.totalClaimed || 0);
+        totalMiningRewards = rData.totalRewards ?? (unclaimedPhivo + claimedPhivo);
         latestEpoch = rData.latestEpoch?.publicEpochId || null;
       }
 
@@ -221,6 +227,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
         totalNodes: totalNodesCount,
         activeNodes: activeNodesCount,
         totalRewardsPhivo: totalMiningRewards,
+        unclaimedPhivo,
+        claimedPhivo,
         latestRewardEpoch: latestEpoch,
       });
 
@@ -347,10 +355,8 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
   const currentRankName = rankData?.currentRankName || 'Standard Member';
   const nextRankName = rankData?.nextRankName;
 
-  // Dynamic direct referral reward per eligible node (based on node base price & commission rate)
-  const directRewardPerNode = (nodeBasePriceUsd && directReferralCommissionRate)
-    ? (nodeBasePriceUsd * (directReferralCommissionRate / 100))
-    : 50;
+  // Dynamic direct referral reward per eligible node (flat USD amount configured by admin)
+  const directRewardPerNode = directReferralCommissionRate || 50;
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return 'Not Available';
@@ -513,6 +519,11 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
             </div>
             <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
               ≈ ${formatCurrency(phivoValueUsdt)} USDT
+              {nodeData?.unclaimedPhivo && nodeData.unclaimedPhivo > 0 ? (
+                <span className="text-[#00CFFF] block text-[10px]">
+                  ({formatCurrency(nodeData.unclaimedPhivo)} unclaimed)
+                </span>
+              ) : null}
             </div>
           </div>
         </div>

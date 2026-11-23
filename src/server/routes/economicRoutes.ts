@@ -39,27 +39,128 @@ publicEconomicRouter.get('/token-price', async (_req: Request, res: Response) =>
 });
 
 /**
+ * Helper to extract numeric daily reward rate from NODE_REWARD_RATE_PER_EPOCH value.
+ */
+function parseRewardRateValue(rawVal: any): number | null {
+  if (rawVal === null || rawVal === undefined) return null;
+  if (typeof rawVal === 'object') {
+    const n = Number(
+      rawVal.ratePhivo !== undefined
+        ? rawVal.ratePhivo
+        : rawVal.rateUsd !== undefined
+        ? rawVal.rateUsd
+        : rawVal.rewardPerNode !== undefined
+        ? rawVal.rewardPerNode
+        : NaN
+    );
+    return !isNaN(n) && n > 0 ? n : null;
+  }
+  const n = Number(rawVal);
+  return !isNaN(n) && n > 0 ? n : null;
+}
+
+/**
+ * GET /api/economic/public
+ * Lightweight public snapshot consumed by dashboard Overview cards and trend charts.
+ */
+publicEconomicRouter.get('/public', async (_req: Request, res: Response) => {
+  try {
+    const configs = await getAllEconomicConfigs();
+    const byKey: Record<string, any> = {};
+    for (const c of configs) {
+      byKey[c.configKey] = c;
+    }
+
+    const coinCfg = byKey['INTERNAL_COIN_PRICE_USDT'];
+    const coinVal = coinCfg?.status === 'ACTIVE' ? (coinCfg.configValue || {}) : {};
+    const phivoPriceUsd = Number(coinVal.priceUsdt) > 0 ? Number(coinVal.priceUsdt) : 0.10;
+    const coinSymbol = coinVal.coinSymbol || 'PHIVO';
+    const swapSwitchCfg = byKey['INTERNAL_COIN_SWAP_ENABLED'];
+    const swapEnabled =
+      coinCfg?.status === 'ACTIVE' &&
+      coinVal.swapEnabled !== false &&
+      Number(coinVal.priceUsdt) > 0 &&
+      (swapSwitchCfg ? swapSwitchCfg.status === 'ACTIVE' && swapSwitchCfg.configValue !== false : true);
+
+    const rewardsCfg = byKey['NODE_REWARDS_ENABLED'];
+    const nodeRewardsEnabled = rewardsCfg ? rewardsCfg.status === 'ACTIVE' && rewardsCfg.configValue !== false : true;
+    const rewardRateCfg = byKey['NODE_REWARD_RATE_PER_EPOCH'];
+    const dailyEmissionRate =
+      rewardRateCfg && rewardRateCfg.status === 'ACTIVE' ? parseRewardRateValue(rewardRateCfg.configValue) : null;
+
+    const basePriceCfg = byKey['NODE_BASE_PRICE_USD'];
+    const nodeBasePriceUsd = typeof basePriceCfg?.configValue === 'number' ? basePriceCfg.configValue : 1000;
+    const refCfg = byKey['DIRECT_REFERRAL_COMMISSION_USD'];
+    const directReferralCommissionUsd = typeof refCfg?.configValue === 'number' ? refCfg.configValue : 50;
+
+    res.setHeader('Cache-Control', 'public, max-age=5');
+    return res.status(200).json({
+      success: true,
+      phivoPriceUsd,
+      coinSymbol,
+      swapEnabled,
+      nodeRewardsEnabled,
+      nodeBasePriceUsd,
+      directReferralCommissionUsd,
+      dailyEmissionRate,
+    });
+  } catch (err: any) {
+    console.error('[Economic API] Error in GET /public:', err);
+    return res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: 'Failed to retrieve public economic snapshot',
+    });
+  }
+});
+
+/**
  * GET /api/economic/platform-settings
  * Authoritative public snapshot of all user-facing protocol settings & features.
  */
 publicEconomicRouter.get('/platform-settings', async (_req: Request, res: Response) => {
   try {
     const configs = await getAllEconomicConfigs();
-    const configMap: Record<string, any> = {};
+    const byKey: Record<string, any> = {};
     for (const c of configs) {
-      configMap[c.configKey] = c.configValue;
+      byKey[c.configKey] = c;
     }
 
-    const coinPrice = configMap['INTERNAL_COIN_PRICE_USDT']?.priceUsdt ?? 0.10;
-    const coinSymbol = configMap['INTERNAL_COIN_PRICE_USDT']?.coinSymbol ?? 'PHIVO';
-    const swapEnabled = configMap['INTERNAL_COIN_SWAP_ENABLED'] !== false && (configMap['INTERNAL_COIN_PRICE_USDT']?.swapEnabled !== false);
-    const cryptoDepositsEnabled = configMap['CRYPTO_DEPOSITS_ENABLED'] !== false;
-    const cryptoWithdrawalsEnabled = configMap['CRYPTO_WITHDRAWALS_ENABLED'] !== false;
-    const nodeRewardsEnabled = configMap['NODE_REWARDS_ENABLED'] !== false;
-    const minWithdrawalAmount = typeof configMap['MIN_WITHDRAWAL_AMOUNT'] === 'number' ? configMap['MIN_WITHDRAWAL_AMOUNT'] : 0.10;
-    const autoWithdrawalEnabled = Boolean(configMap['AUTO_WITHDRAWAL_ENABLED']);
-    const nodeBasePriceUsd = typeof configMap['NODE_BASE_PRICE_USD'] === 'number' ? configMap['NODE_BASE_PRICE_USD'] : 50.0;
-    const directReferralCommissionRate = typeof configMap['REFERRAL_COMMISSION_RATE'] === 'number' ? configMap['REFERRAL_COMMISSION_RATE'] : 10;
+    const isSwitchActive = (key: string, defaultVal: boolean): boolean => {
+      const c = byKey[key];
+      if (!c) return defaultVal;
+      return c.status === 'ACTIVE' && c.configValue !== false;
+    };
+
+    const coinCfg = byKey['INTERNAL_COIN_PRICE_USDT'];
+    const coinVal = coinCfg?.status === 'ACTIVE' ? (coinCfg.configValue || {}) : {};
+    const coinPrice = Number(coinVal.priceUsdt) > 0 ? Number(coinVal.priceUsdt) : 0.10;
+    const coinSymbol = coinVal.coinSymbol || 'PHIVO';
+    const swapEnabled =
+      isSwitchActive('INTERNAL_COIN_SWAP_ENABLED', true) &&
+      coinCfg?.status === 'ACTIVE' &&
+      Number(coinVal.priceUsdt) > 0 &&
+      coinVal.swapEnabled !== false;
+
+    const cryptoDepositsEnabled = isSwitchActive('CRYPTO_DEPOSITS_ENABLED', true);
+    const cryptoWithdrawalsEnabled = isSwitchActive('CRYPTO_WITHDRAWALS_ENABLED', true);
+    const nodeRewardsEnabled = isSwitchActive('NODE_REWARDS_ENABLED', true);
+    const autoWithdrawalEnabled = isSwitchActive('AUTO_WITHDRAWAL_ENABLED', false);
+
+    const minWdCfg = byKey['MIN_WITHDRAWAL_AMOUNT'];
+    const minWithdrawalAmount = typeof minWdCfg?.configValue === 'number' ? minWdCfg.configValue : 0.10;
+
+    const basePriceCfg = byKey['NODE_BASE_PRICE_USD'];
+    const nodeBasePriceUsd = typeof basePriceCfg?.configValue === 'number' ? basePriceCfg.configValue : 1000;
+
+    const directRefCfg = byKey['DIRECT_REFERRAL_COMMISSION_USD'];
+    const directReferralCommissionRate = typeof directRefCfg?.configValue === 'number' ? directRefCfg.configValue : 50;
+
+    const rewardRateCfg = byKey['NODE_REWARD_RATE_PER_EPOCH'];
+    const nodeRewardRatePerEpoch =
+      rewardRateCfg && rewardRateCfg.status === 'ACTIVE' ? parseRewardRateValue(rewardRateCfg.configValue) : null;
+
+    const automationCfg = byKey['DAILY_REWARD_AUTOMATION'];
+    const dailyRewardAutomation = automationCfg?.configValue || null;
 
     res.setHeader('Cache-Control', 'public, max-age=5');
     return res.status(200).json({
@@ -71,6 +172,8 @@ publicEconomicRouter.get('/platform-settings', async (_req: Request, res: Respon
         cryptoDepositsEnabled,
         cryptoWithdrawalsEnabled,
         nodeRewardsEnabled,
+        nodeRewardRatePerEpoch,
+        dailyRewardAutomation,
         minWithdrawalAmount,
         autoWithdrawalEnabled,
         nodeBasePriceUsd,

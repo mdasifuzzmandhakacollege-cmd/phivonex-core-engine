@@ -52,6 +52,8 @@ interface RewardsTelemetry {
   totalAccrued: number;
   totalClaimed: number;
   totalRewards: number;
+  dailyEmissionRate?: number;
+  protocolDailyEmission?: number | null;
   latestEpoch: {
     id?: string;
     publicEpochId: string;
@@ -176,7 +178,14 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
     const interval = setInterval(() => {
       fetchRewardsData(false);
     }, 20000);
-    return () => clearInterval(interval);
+    const handleUpdate = () => {
+      fetchRewardsData(false);
+    };
+    window.addEventListener('phivonex:balance-or-tx-updated', handleUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('phivonex:balance-or-tx-updated', handleUpdate);
+    };
   }, [fetchRewardsData]);
 
   // Claim action: Transitions ACCRUED -> CLAIMED server-side
@@ -233,14 +242,14 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
     });
   };
 
-  // Compute active node count
-  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE');
+  // Compute active node count and PHIVO daily production
+  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE' || n.status === 'EMITTING');
   const totalAccrued = summary?.totalAccrued ?? rewards?.totalAccrued ?? 0;
   const totalClaimed = summary?.totalClaimed ?? rewards?.totalClaimed ?? 0;
   const totalEarned = summary?.totalRewardsEarned ?? rewards?.totalRewards ?? 0;
-  const rewardRate = rewards?.latestEpoch?.rewardPerNode ?? 2.50;
-  const dailyProduction = activeNodes.length * (rewardRate || 2.50);
-  const dailyProductionPhivo = tokenPrice.priceUsd > 0 ? dailyProduction / tokenPrice.priceUsd : 0;
+  const rewardRate = rewards?.dailyEmissionRate ?? rewards?.protocolDailyEmission ?? rewards?.latestEpoch?.rewardPerNode ?? 0;
+  const dailyProductionPhivo = activeNodes.length * rewardRate;
+  const dailyProductionUsd = dailyProductionPhivo * tokenPrice.priceUsd;
 
   // Filter and stably sort history
   const historyList = rewards?.history || [];
@@ -351,7 +360,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
               ) : (
                 <>
                   <Coins className="w-4 h-4" />
-                  <span>Claim All (${formatCurrency(totalAccrued)})</span>
+                  <span>Claim All ({formatCurrency(totalAccrued)} PHIVO)</span>
                 </>
               )}
             </button>
@@ -403,10 +412,10 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
           </div>
           <div className="mt-3">
             <div className="text-2xl font-extrabold text-white tracking-tight font-mono">
-              ${formatCurrency(totalAccrued)}
+              {formatCurrency(totalAccrued)} <span className="text-sm text-[#00CFFF]">PHIVO</span>
             </div>
             <div className="text-[11px] text-[#00CFFF] mt-1 font-mono flex items-center gap-1">
-              <span>Ready for immediate claim</span>
+              <span>≈ ${formatCurrency(totalAccrued * tokenPrice.priceUsd)} USDT • Ready to claim</span>
             </div>
           </div>
         </div>
@@ -422,10 +431,10 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
           </div>
           <div className="mt-3">
             <div className="text-2xl font-extrabold text-white tracking-tight font-mono">
-              ${formatCurrency(totalClaimed)}
+              {formatCurrency(totalClaimed)} <span className="text-sm text-[#32D583]">PHIVO</span>
             </div>
             <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
-              Settled to user wallet ledger
+              ≈ ${formatCurrency(totalClaimed * tokenPrice.priceUsd)} USDT • In PHIVO wallet
             </div>
           </div>
         </div>
@@ -440,10 +449,10 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
           </div>
           <div className="mt-3">
             <div className="text-2xl font-extrabold text-white tracking-tight font-mono">
-              ${formatCurrency(totalEarned)}
+              {formatCurrency(totalEarned)} <span className="text-sm text-[#00CFFF]">PHIVO</span>
             </div>
             <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
-              Cumulative production value
+              ≈ ${formatCurrency(totalEarned * tokenPrice.priceUsd)} USDT • Cumulative earned
             </div>
           </div>
         </div>
@@ -462,7 +471,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
               <span className="text-xs text-[#98A2B3] font-normal">/ {nodes.length} Total</span>
             </div>
             <div className="text-[11px] text-[#32D583] mt-1 font-mono">
-              +${formatCurrency(dailyProduction)} / epoch cadence
+              +{formatCurrency(dailyProductionPhivo)} PHIVO / day (≈ ${formatCurrency(dailyProductionUsd)})
             </div>
           </div>
         </div>
@@ -487,7 +496,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
           <div className="space-y-3 font-mono text-xs">
             <div className="flex items-center justify-between py-1 border-b border-white/[0.04]">
               <span className="text-[#98A2B3]">Rate Per Node / Epoch:</span>
-              <span className="text-white font-bold">${formatCurrency(rewardRate)} USD</span>
+              <span className="text-white font-bold">{formatCurrency(rewardRate)} PHIVO</span>
             </div>
 
             <div className="flex items-center justify-between py-1 border-b border-white/[0.04]">
@@ -496,16 +505,16 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
             </div>
 
             <div className="flex items-center justify-between py-1 border-b border-white/[0.04]">
-              <span className="text-[#98A2B3]">PHIVO Yield Per Node:</span>
+              <span className="text-[#98A2B3]">Est. Daily Value / Node:</span>
               <span className="text-white font-bold">
-                {tokenPrice.priceUsd > 0 ? (rewardRate / tokenPrice.priceUsd).toFixed(2) : '25.00'} PHIVO
+                ≈ ${formatCurrency(rewardRate * tokenPrice.priceUsd)} USDT
               </span>
             </div>
 
             <div className="flex items-center justify-between py-1 border-b border-white/[0.04]">
               <span className="text-[#98A2B3]">Est. Daily Production:</span>
               <span className="text-[#32D583] font-bold">
-                ~{dailyProductionPhivo.toFixed(2)} PHIVO (${formatCurrency(dailyProduction)})
+                +{formatCurrency(dailyProductionPhivo)} PHIVO (≈ ${formatCurrency(dailyProductionUsd)})
               </span>
             </div>
 
@@ -697,7 +706,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
                 {nodes.map((node) => {
-                  const isActive = node.status === 'ACTIVE';
+                  const isActive = node.status === 'ACTIVE' || node.status === 'EMITTING';
                   return (
                     <tr key={node.publicNodeId} className="hover:bg-white/[0.02] transition-colors">
                       <td className="px-6 py-4 font-mono">
@@ -723,7 +732,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
                           }`}
                         >
                           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />}
-                          {node.status}
+                          {isActive ? 'ACTIVE' : node.status}
                         </span>
                       </td>
 
@@ -732,7 +741,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
                       </td>
 
                       <td className="px-6 py-4 font-mono text-white font-semibold">
-                        ${formatCurrency(node.totalRewards || 0)}
+                        {formatCurrency(node.totalRewards || 0)} PHIVO
                       </td>
 
                       <td className="px-6 py-4">
@@ -860,7 +869,7 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
                       </td>
 
                       <td className="px-4 py-3 text-white font-bold">
-                        ${formatCurrency(item.amount)} {item.currency}
+                        {formatCurrency(item.amount)} {item.currency || 'PHIVO'}
                       </td>
 
                       <td className="px-4 py-3">

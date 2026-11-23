@@ -912,7 +912,7 @@ async function initSchema(client: DatabaseClient) {
     try {
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
       `);
     } catch {
       // Constraint update ignored if already applied or table structure matches
@@ -1906,7 +1906,21 @@ async function seedEconomicConfigs(client: DatabaseClient) {
         key: 'NODE_REWARD_RATE_PER_EPOCH',
         value: JSON.stringify(null), // Must remain null until explicitly configured by admin
         category: 'REWARDS',
-        description: 'Authoritative reward payout rate per Active Node per Epoch (USD). Unconfigured by default.',
+        description: 'Authoritative reward payout rate per Active Node per Epoch (PHIVO). Unconfigured by default.',
+      },
+      {
+        key: 'DAILY_REWARD_AUTOMATION',
+        value: JSON.stringify({
+          mode: 'AUTOMATIC',
+          scheduledTimeUtc: '00:00',
+          autoEnabled: true,
+          lastSettledAt: null,
+          lastEpochNumber: null,
+          lastSettledBy: 'system',
+          lastSettledMode: null,
+        }),
+        category: 'REWARDS',
+        description: 'Dual-mode daily mining reward distribution automation setting (AUTOMATIC vs MANUAL)',
       },
       {
         key: 'INTERNAL_COIN_PRICE_USDT',

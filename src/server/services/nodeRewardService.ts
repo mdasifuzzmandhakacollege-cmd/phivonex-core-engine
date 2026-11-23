@@ -6,6 +6,24 @@ import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
 import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch, getEconomicConfigByKey } from './economicService';
 import { notifyPhivoReward } from './notificationService';
 import { getUtcBusinessDate } from '../utils/timezone';
+import { broadcastSystemConfigChange } from './systemConfigBroadcaster';
+
+// Process-level mutex serializing automatic and manual reward epoch distributions
+let rewardSettlementLock: Promise<void> = Promise.resolve();
+async function withRewardSettlementLock<T>(fn: () => Promise<T>): Promise<T> {
+  const prevLock = rewardSettlementLock;
+  let releaseLock!: () => void;
+  const nextLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  rewardSettlementLock = prevLock.then(() => nextLock);
+  try {
+    await prevLock;
+    return await fn();
+  } finally {
+    releaseLock();
+  }
+}
 
 export interface RewardEpoch {
   id: string;
@@ -67,6 +85,7 @@ export async function createRewardEpoch(params?: {
   rewardPerNode?: number;
   startAt?: Date;
   endAt?: Date;
+  businessDateStr?: string;
 }): Promise<RewardEpoch> {
   const db = await getDb();
   let rewardRate: number | null = null;
@@ -102,7 +121,7 @@ export async function createRewardEpoch(params?: {
 
   const id = uuidv4();
   const baseDate = params?.startAt || new Date();
-  const utcDateStr = getUtcBusinessDate(baseDate);
+  const utcDateStr = params?.businessDateStr || getUtcBusinessDate(baseDate);
   const [year, month, day] = utcDateStr.split('-').map(Number);
   const startAt = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   const endAt = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
@@ -180,7 +199,13 @@ export async function getOrCreateCurrentOpenEpoch(rewardPerNodeOverride?: number
  */
 export async function closeAndSettleEpoch(
   epochId: string,
-  options?: { configuredRewardPerNode?: number; targetNodeId?: string }
+  options?: {
+    configuredRewardPerNode?: number;
+    targetNodeId?: string;
+    dedupeByBusinessDate?: boolean;
+    settleTimestamp?: Date;
+    suppressEmails?: boolean;
+  }
 ): Promise<EpochSettlementResult> {
   const db = await getDb();
 
@@ -281,19 +306,23 @@ export async function closeAndSettleEpoch(
     };
   }
 
-  const now = new Date();
-  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : now;
+  const settleTime = options?.settleTimestamp || new Date();
+  const epochBaseDate = epoch.start_at ? new Date(epoch.start_at) : settleTime;
   const businessDate = getUtcBusinessDate(epochBaseDate);
+  const epochEndAt = epoch.end_at
+    ? new Date(epoch.end_at)
+    : new Date(`${businessDate}T23:59:59.999Z`);
+  const dedupeByBusinessDate = options?.dedupeByBusinessDate === true;
 
   // Snapshot active config version and rate onto the epoch record immediately before node loop
   await db.query(
     `UPDATE reward_epochs 
      SET status = 'COMPLETED', reward_per_node = $1, reward_rate_used = $1, economic_config_version = $2, settled_at = $3 
      WHERE id = $4`,
-    [effectiveRate, configVersion, now, epochId]
+    [effectiveRate, configVersion, settleTime, epochId]
   );
 
-  // 4. Query all ACTIVE or EMITTING nodes with valid owners that haven't reached lifetime cap
+  // 4. Query all ACTIVE or EMITTING nodes activated on or before this epoch with valid owners that haven't reached lifetime cap
   const activeNodesRes = await db.query<{
     id: string;
     public_node_id: string;
@@ -309,12 +338,22 @@ export async function closeAndSettleEpoch(
     FROM nodes
     WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
       AND owner_user_id IS NOT NULL 
+      AND (activated_at IS NULL OR activated_at <= $2)
       AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
       AND (remaining_phivo IS NULL OR remaining_phivo > 0)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
+      AND (
+        $3::boolean = false
+        OR NOT EXISTS (
+          SELECT 1 FROM node_rewards nr
+          WHERE nr.node_id = nodes.id
+            AND nr.business_date = $4
+            AND nr.status != 'REVERSED'
+        )
+      )
     ORDER BY node_number ASC
     `,
-    [options?.targetNodeId || null]
+    [options?.targetNodeId || null, epochEndAt, dedupeByBusinessDate, businessDate]
   );
 
   const eligibleNodes = activeNodesRes.rows;
@@ -324,18 +363,22 @@ export async function closeAndSettleEpoch(
   for (const node of eligibleNodes) {
     const configuredDailyReward = effectiveRate;
     const lifetimeCap = Number(node.lifetime_phivo_allocation || 10000);
-    const currentDist = Number(node.distributed_phivo || 0);
-    const remainingPhivo = node.remaining_phivo !== null && node.remaining_phivo !== undefined
-      ? Number(node.remaining_phivo)
-      : Math.max(0, lifetimeCap - currentDist);
+
+    // Calculate authoritative distributed total from node_rewards so DB totals stay synchronized
+    const sumRes = await db.query<{ total: string | number }>(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM node_rewards WHERE node_id = $1 AND status != 'REVERSED'`,
+      [node.id]
+    );
+    const currentDist = Math.max(Number(node.distributed_phivo || 0), Number(sumRes.rows[0]?.total || 0));
+    const remainingPhivo = Math.max(0, lifetimeCap - currentDist);
 
     const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
 
     if (actualEmission <= 0) {
       // Node has already distributed full allocation: mark MATURED
       await db.query(
-        `UPDATE nodes SET status = 'MATURED', remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-        [node.id]
+        `UPDATE nodes SET status = 'MATURED', distributed_phivo = $1, remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+        [currentDist, node.id]
       );
       continue;
     }
@@ -362,7 +405,7 @@ export async function closeAndSettleEpoch(
         node.owner_user_id,
         actualEmission,
         epoch.currency || REWARD_CURRENCY,
-        now,
+        settleTime,
         configuredDailyReward,
         configVersion,
         businessDate,
@@ -380,10 +423,10 @@ export async function closeAndSettleEpoch(
       rewardsCreated++;
       totalDistributed += actualAmount;
 
-      // Update node distribution accounting and status
+      // Update node distribution accounting while keeping status as 'ACTIVE' until MATURED
       const newDist = currentDist + actualAmount;
-      const newRem = Math.max(0, remainingPhivo - actualAmount);
-      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? 'MATURED' : 'EMITTING';
+      const newRem = Math.max(0, lifetimeCap - newDist);
+      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? 'MATURED' : 'ACTIVE';
 
       await db.query(
         `
@@ -414,7 +457,7 @@ export async function closeAndSettleEpoch(
       amount: actualAmount,
       currency: 'PHIVO',
       description: `Genesis Node Mining Reward (Epoch #${epochNumber}, Node ${node.public_node_id})`,
-      createdAt: now,
+      createdAt: settleTime,
     }).catch((ledgerErr) => {
       console.warn('[NodeReward] Error posting ledger credit:', ledgerErr);
     });
@@ -431,25 +474,27 @@ export async function closeAndSettleEpoch(
     }
 
     // Task #23.4: Send REWARD email and trigger potential automation rules (non-blocking)
-    db.query<{ email: string; full_name: string; public_id: string }>(
-      `SELECT email, full_name, public_id FROM users WHERE id = $1`,
-      [node.owner_user_id]
-    ).then(async (userRes) => {
-      if (userRes.rows.length > 0) {
-        const user = userRes.rows[0];
-        const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
-        await queueEventEmail(user.email, 'REWARD', {
-          displayName: user.full_name,
-          publicId: user.public_id,
-          amount: String(actualAmount),
-          epochId,
-          publicEpochId
-        }).catch(() => {});
-        await triggerAutomationRule(node.owner_user_id, 'MATCHING_ACTIVITY', {
-          amount: String(actualAmount)
-        }).catch(() => {});
-      }
-    }).catch(() => {});
+    if (!options?.suppressEmails) {
+      db.query<{ email: string; full_name: string; public_id: string }>(
+        `SELECT email, full_name, public_id FROM users WHERE id = $1`,
+        [node.owner_user_id]
+      ).then(async (userRes) => {
+        if (userRes.rows.length > 0) {
+          const user = userRes.rows[0];
+          const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+          await queueEventEmail(user.email, 'REWARD', {
+            displayName: user.full_name,
+            publicId: user.public_id,
+            amount: String(actualAmount),
+            epochId,
+            publicEpochId
+          }).catch(() => {});
+          await triggerAutomationRule(node.owner_user_id, 'MATCHING_ACTIVITY', {
+            amount: String(actualAmount)
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
   }
 
   return {
@@ -461,7 +506,7 @@ export async function closeAndSettleEpoch(
     eligibleNodesCount: eligibleNodes.length,
     rewardsCreated,
     totalRewardsDistributedUsd: totalDistributed,
-    settledAt: now.toISOString(),
+    settledAt: settleTime.toISOString(),
   };
 }
 
@@ -886,6 +931,7 @@ export async function setRewardAutomationConfig(
     [uuidv4(), JSON.stringify(updated), adminUserId, adminPublicId]
   );
 
+  broadcastSystemConfigChange('DAILY_REWARD_AUTOMATION', updated, 'REWARDS');
   console.log(`[RewardAutomation] Daily reward distribution mode set to ${mode} by ${adminPublicId}`);
   return updated;
 }
@@ -902,94 +948,23 @@ export async function executeManualDailyRewardDistribution(
   result?: EpochSettlementResult;
   error?: string;
 }> {
-  const db = await getDb();
-  console.log(`[RewardAutomation] 🚀 Manual daily reward distribution triggered by admin ${adminPublicId}`);
-
-  // Find or create an open epoch
-  let epochId: string;
-  const openEpoch = await db.query<any>(
-    `SELECT id, epoch_number FROM reward_epochs WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 1`
-  );
-
-  if (openEpoch.rows.length > 0) {
-    epochId = openEpoch.rows[0].id;
-  } else {
-    const newEpoch = await createRewardEpoch();
-    epochId = newEpoch.id;
-  }
-
-  // Settle the epoch
-  const settlementResult = await closeAndSettleEpoch(epochId);
-
-  if (!settlementResult.success) {
-    return {
-      success: false,
-      error: settlementResult.error,
-      message: settlementResult.message || 'Settlement failed.',
-      result: settlementResult,
-    };
-  }
-
-  // Update last settlement tracking
-  const currentConfig = await getRewardAutomationConfig();
-  const updatedConfig: RewardAutomationConfig = {
-    ...currentConfig,
-    lastSettledAt: new Date().toISOString(),
-    lastEpochNumber: settlementResult.epochNumber,
-    lastSettledBy: adminPublicId,
-    lastSettledMode: 'MANUAL',
-  };
-
-  await db.query(
-    `
-    INSERT INTO system_economic_configs (
-      id, config_key, config_value, category, description, status, version, effective_from, updated_by_admin_id, updated_by_admin_public_id, created_at, updated_at
-    )
-    VALUES ($1, 'DAILY_REWARD_AUTOMATION', $2, 'REWARDS', 'Dual-mode daily mining reward distribution automation setting', 'ACTIVE', 1, CURRENT_TIMESTAMP, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    ON CONFLICT (config_key) DO UPDATE SET
-      config_value = EXCLUDED.config_value,
-      updated_at = CURRENT_TIMESTAMP
-    `,
-    [uuidv4(), JSON.stringify(updatedConfig), adminUserId, adminPublicId]
-  );
-
-  return {
-    success: true,
-    message: `Manual ROI distribution completed successfully. ${settlementResult.eligibleNodesCount} nodes credited ${settlementResult.totalRewardsDistributedUsd.toFixed(2)} PHIVO rewards (Epoch #${settlementResult.epochNumber}).`,
-    result: settlementResult,
-  };
-}
-
-/**
- * Scheduled check executed by the background timer.
- * Only executes if mode === 'AUTOMATIC'.
- */
-export async function executeDailyAutomaticRewardCheck(): Promise<void> {
-  try {
-    const config = await getRewardAutomationConfig();
-
-    if (config.mode !== 'AUTOMATIC' || !config.autoEnabled) {
-      return; // Manual mode is active; skip automated run
-    }
-
-    const todayDate = getUtcBusinessDate();
+  return withRewardSettlementLock(async () => {
     const db = await getDb();
+    console.log(`[RewardAutomation] 🚀 Manual daily reward distribution triggered by admin ${adminPublicId}`);
 
-    // Check if an epoch has already been completed today
-    const checkRes = await db.query<any>(
-      `SELECT id FROM reward_epochs WHERE status = 'COMPLETED' AND DATE(settled_at) = CURRENT_DATE LIMIT 1`
-    );
-
-    if (checkRes.rows.length > 0) {
-      return; // Already settled for today
+    const activeRate = await getNodeRewardRatePerEpoch();
+    if (!activeRate || activeRate <= 0) {
+      return {
+        success: false,
+        error: 'REWARD_RATE_NOT_CONFIGURED',
+        message: 'Node reward rate is not configured. Please set DAILY PHIVO REWARD before distributing.',
+      };
     }
 
-    console.log(`[RewardAutomation] ⏰ Automatic daily mining reward distribution starting for business date: ${todayDate}`);
-    
-    // Find or create open epoch
+    // Find valid open epoch or create fresh one
     let epochId: string;
     const openEpoch = await db.query<any>(
-      `SELECT id FROM reward_epochs WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 1`
+      `SELECT id, epoch_number FROM reward_epochs WHERE status = 'OPEN' ORDER BY created_at DESC LIMIT 1`
     );
 
     if (openEpoch.rows.length > 0) {
@@ -999,16 +974,26 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
       epochId = newEpoch.id;
     }
 
-    const result = await closeAndSettleEpoch(epochId);
-    console.log(`[RewardAutomation] ✅ Automated daily reward distribution finished: Epoch #${result.epochNumber}, Nodes: ${result.eligibleNodesCount}, Total: ${result.totalRewardsDistributedUsd} PHIVO`);
+    // Settle the epoch (explicit manual trigger allows immediate distribution)
+    const settlementResult = await closeAndSettleEpoch(epochId, { dedupeByBusinessDate: false });
 
-    // Update automation config tracking
-    const updated: RewardAutomationConfig = {
-      ...config,
+    if (!settlementResult.success) {
+      return {
+        success: false,
+        error: settlementResult.error,
+        message: settlementResult.message || 'Settlement failed.',
+        result: settlementResult,
+      };
+    }
+
+    // Update last settlement tracking ONLY on success
+    const currentConfig = await getRewardAutomationConfig();
+    const updatedConfig: RewardAutomationConfig = {
+      ...currentConfig,
       lastSettledAt: new Date().toISOString(),
-      lastEpochNumber: result.epochNumber,
-      lastSettledBy: 'system-auto',
-      lastSettledMode: 'AUTOMATIC',
+      lastEpochNumber: settlementResult.epochNumber,
+      lastSettledBy: adminPublicId,
+      lastSettledMode: 'MANUAL',
     };
 
     await db.query(
@@ -1016,14 +1001,188 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
       INSERT INTO system_economic_configs (
         id, config_key, config_value, category, description, status, version, effective_from, updated_by_admin_id, updated_by_admin_public_id, created_at, updated_at
       )
-      VALUES ($1, 'DAILY_REWARD_AUTOMATION', $2, 'REWARDS', 'Dual-mode daily mining reward distribution automation setting', 'ACTIVE', 1, CURRENT_TIMESTAMP, NULL, 'SYSTEM', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES ($1, 'DAILY_REWARD_AUTOMATION', $2, 'REWARDS', 'Dual-mode daily mining reward distribution automation setting', 'ACTIVE', 1, CURRENT_TIMESTAMP, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
       ON CONFLICT (config_key) DO UPDATE SET
         config_value = EXCLUDED.config_value,
+        status = 'ACTIVE',
+        updated_by_admin_id = EXCLUDED.updated_by_admin_id,
+        updated_by_admin_public_id = EXCLUDED.updated_by_admin_public_id,
         updated_at = CURRENT_TIMESTAMP
       `,
-      [uuidv4(), JSON.stringify(updated)]
+      [uuidv4(), JSON.stringify(updatedConfig), adminUserId, adminPublicId]
     );
-  } catch (err) {
-    console.error('[RewardAutomation] Error in executeDailyAutomaticRewardCheck:', err);
+
+    broadcastSystemConfigChange('DAILY_REWARD_AUTOMATION', updatedConfig, 'REWARDS');
+
+    return {
+      success: true,
+      message: `Manual ROI distribution completed successfully. ${settlementResult.eligibleNodesCount} nodes credited ${settlementResult.totalRewardsDistributedUsd.toFixed(2)} PHIVO rewards (Epoch #${settlementResult.epochNumber}).`,
+      result: settlementResult,
+    };
+  });
+}
+
+/**
+ * Helper returning array of YYYY-MM-DD UTC date strings from startDateStr..endDateStr inclusive.
+ */
+function buildUtcDateRange(startDateStr: string, endDateStr: string): string[] {
+  const dates: string[] = [];
+  const start = new Date(`${startDateStr}T00:00:00.000Z`);
+  const end = new Date(`${endDateStr}T00:00:00.000Z`);
+  if (isNaN(start.getTime()) || isNaN(end.getTime()) || start > end) return dates;
+
+  const cursor = new Date(start.getTime());
+  let guard = 0;
+  while (cursor <= end && guard < 120) {
+    dates.push(cursor.toISOString().split('T')[0]);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    guard++;
   }
+  return dates;
+}
+
+/**
+ * Scheduled check executed on startup and every 60 seconds.
+ * Only executes if mode === 'AUTOMATIC' and NODE_REWARDS_ENABLED === true and reward rate > 0.
+ * Automatically catches up any missed UTC business dates cleanly without double-crediting.
+ */
+export async function executeDailyAutomaticRewardCheck(): Promise<void> {
+  return withRewardSettlementLock(async () => {
+    try {
+      const config = await getRewardAutomationConfig();
+
+      if (config.mode !== 'AUTOMATIC' || !config.autoEnabled) {
+        return; // Manual mode is active; skip automated run
+      }
+
+      const rewardsEnabled = await isNodeRewardsEnabled();
+      if (!rewardsEnabled) {
+        return; // Master engine switch paused
+      }
+
+      const activeRate = await getNodeRewardRatePerEpoch();
+      if (!activeRate || activeRate <= 0) {
+        return; // Rate not configured yet; do not create orphan OPEN epochs
+      }
+
+      const db = await getDb();
+      const now = new Date();
+      const todayDate = getUtcBusinessDate(now);
+      const nowHHMM = `${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+      const scheduledHHMM = config.scheduledTimeUtc || '00:00';
+
+      // Clean up any stale unpopulated OPEN epochs from earlier failed attempts
+      await db.query(
+        `
+        DELETE FROM reward_epochs
+        WHERE status = 'OPEN'
+          AND (reward_per_node IS NULL OR reward_per_node <= 0)
+          AND NOT EXISTS (SELECT 1 FROM node_rewards nr WHERE nr.epoch_id = reward_epochs.id)
+        `
+      );
+
+      // Determine missed UTC dates range
+      const latestCompletedRes = await db.query<{ latest_date: string | null }>(
+        `SELECT MAX((start_at AT TIME ZONE 'UTC')::date)::text AS latest_date FROM reward_epochs WHERE status = 'COMPLETED'`
+      );
+      const earliestNodeRes = await db.query<{ earliest_date: string | null }>(
+        `SELECT MIN((COALESCE(activated_at, created_at) AT TIME ZONE 'UTC')::date)::text AS earliest_date FROM nodes WHERE status IN ('ACTIVE', 'EMITTING') AND owner_user_id IS NOT NULL`
+      );
+
+      const latestCompletedDate = latestCompletedRes.rows[0]?.latest_date?.slice(0, 10) || null;
+      const earliestNodeDate = earliestNodeRes.rows[0]?.earliest_date?.slice(0, 10) || todayDate;
+
+      let rangeStartDate = earliestNodeDate;
+      if (latestCompletedDate) {
+        const d = new Date(`${latestCompletedDate}T00:00:00.000Z`);
+        d.setUTCDate(d.getUTCDate() + 1);
+        const nextAfterLatest = d.toISOString().split('T')[0];
+        rangeStartDate = nextAfterLatest > earliestNodeDate ? nextAfterLatest : earliestNodeDate;
+      }
+
+      // Clamp catch-up lookback to at most 45 days on automatic ticks
+      const minAllowedLookback = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      if (rangeStartDate < minAllowedLookback) {
+        rangeStartDate = minAllowedLookback;
+      }
+
+      const candidateDates = buildUtcDateRange(rangeStartDate, todayDate);
+      let latestSettledResult: EpochSettlementResult | null = null;
+
+      for (const dateStr of candidateDates) {
+        // For today, wait until scheduled UTC HH:MM
+        if (dateStr === todayDate && nowHHMM < scheduledHHMM) {
+          continue;
+        }
+
+        // Skip if a COMPLETED epoch already exists for this UTC business date
+        const existingDateEpoch = await db.query<{ id: string }>(
+          `SELECT id FROM reward_epochs WHERE status = 'COMPLETED' AND (start_at AT TIME ZONE 'UTC')::date = $1::date LIMIT 1`,
+          [dateStr]
+        );
+        if (existingDateEpoch.rows.length > 0) {
+          continue;
+        }
+
+        const isCatchup = dateStr < todayDate;
+        console.log(`[RewardAutomation] ⏰ Automatic daily mining reward settlement for UTC date ${dateStr}${isCatchup ? ' (catch-up)' : ''}`);
+
+        // Reuse matching OPEN epoch if it matches the date, else create a dedicated epoch for this UTC date
+        const matchingOpen = await db.query<{ id: string }>(
+          `SELECT id FROM reward_epochs WHERE status = 'OPEN' AND (start_at AT TIME ZONE 'UTC')::date = $1::date ORDER BY created_at DESC LIMIT 1`,
+          [dateStr]
+        );
+
+        const epochId = matchingOpen.rows.length > 0
+          ? matchingOpen.rows[0].id
+          : (await createRewardEpoch({ businessDateStr: dateStr, rewardPerNode: activeRate })).id;
+
+        const settleTimestamp = isCatchup ? new Date(`${dateStr}T00:05:00.000Z`) : new Date();
+        const result = await closeAndSettleEpoch(epochId, {
+          configuredRewardPerNode: activeRate,
+          dedupeByBusinessDate: true,
+          settleTimestamp,
+          suppressEmails: isCatchup,
+        });
+
+        if (result.success) {
+          latestSettledResult = result;
+          console.log(`[RewardAutomation] ✅ Settled ${dateStr} -> Epoch #${result.epochNumber}, Nodes: ${result.eligibleNodesCount}, Credited: ${result.rewardsCreated}, Total: ${result.totalRewardsDistributedUsd} PHIVO`);
+        } else {
+          console.warn(`[RewardAutomation] Aborted settlement for ${dateStr}:`, result.error || result.message);
+          break;
+        }
+      }
+
+      // Only update config tracking when an epoch actually settled cleanly
+      if (latestSettledResult && latestSettledResult.success) {
+        const refreshedConfig = await getRewardAutomationConfig();
+        const updated: RewardAutomationConfig = {
+          ...refreshedConfig,
+          lastSettledAt: new Date().toISOString(),
+          lastEpochNumber: latestSettledResult.epochNumber,
+          lastSettledBy: 'system-auto',
+          lastSettledMode: 'AUTOMATIC',
+        };
+
+        await db.query(
+          `
+          INSERT INTO system_economic_configs (
+            id, config_key, config_value, category, description, status, version, effective_from, updated_by_admin_id, updated_by_admin_public_id, created_at, updated_at
+          )
+          VALUES ($1, 'DAILY_REWARD_AUTOMATION', $2, 'REWARDS', 'Dual-mode daily mining reward distribution automation setting', 'ACTIVE', 1, CURRENT_TIMESTAMP, NULL, 'SYSTEM', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          ON CONFLICT (config_key) DO UPDATE SET
+            config_value = EXCLUDED.config_value,
+            status = 'ACTIVE',
+            updated_at = CURRENT_TIMESTAMP
+          `,
+          [uuidv4(), JSON.stringify(updated)]
+        );
+
+        broadcastSystemConfigChange('DAILY_REWARD_AUTOMATION', updated, 'REWARDS');
+      }
+    } catch (err) {
+      console.error('[RewardAutomation] Error in executeDailyAutomaticRewardCheck:', err);
+    }
+  });
 }

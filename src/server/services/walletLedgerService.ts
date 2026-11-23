@@ -736,18 +736,35 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     }
   }
 
-  // Calculate PHIVO token rewards accrued/claimed from node daily mining
-  const phivoRewardsRes = await db.query<{ phivo_total: string | number }>(
+  // Calculate PHIVO token rewards accrued/claimed from node daily mining (split ACCRUED vs CLAIMED)
+  const phivoRewardsRes = await db.query<{ status: string; phivo_total: string | number }>(
     `
-    SELECT COALESCE(SUM(amount), 0) AS phivo_total
+    SELECT status, COALESCE(SUM(amount), 0) AS phivo_total
     FROM node_rewards
     WHERE owner_user_id = $1 AND status IN ('ACCRUED', 'CLAIMED')
+    GROUP BY status
     `,
     [userId]
   );
-  const totalPhivoRewards = Number(phivoRewardsRes.rows[0]?.phivo_total || 0);
+  let unclaimedAccruedPhivo = 0;
+  let claimedPhivo = 0;
+  for (const r of phivoRewardsRes.rows) {
+    if (r.status === 'ACCRUED') unclaimedAccruedPhivo += Number(r.phivo_total || 0);
+    else if (r.status === 'CLAIMED') claimedPhivo += Number(r.phivo_total || 0);
+  }
+  const totalPhivoRewards = unclaimedAccruedPhivo + claimedPhivo;
 
-  // PHIVO tokens swapped out into USDT/USD via Coin Swap
+  // PHIVO bought via USDT -> PHIVO swap & sold via PHIVO -> USDT swap
+  const phivoBoughtRes = await db.query<{ phivo_bought: string | number }>(
+    `
+    SELECT COALESCE(SUM(coin_amount), 0) AS phivo_bought
+    FROM coin_swap_transactions
+    WHERE user_id = $1 AND direction = 'USDT_TO_COIN' AND status = 'COMPLETED'
+    `,
+    [userId]
+  );
+  const totalPhivoBought = Number(phivoBoughtRes.rows[0]?.phivo_bought || 0);
+
   const phivoSwapsRes = await db.query<{ phivo_swapped: string | number }>(
     `
     SELECT COALESCE(SUM(coin_amount), 0) AS phivo_swapped
@@ -757,7 +774,26 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     [userId]
   );
   const totalPhivoSwappedOut = Number(phivoSwapsRes.rows[0]?.phivo_swapped || 0);
-  const phivoBalance = Math.max(0, Number((totalPhivoRewards - totalPhivoSwappedOut).toFixed(4)));
+
+  const adminPhivoRes = await db.query<{ entry_type: string; total: string | number }>(
+    `
+    SELECT entry_type, COALESCE(SUM(amount), 0) AS total
+    FROM financial_ledger_entries
+    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED' AND source_type = 'ADMIN_ADJUSTMENT'
+    GROUP BY entry_type
+    `,
+    [userId]
+  );
+  let adminPhivoNet = 0;
+  for (const row of adminPhivoRes.rows) {
+    if (row.entry_type === 'CREDIT') adminPhivoNet += Number(row.total);
+    else if (row.entry_type === 'DEBIT' || row.entry_type === 'REVERSAL') adminPhivoNet -= Number(row.total);
+  }
+
+  const phivoBalance = Math.max(
+    0,
+    Number((totalPhivoRewards + totalPhivoBought + adminPhivoNet - totalPhivoSwappedOut).toFixed(4))
+  );
 
   // Fetch current PHIVO conversion rate in USDT
   const { getInternalCoinPrice } = await import('./economicService');

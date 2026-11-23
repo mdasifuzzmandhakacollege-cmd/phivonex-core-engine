@@ -33,6 +33,8 @@ export interface UserCoinBalanceResponse {
   availableCoinBalance: number;
   totalEarnedCoins: number;
   totalSwappedCoins: number;
+  unclaimedAccruedPhivo: number;
+  claimedPhivo: number;
   coinSymbol: string;
 }
 
@@ -68,16 +70,23 @@ async function runWithUserLock<T>(userId: string, fn: () => Promise<T>): Promise
 export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanceResponse> {
   const db = await getDb();
 
-  // 1. Total earned reward coins from node mining rewards
-  const rewardsRes = await db.query<{ total: string | number }>(
+  // 1. Total earned reward coins from node mining rewards (split by ACCRUED vs CLAIMED)
+  const rewardsRes = await db.query<{ status: string; total: string | number }>(
     `
-    SELECT COALESCE(SUM(amount), 0) AS total
+    SELECT status, COALESCE(SUM(amount), 0) AS total
     FROM node_rewards
-    WHERE owner_user_id = $1 AND status != 'REVERSED'
+    WHERE owner_user_id = $1 AND status IN ('ACCRUED', 'CLAIMED')
+    GROUP BY status
     `,
     [userId]
   );
-  const totalEarnedRewards = Number(rewardsRes.rows[0]?.total || 0);
+  let unclaimedAccruedPhivo = 0;
+  let claimedPhivo = 0;
+  for (const r of rewardsRes.rows) {
+    if (r.status === 'ACCRUED') unclaimedAccruedPhivo += Number(r.total || 0);
+    else if (r.status === 'CLAIMED') claimedPhivo += Number(r.total || 0);
+  }
+  const totalEarnedRewards = unclaimedAccruedPhivo + claimedPhivo;
 
   // 2. Total purchased coins (USDT swapped to PHIVO)
   const boughtRes = await db.query<{ total: string | number }>(
@@ -126,6 +135,8 @@ export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanc
     availableCoinBalance,
     totalEarnedCoins,
     totalSwappedCoins: totalSoldCoins,
+    unclaimedAccruedPhivo,
+    claimedPhivo,
     coinSymbol: 'PHIVO',
   };
 }
@@ -304,6 +315,12 @@ export async function executeCoinToUsdtSwap(params: {
     );
 
     const swapRow = insertRes.rows[0];
+
+    // Automatically settle any ACCRUED rewards into CLAIMED state when user swaps PHIVO
+    await db.query(
+      `UPDATE node_rewards SET status = 'CLAIMED', claimed_at = $1 WHERE owner_user_id = $2 AND status = 'ACCRUED'`,
+      [now, userId]
+    );
 
     // 6. Credit internal USDT financial ledger balance
     // Guarded strictly by UNIQUE(source_type, source_id, entry_type)

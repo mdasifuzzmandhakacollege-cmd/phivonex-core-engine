@@ -48,10 +48,10 @@ export async function getPublicNetworkSummary(): Promise<PublicNetworkSummary> {
 
   for (const row of nodeCountRes.rows) {
     const cnt = Number(row.count || 0);
-    if (row.status === 'ACTIVE') activeNodes = cnt;
-    else if (row.status === 'RESERVED') reservedNodes = cnt;
-    else if (row.status === 'AVAILABLE') availableNodes = cnt;
-    else if (row.status === 'RETIRED') retiredNodes = cnt;
+    if (row.status === 'ACTIVE' || row.status === 'EMITTING') activeNodes += cnt;
+    else if (row.status === 'RESERVED') reservedNodes += cnt;
+    else if (row.status === 'AVAILABLE') availableNodes += cnt;
+    else if (row.status === 'RETIRED' || row.status === 'MATURED') retiredNodes += cnt;
   }
 
   // If AVAILABLE is not explicitly counted (e.g. before initial query), calculate balance
@@ -128,7 +128,7 @@ export async function getPublicNetworkEvents(limit = 20): Promise<PublicNetworkE
     const activeNodesRes = await db.query<{ public_node_id: string; activated_at: Date }>(
       `SELECT public_node_id, activated_at 
        FROM nodes 
-       WHERE status = 'ACTIVE' AND activated_at IS NOT NULL 
+       WHERE status IN ('ACTIVE', 'EMITTING', 'MATURED') AND activated_at IS NOT NULL 
        ORDER BY activated_at DESC 
        LIMIT $1`,
       [limit]

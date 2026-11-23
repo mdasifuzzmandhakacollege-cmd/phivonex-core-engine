@@ -43,10 +43,12 @@ router.get('/stats', async (_req: Request, res: Response): Promise<void> => {
           reserved = cnt;
           break;
         case 'ACTIVE':
-          active = cnt;
+        case 'EMITTING':
+          active += cnt;
           break;
         case 'RETIRED':
-          retired = cnt;
+        case 'MATURED':
+          retired += cnt;
           break;
       }
     }
@@ -174,7 +176,7 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
       const dailyEmission = activeProtocolDailyReward !== null
         ? activeProtocolDailyReward
         : (n.daily_phivo_emission !== null && n.daily_phivo_emission !== undefined ? Number(n.daily_phivo_emission) : 0);
-      const distributedPhivo = Number(n.distributed_phivo || stat.totalRewards || 0);
+      const distributedPhivo = Math.max(Number(n.distributed_phivo || 0), stat.totalRewards);
       const remainingPhivo = Math.max(0, lifetimeAllocation - distributedPhivo);
       const progressPercent = Math.min(100, Number(((distributedPhivo / lifetimeAllocation) * 100).toFixed(2)));
       const completedDays = Math.min(200, dailyEmission > 0 ? Math.floor(distributedPhivo / dailyEmission) : 0);

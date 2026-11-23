@@ -65,6 +65,8 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
   const [usdtBalance, setUsdtBalance] = useState<number>(0);
   const [_totalEarnedCoins, setTotalEarnedCoins] = useState<number>(0);
   const [_totalSwappedCoins, setTotalSwappedCoins] = useState<number>(0);
+  const [unclaimedAccruedPhivo, setUnclaimedAccruedPhivo] = useState<number>(0);
+  const [claimedPhivo, setClaimedPhivo] = useState<number>(0);
 
   const [quote, setQuote] = useState<SwapQuoteData | null>(null);
   const [history, setHistory] = useState<SwapHistoryItem[]>([]);
@@ -98,6 +100,8 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
         setCoinBalance(balData.availableCoinBalance ?? 0);
         setTotalEarnedCoins(balData.totalEarnedCoins ?? 0);
         setTotalSwappedCoins(balData.totalSwappedCoins ?? 0);
+        setUnclaimedAccruedPhivo(balData.unclaimedAccruedPhivo ?? 0);
+        setClaimedPhivo(balData.claimedPhivo ?? 0);
       }
 
       if (walletRes.ok) {
@@ -215,6 +219,7 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
 
       setSwapAmountInput('');
       setIsConfirmModalOpen(false);
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
       await fetchData();
     } catch (err: any) {
       console.warn('[SwapView] Execute swap error:', err);
@@ -324,6 +329,11 @@ export const SwapView: React.FC<SwapViewProps> = ({ user, onNavigateTab }) => {
           </div>
           <div className="text-[11px] text-[#00CFFF]">
             ≈ ${(coinBalance * activeRate).toFixed(2)} USDT value
+            {unclaimedAccruedPhivo > 0 && (
+              <span className="block text-[10px] text-[#98A2B3] mt-0.5 font-mono">
+                {claimedPhivo.toFixed(2)} claimed + {unclaimedAccruedPhivo.toFixed(2)} auto-claimable
+              </span>
+            )}
           </div>
         </div>
 

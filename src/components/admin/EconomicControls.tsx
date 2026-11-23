@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { recordAdminAuditToFirestore } from '../../services/firestoreAuditService';
 import { AuditLogger } from '../../services/auditLogger';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 
 export interface EconomicConfigItem {
   id: string;
@@ -62,6 +63,7 @@ export interface EconomicAuditItem {
 }
 
 export const EconomicControls: React.FC = () => {
+  const { refetchConfigs } = useSystemConfig();
   const [configs, setConfigs] = useState<EconomicConfigItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<EconomicAuditItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -175,6 +177,8 @@ export const EconomicControls: React.FC = () => {
         type: 'success',
         message: `Daily reward distribution mode switched to ${newMode}. ${newMode === 'AUTOMATIC' ? 'Rewards will distribute automatically on schedule.' : 'Automated payouts paused; manual admin trigger required.'}`
       });
+      await refetchConfigs();
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Error updating reward distribution mode' });
     } finally {
@@ -199,8 +203,10 @@ export const EconomicControls: React.FC = () => {
         type: 'success',
         message: data.message || 'Manual daily mining reward distribution executed successfully!'
       });
-      fetchRewardAutomation();
-      fetchConfigs();
+      await fetchRewardAutomation();
+      await fetchConfigs();
+      await refetchConfigs();
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Manual reward distribution failed.' });
     } finally {
@@ -374,6 +380,8 @@ export const EconomicControls: React.FC = () => {
       setEditingConfig(null);
       await fetchConfigs();
       await fetchAuditLogs();
+      await refetchConfigs();
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
     } catch (err: any) {
       console.error('[EconomicControls] Save error:', err);
       setFeedback({
@@ -413,6 +421,8 @@ export const EconomicControls: React.FC = () => {
 
       await fetchConfigs();
       await fetchAuditLogs();
+      await refetchConfigs();
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
     } catch (err: any) {
       setFeedback({
         type: 'error',
@@ -638,12 +648,14 @@ export const EconomicControls: React.FC = () => {
             <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
               <span className="text-[10px] text-[#98A2B3] block">Daily PHIVO Emission</span>
               <span className="text-sm font-bold text-[#32D583]">
-                {rewardRate?.configValue ? `${Number(rewardRate.configValue)} PHIVO / Day (Admin Controlled)` : 'Dynamic Protocol Governed'}
+                {rewardRate?.configValue !== null && rewardRate?.configValue !== undefined
+                  ? `${typeof rewardRate.configValue === 'object' ? Number(rewardRate.configValue.ratePhivo ?? 0) : Number(rewardRate.configValue)} PHIVO / Day (Admin Controlled)`
+                  : 'Dynamic Protocol Governed'}
               </span>
             </div>
             <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06]">
               <span className="text-[10px] text-[#98A2B3] block">Node Term</span>
-              <span className="text-sm font-bold text-white">400 Days</span>
+              <span className="text-sm font-bold text-white">200 Days</span>
             </div>
             <div className="p-3 rounded-lg bg-[#07101D] border border-white/[0.06] col-span-2">
               <span className="text-[10px] text-[#98A2B3] block">Max Genesis Allocation at Capacity</span>

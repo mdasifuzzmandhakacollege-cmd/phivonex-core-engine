@@ -18,6 +18,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
+import { useSystemConfig } from '../../context/SystemConfigContext';
 import { GENESIS_NODE_CAP, NODE_BASE_PRICE_USD } from '../../config/nodeConfig';
 import { GenesisEngineAnimation } from '../GenesisEngineAnimation';
 
@@ -97,6 +98,8 @@ interface RewardsTelemetry {
 }
 
 export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigateTab }) => {
+  const { coinPriceUsdt } = useSystemConfig();
+  const effectiveCoinPrice = coinPriceUsdt || 0.1;
   const [nodes, setNodes] = useState<NodeItem[]>([]);
   const [orders, setOrders] = useState<NodeOrder[]>([]);
   const [stats, setStats] = useState<NodeStats | null>(null);
@@ -151,7 +154,14 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
     const interval = setInterval(() => {
       fetchNodeData(false);
     }, 20000);
-    return () => clearInterval(interval);
+    const handleUpdate = () => {
+      fetchNodeData(false);
+    };
+    window.addEventListener('phivonex:balance-or-tx-updated', handleUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('phivonex:balance-or-tx-updated', handleUpdate);
+    };
   }, [fetchNodeData]);
 
   const handleClaim = async () => {
@@ -170,6 +180,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
         throw new Error(data.message || 'Failed to claim rewards');
       }
       setClaimSuccessMsg(data.message || 'Rewards claimed successfully.');
+      window.dispatchEvent(new CustomEvent('phivonex:balance-or-tx-updated'));
       await fetchNodeData(true);
     } catch (err: any) {
       setErrorMsg(err.message || 'Error occurred while claiming rewards.');
@@ -193,7 +204,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
     }
   };
 
-  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE');
+  const activeNodes = nodes.filter((n) => n.status === 'ACTIVE' || n.status === 'EMITTING');
   const basePrice = stats?.basePriceUsd ?? NODE_BASE_PRICE_USD;
 
   return (
@@ -382,7 +393,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
               ) : (
                 <>
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Claim Accrued (${(rewards?.totalAccrued ?? 0).toFixed(2)})</span>
+                  <span>Claim Accrued ({(rewards?.totalAccrued ?? 0).toFixed(2)} PHIVO)</span>
                 </>
               )}
             </button>
@@ -394,27 +405,27 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
           <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
             <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Total Earned</span>
             <span className="text-base sm:text-lg font-mono font-bold text-[#00CFFF] tabular-nums block">
-              ${(rewards?.totalRewards ?? 0).toFixed(2)} USD
+              {(rewards?.totalRewards ?? 0).toFixed(2)} PHIVO
             </span>
-            <span className="text-[10px] text-[#98A2B3] block">All-time node rewards</span>
+            <span className="text-[10px] text-[#98A2B3] block">≈ ${((rewards?.totalRewards ?? 0) * effectiveCoinPrice).toFixed(2)} USDT</span>
           </div>
 
           {/* Accrued */}
           <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
             <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Accrued (Ready)</span>
             <span className="text-base sm:text-lg font-mono font-bold text-[#32D583] tabular-nums block">
-              ${(rewards?.totalAccrued ?? 0).toFixed(2)} USD
+              {(rewards?.totalAccrued ?? 0).toFixed(2)} PHIVO
             </span>
-            <span className="text-[10px] text-[#98A2B3] block">Pending claim</span>
+            <span className="text-[10px] text-[#98A2B3] block">≈ ${((rewards?.totalAccrued ?? 0) * effectiveCoinPrice).toFixed(2)} USDT • Pending claim</span>
           </div>
 
           {/* Claimed */}
           <div className="p-3.5 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-1">
             <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-mono block">Claimed / Settled</span>
             <span className="text-base sm:text-lg font-mono font-bold text-white tabular-nums block">
-              ${(rewards?.totalClaimed ?? 0).toFixed(2)} USD
+              {(rewards?.totalClaimed ?? 0).toFixed(2)} PHIVO
             </span>
-            <span className="text-[10px] text-[#98A2B3] block">Transferred to wallet</span>
+            <span className="text-[10px] text-[#98A2B3] block">≈ ${((rewards?.totalClaimed ?? 0) * effectiveCoinPrice).toFixed(2)} USDT • Ready to swap</span>
           </div>
 
           {/* Latest Cycle */}
@@ -512,12 +523,12 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
 
               const price = node.purchasePriceUsd || 1000;
               const allocation = node.lifetimePhivoAllocation || 10000;
-              const daily = node.dailyPhivoEmission || 50;
+              const daily = node.dailyPhivoEmission || rewards?.latestEpoch?.rewardPerNode || 15;
               const term = node.termDays || 200;
               const dist = node.distributedPhivo ?? 0;
               const rem = node.remainingPhivo ?? Math.max(0, allocation - dist);
               const progress = node.progressPercent ?? Math.min(100, Number(((dist / allocation) * 100).toFixed(2)));
-              const day = node.currentDay ?? (isMatured ? 200 : Math.min(200, Math.floor(dist / daily) + 1));
+              const day = node.currentDay ?? (isMatured ? term : Math.min(term, Math.floor(dist / daily) + 1));
 
               return (
                 <div
@@ -580,7 +591,9 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                       </div>
                       <div className="text-right">
                         <span className="text-[#98A2B3] text-[10px] block">REF DAILY VALUE</span>
-                        <span className="text-white font-bold">$2.50 @ $0.10</span>
+                        <span className="text-white font-bold">
+                          ${(daily * effectiveCoinPrice).toFixed(2)} @ ${effectiveCoinPrice.toFixed(2)}
+                        </span>
                       </div>
                     </div>
 
@@ -692,7 +705,7 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                     <td className="py-3 font-mono text-[#00CFFF]">{item.publicNodeId}</td>
                     <td className="py-3 font-mono text-white">{item.publicEpochId}</td>
                     <td className="py-3 font-mono text-[#32D583] font-bold tabular-nums">
-                      +${Number(item.amount).toFixed(2)} USD
+                      +{Number(item.amount).toFixed(2)} PHIVO
                     </td>
                     <td className="py-3">
                       <span

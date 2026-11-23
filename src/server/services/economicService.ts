@@ -249,7 +249,15 @@ function validateEconomicValue(key: string, value: any) {
     if (value !== null && value !== undefined) {
       let num: number;
       if (typeof value === 'object' && value !== null) {
-        num = Number(value.rateUsd !== undefined ? value.rateUsd : (value.rewardPerNode !== undefined ? value.rewardPerNode : NaN));
+        num = Number(
+          value.ratePhivo !== undefined
+            ? value.ratePhivo
+            : value.rateUsd !== undefined
+            ? value.rateUsd
+            : value.rewardPerNode !== undefined
+            ? value.rewardPerNode
+            : NaN
+        );
       } else {
         num = Number(value);
       }

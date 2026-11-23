@@ -737,11 +737,12 @@ export async function reconcileSpecificAffiliateAccounts(
         );
       }
 
-      // Preserve existing PHIVO mining rewards! Only backfill if user has 0 PHIVO rewards so far
+      // Preserve existing PHIVO mining rewards! Only backfill if user has 0 PHIVO rewards in node_rewards/ledger so far
       const phivoRes = await db.query<{ total: number }>(
-        `SELECT COALESCE(SUM(amount), 0)::float AS total
-         FROM financial_ledger_entries
-         WHERE user_id = $1 AND source_type = 'NODE_REWARD' AND currency = 'PHIVO' AND status = 'SETTLED'`,
+        `SELECT GREATEST(
+           COALESCE((SELECT SUM(amount) FROM financial_ledger_entries WHERE user_id = $1 AND source_type = 'NODE_REWARD' AND currency = 'PHIVO' AND status = 'SETTLED'), 0),
+           COALESCE((SELECT SUM(amount) FROM node_rewards WHERE owner_user_id = $1 AND status != 'REVERSED'), 0)
+         )::float AS total`,
         [user.id]
       );
       const currentPhivo = Number(phivoRes.rows[0]?.total || 0);
@@ -751,6 +752,45 @@ export async function reconcileSpecificAffiliateAccounts(
         const elapsedDays = Math.max(1, Math.floor((Date.now() - activationMs) / (1000 * 60 * 60 * 24)) + 1);
         const targetPhivo = elapsedDays * spec.dailyRewardPhivo;
         const rewardSourceUuid = deterministicUuid(`NODE-REWARD-INIT:${user.id}`);
+        const initEpochId = deterministicUuid(`EPOCH-INIT:${spec.activationDateIso.slice(0, 10)}`);
+        const initDateStr = spec.activationDateIso.slice(0, 10);
+
+        await db.query(
+          `
+          INSERT INTO reward_epochs (
+            id, public_epoch_id, epoch_number, start_at, end_at, reward_per_node, reward_rate_used, economic_config_version, currency, status, settled_at, created_at
+          )
+          SELECT $1, $2, COALESCE((SELECT MAX(epoch_number) FROM reward_epochs), 0) + 1, $3::timestamptz, $4::timestamptz, $5, $5, 1, 'PHIVO', 'COMPLETED', $3::timestamptz, CURRENT_TIMESTAMP
+          WHERE NOT EXISTS (SELECT 1 FROM reward_epochs WHERE id = $1)
+          `,
+          [
+            initEpochId,
+            `EPOCH-INIT-${initDateStr}`,
+            `${initDateStr}T00:00:00.000Z`,
+            `${initDateStr}T23:59:59.999Z`,
+            spec.dailyRewardPhivo,
+          ]
+        );
+
+        await db.query(
+          `
+          INSERT INTO node_rewards (
+            id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
+            reward_rate_used, economic_config_version, business_date, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, 'PHIVO', 'ACCRUED', NOW(), $7, 1, $8, CURRENT_TIMESTAMP)
+          ON CONFLICT (node_id, epoch_id) DO NOTHING
+          `,
+          [
+            rewardSourceUuid,
+            `RWD-${activeNodePublicId}`,
+            initEpochId,
+            activeNodeId,
+            user.id,
+            targetPhivo,
+            spec.dailyRewardPhivo,
+            initDateStr,
+          ]
+        );
 
         await db.query(
           `
@@ -766,7 +806,7 @@ export async function reconcileSpecificAffiliateAccounts(
             user.id,
             rewardSourceUuid,
             `RWD-${activeNodePublicId}`,
-            `Daily Genesis Node Mining Reward (${elapsedDays} days accrued @ 10 PHIVO/day)`,
+            `Daily Genesis Node Mining Reward (${elapsedDays} days accrued @ ${spec.dailyRewardPhivo} PHIVO/day)`,
             targetPhivo,
           ]
         );
