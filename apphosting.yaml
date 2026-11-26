@@ -72,36 +72,31 @@ env:
       - RUNTIME
 
   # ==========================================================================
-  # SENSITIVE SECRETS (Cloud Secret Manager references — RUNTIME only)
-  # Ensure each secret exists and App Hosting backend service account has
-  # roles/secretmanager.secretAccessor before rolling out.
+  # MANDATORY PRODUCTION DATABASE SECRET (Cloud Secret Manager — RUNTIME only)
+  # Run once in Firebase Cloud Shell before rolling out:
+  #   firebase apphosting:secrets:set DATABASE_URL --project=phivonex-core-engine
+  #   firebase apphosting:secrets:grantaccess DATABASE_URL --backend=phivonex-core-engine --project=phivonex-core-engine
   # ==========================================================================
   - variable: DATABASE_URL
     secret: DATABASE_URL
     availability:
       - RUNTIME
 
-  - variable: JWT_SECRET
-    secret: JWT_SECRET
-    availability:
-      - RUNTIME
-
-  - variable: GEMINI_API_KEY
-    secret: GEMINI_API_KEY
-    availability:
-      - RUNTIME
-
-  - variable: RESEND_API_KEY
-    secret: RESEND_API_KEY
-    availability:
-      - RUNTIME
-
-  - variable: PAYOUT_PRIVATE_KEY
-    secret: PAYOUT_PRIVATE_KEY
-    availability:
-      - RUNTIME
-
-  - variable: CRON_SECRET
-    secret: CRON_SECRET
-    availability:
-      - RUNTIME
+  # ==========================================================================
+  # OPTIONAL RUNTIME SECRETS (Uncomment ONLY after creating & granting access
+  # with `firebase apphosting:secrets:set <NAME>` and `grantaccess`)
+  # ==========================================================================
+  # - variable: GEMINI_API_KEY
+  #   secret: GEMINI_API_KEY
+  #   availability:
+  #     - RUNTIME
+  #
+  # - variable: RESEND_API_KEY
+  #   secret: RESEND_API_KEY
+  #   availability:
+  #     - RUNTIME
+  #
+  # - variable: PAYOUT_PRIVATE_KEY
+  #   secret: PAYOUT_PRIVATE_KEY
+  #   availability:
+  #     - RUNTIME
