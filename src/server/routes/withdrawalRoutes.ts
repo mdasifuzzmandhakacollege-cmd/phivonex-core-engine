@@ -115,9 +115,18 @@ withdrawalRouter.post('/request-otp', requireAuth, withdrawalLimiter, async (req
 withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.user!.id;
-    const { amount, destinationType, destinationReference, idempotencyKey, otp } = req.body;
+    const {
+      amount,
+      amountUsd,
+      destinationType,
+      destinationReference,
+      destinationAddress,
+      idempotencyKey,
+      otp,
+    } = req.body || {};
 
-    const numAmount = parseFloat(amount);
+    const rawAmount = amount !== undefined ? amount : amountUsd;
+    const numAmount = parseFloat(String(rawAmount));
     if (isNaN(numAmount) || !isFinite(numAmount) || numAmount <= 0) {
       return res.status(400).json({
         error: 'INVALID_AMOUNT',
@@ -126,15 +135,14 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
     }
 
     const destType = String(destinationType || 'USDT_BEP20').toUpperCase();
-    if (destType === 'USDT_BEP20' || destType === 'BEP20' || destType === 'BNB' || destType === 'USDT_ERC20' || destType === 'ETH') {
-      const addrCheck = validateEvmAddress(destinationReference);
-      if (!addrCheck.valid) {
-        return res.status(400).json({
-          error: 'INVALID_DESTINATION_ADDRESS',
-          message: addrCheck.error || 'Invalid destination wallet address (Must be a valid 0x... EVM / BNB Smart Chain address).',
-        });
-      }
-    }
+    const resolvedDestinationRef = String(destinationReference || destinationAddress || '').trim();
+    const headerIdempotencyKey = req.headers['idempotency-key'];
+    const resolvedIdempotencyKey =
+      idempotencyKey !== undefined && idempotencyKey !== null
+        ? String(idempotencyKey)
+        : typeof headerIdempotencyKey === 'string'
+        ? headerIdempotencyKey
+        : undefined;
 
     // Verify OTP if in production or if OTP is provided
     const isTest = process.env.NODE_ENV === 'test';
@@ -149,14 +157,14 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
 
     const withdrawal = await createWithdrawalRequest({
       userId,
-      amount: numAmount,
+      amount: String(rawAmount),
       destinationType: destType,
-      destinationReference: String(destinationReference || '').trim(),
-      idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
+      destinationReference: resolvedDestinationRef,
+      idempotencyKey: resolvedIdempotencyKey,
       otp: trimmedOtp || undefined,
     });
 
-    // Check if Full Automatic Mode is enabled
+    // Check if Full Automatic Mode is enabled and circuit-breaker withdrawal_mode is not MANUAL_REVIEW
     try {
       const db = await getDb();
       const configRes = await db.query(
@@ -173,7 +181,7 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
         }
       }
 
-      if (autoEnabled) {
+      if (autoEnabled && withdrawal.routingMode !== 'MANUAL_REVIEW' && !withdrawal.isDuplicate) {
         const targetPublicId = withdrawal.publicWithdrawalId || (withdrawal as any).publicId;
         console.log(`[Auto-Withdrawal Engine] Mode is FULL AUTOMATIC. Broadcasting withdrawal ${targetPublicId} instantly to BSC...`);
         try {
@@ -246,12 +254,24 @@ withdrawalRouter.post('/', requireAuth, withdrawalLimiter, async (req: AuthReque
         error: 'INSUFFICIENT_BALANCE',
         message,
         availableBalance: err?.availableBalance,
+        availableBalanceUsd: err?.availableBalanceUsd,
       });
     }
 
-    if (message.startsWith('MINIMUM_AMOUNT_LIMIT') || message.startsWith('INVALID_AMOUNT') || message.startsWith('INVALID_DESTINATION')) {
+    if (message.startsWith('DAILY_WITHDRAWAL_LIMIT_EXCEEDED') || err?.code === 'DAILY_WITHDRAWAL_LIMIT_EXCEEDED') {
+      return res.status(422).json({
+        error: 'DAILY_WITHDRAWAL_LIMIT_EXCEEDED',
+        message,
+      });
+    }
+
+    if (
+      message.startsWith('MINIMUM_AMOUNT_LIMIT') ||
+      message.startsWith('INVALID_AMOUNT') ||
+      message.startsWith('INVALID_DESTINATION')
+    ) {
       return res.status(400).json({
-        error: 'BAD_REQUEST',
+        error: err?.code || 'BAD_REQUEST',
         message,
       });
     }

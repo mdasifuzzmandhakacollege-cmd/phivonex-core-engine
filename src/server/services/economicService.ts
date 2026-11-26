@@ -364,12 +364,31 @@ export async function getEconomicAuditLogs(
 // ENGINE GETTERS (LIVE AUTHORITATIVE HOOKS)
 // ==========================================
 
+export async function getGenesisNodeCap(dbClient?: DatabaseClient): Promise<number> {
+  const cfg = await getEconomicConfigByKey('GENESIS_NODE_CAP', dbClient);
+  if (cfg && cfg.status === 'ACTIVE' && cfg.configValue !== null && cfg.configValue !== undefined) {
+    const val =
+      typeof cfg.configValue === 'object'
+        ? Number(cfg.configValue.cap ?? cfg.configValue.value ?? NaN)
+        : Number(cfg.configValue);
+    if (!isNaN(val) && val > 0) {
+      return Math.max(10000, Math.floor(val));
+    }
+  }
+  return 10000;
+}
+
 export async function getNodeBasePrice(dbClient?: DatabaseClient): Promise<number> {
   const cfg = await getEconomicConfigByKey('NODE_BASE_PRICE_USD', dbClient);
-  if (cfg && typeof cfg.configValue === 'number') {
-    return cfg.configValue;
+  if (cfg && cfg.configValue !== null && cfg.configValue !== undefined) {
+    const num = Number(cfg.configValue);
+    if (!isNaN(num) && num > 0) return num;
   }
   return 1000.00;
+}
+
+export async function getNodeBasePriceUsd(dbClient?: DatabaseClient): Promise<number> {
+  return getNodeBasePrice(dbClient);
 }
 
 export async function getBnbPriceUsd(): Promise<number | null> {
@@ -394,11 +413,15 @@ export async function isNodeSalesEnabled(dbClient?: DatabaseClient): Promise<boo
 }
 
 export async function getDirectReferralCommissionRate(): Promise<number> {
+  const { ENABLE_SPOT_COMMISSION } = await import('../../config/referralConfig');
+  if (!ENABLE_SPOT_COMMISSION) {
+    return 0;
+  }
   const cfg = await getEconomicConfigByKey('DIRECT_REFERRAL_COMMISSION_USD');
   if (cfg && typeof cfg.configValue === 'number') {
     return cfg.configValue;
   }
-  return 50.00;
+  return 0;
 }
 
 export async function getMatchingTiersConfig(): Promise<Array<{ units: number; rewardUsd: number }>> {
@@ -446,12 +469,12 @@ export async function getNodeRewardRatePerEpoch(dbClient?: DatabaseClient): Prom
         (val.rateUsd !== undefined ? val.rateUsd :
         (val.rewardPerNode !== undefined ? val.rewardPerNode : NaN))
       );
-      return isNaN(num) || num <= 0 ? null : num;
+      return isNaN(num) || num <= 0 ? 15 : num;
     }
     const rate = Number(cfg.configValue);
-    return isNaN(rate) || rate <= 0 ? null : rate;
+    return isNaN(rate) || rate <= 0 ? 15 : rate;
   }
-  return null;
+  return 15;
 }
 
 export async function getInternalCoinPrice(): Promise<{
@@ -476,10 +499,10 @@ export async function getInternalCoinPrice(): Promise<{
   }
   return {
     coinSymbol: 'PHIVO',
-    priceUsdt: null,
-    effectiveFrom: null,
-    swapEnabled: false,
-    configured: false,
+    priceUsdt: 0.10,
+    effectiveFrom: new Date().toISOString(),
+    swapEnabled: true,
+    configured: true,
   };
 }
 

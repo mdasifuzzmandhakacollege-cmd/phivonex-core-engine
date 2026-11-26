@@ -2,10 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { auth, db, googleAuthProvider } from '../lib/firebase';
 import {
   signInWithPopup,
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
   signOut as fbSignOut,
-  updateProfile,
 } from 'firebase/auth';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
 
@@ -193,7 +190,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, [user?.id, refreshUser]);
 
-  // 1. Register with backend API & Firebase
+  // 1. Register with backend API (PostgreSQL Single Source of Truth)
   const register = async (data: {
     fullName: string;
     email: string;
@@ -202,11 +199,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     password: string;
     referralCode?: string;
   }): Promise<UserProfile> => {
+    const normalizedPayload = {
+      ...data,
+      email: String(data.email || '').trim().toLowerCase(),
+    };
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify(data),
+      body: JSON.stringify(normalizedPayload),
     });
 
     const result = await res.json();
@@ -216,44 +217,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(errMessage);
     }
 
-    // Sync to client-side Firebase Auth & Firestore
-    try {
-      const userCred = await createUserWithEmailAndPassword(auth, data.email.toLowerCase(), data.password);
-      if (userCred.user) {
-        await updateProfile(userCred.user, { displayName: data.fullName });
-        await setDoc(doc(db, 'users', userCred.user.uid), {
-          uid: userCred.user.uid,
-          id: result.user?.id || userCred.user.uid,
-          email: data.email.toLowerCase(),
-          fullName: data.fullName,
-          country: data.country,
-          phone: data.phone || null,
-          publicId: result.user?.publicId,
-          referralCode: result.user?.referralCode,
-          createdAt: new Date().toISOString(),
-          status: 'ACTIVE',
-        }, { merge: true });
-      }
-    } catch (fbErr: any) {
-      console.warn('[Firebase Client Sync] Note:', fbErr?.message || fbErr);
-    }
-
     setUser(result.user);
     return result.user;
   };
 
-  // 2. Login with backend API & Firebase
+  // 2. Login with backend API (PostgreSQL Single Source of Truth — zero Firebase Auth password desync)
   const login = async (data: {
     identifier: string;
     password: string;
     rememberMe?: boolean;
     captchaToken?: string;
   }): Promise<UserProfile> => {
+    const normalizedIdentifier = String(data.identifier || '').trim();
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        ...data,
+        identifier: normalizedIdentifier.includes('@') ? normalizedIdentifier.toLowerCase() : normalizedIdentifier,
+      }),
     });
 
     const result = await res.json();
@@ -261,29 +244,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!res.ok) {
       const errMessage = result.message || result.error || 'Invalid email/phone or password.';
       throw new Error(errMessage);
-    }
-
-    // Sync to client-side Firebase Auth & Firestore
-    try {
-      if (data.identifier.includes('@')) {
-        let userCred;
-        try {
-          userCred = await signInWithEmailAndPassword(auth, data.identifier.toLowerCase(), data.password);
-        } catch (signInErr: any) {
-          if (signInErr?.code === 'auth/user-not-found' || signInErr?.code === 'auth/invalid-credential') {
-            userCred = await createUserWithEmailAndPassword(auth, data.identifier.toLowerCase(), data.password);
-          }
-        }
-        if (userCred?.user) {
-          await setDoc(doc(db, 'users', userCred.user.uid), {
-            uid: userCred.user.uid,
-            email: userCred.user.email,
-            lastLoginAt: new Date().toISOString(),
-          }, { merge: true });
-        }
-      }
-    } catch (fbErr: any) {
-      console.warn('[Firebase Login Sync] Note:', fbErr?.message || fbErr);
     }
 
     setUser(result.user);

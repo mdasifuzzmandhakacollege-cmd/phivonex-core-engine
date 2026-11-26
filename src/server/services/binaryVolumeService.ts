@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DatabaseClient, getDb } from '../db/db';
 import { generateVolumeEventPublicId } from '../utils/idGenerator';
 import { getDhakaBusinessDate } from '../utils/timezone';
+import { ENABLE_BINARY_ENGINE } from '../../config/referralConfig';
 
 export type VolumeSide = 'LEFT' | 'RIGHT';
 export type VolumeStatus = 'ACTIVE' | 'REVERSED';
@@ -77,6 +78,15 @@ export async function propagateNodeSalesVolume(
   buyerUserId: string,
   occurredAtDate?: Date
 ): Promise<VolumePropagationResult> {
+  if (!ENABLE_BINARY_ENGINE) {
+    return {
+      sourceNodeId,
+      buyerUserId,
+      eventsCreated: 0,
+      ancestorsProcessed: 0,
+      reason: 'BINARY_ENGINE_DEPRECATED',
+    };
+  }
   const db = dbClient || (await getDb());
 
   // 1. Verify Node eligibility: MUST be ACTIVE
@@ -284,6 +294,9 @@ export async function backfillNodeSalesVolumeForPlacedMember(
   dbClient: DatabaseClient | null,
   memberUserId: string
 ): Promise<number> {
+  if (!ENABLE_BINARY_ENGINE) {
+    return 0;
+  }
   const db = dbClient || (await getDb());
 
   // Fetch all ACTIVE nodes owned by this member

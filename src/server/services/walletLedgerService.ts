@@ -3,7 +3,30 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 
 export type LedgerEntryType = 'CREDIT' | 'DEBIT' | 'REVERSAL';
-export type LedgerSourceType = 'REFERRAL_COMMISSION' | 'MATCHING_BONUS' | 'PROMOTION_BONUS' | 'NODE_REWARD' | 'WITHDRAWAL' | 'BLOCKCHAIN_DEPOSIT' | 'COIN_SWAP' | 'ADMIN_ADJUSTMENT' | 'WALLET_TRANSFER' | 'NODE_PURCHASE';
+export type LedgerSourceType =
+  | 'REFERRAL_COMMISSION'
+  | 'MATCHING_BONUS'
+  | 'PROMOTION_BONUS'
+  | 'NODE_REWARD'
+  | 'WITHDRAWAL'
+  | 'BLOCKCHAIN_DEPOSIT'
+  | 'COIN_SWAP'
+  | 'ADMIN_ADJUSTMENT'
+  | 'WALLET_TRANSFER'
+  | 'NODE_PURCHASE'
+  | 'TRADING_POOL_DEPOSIT'
+  | 'TRADING_POOL_YIELD'
+  | 'TRADING_POOL_PRINCIPAL_RETURN'
+  | 'TRADING_POOL_PRINCIPAL_REDEMPTION'
+  | 'CHRONO_VAULT_STAKING'
+  | 'CHRONO_VAULT_YIELD'
+  | 'CHRONO_VAULT_MATURITY'
+  | 'UNILEVEL_ROYALTY'
+  | 'LEADERSHIP_RANK_REWARD'
+  | 'GLOBAL_TURNOVER_POOL'
+  | 'FOUNDERS_COUNCIL_DIVIDEND'
+  | 'P2P_TRANSFER_SENT'
+  | 'P2P_TRANSFER_RECEIVED';
 
 export interface LedgerTransaction {
   id: string;
@@ -29,6 +52,8 @@ export interface WalletSummaryResponse {
   mainWalletBalance: number;
   nodeVaultBalance: number;
   phivoBalance?: number;
+  claimedPhivoBalance?: number;
+  unclaimedAccruedPhivo?: number;
   phivoValueUsdt?: number;
   phivoTotalEarned?: number;
   transactionCount: number;
@@ -403,140 +428,151 @@ export async function postLedgerDebit(params: {
 export async function syncUserLedger(userId: string, dbClient?: DatabaseClient): Promise<void> {
   const db = dbClient || (await getDb());
 
-  // 1. Reconcile Referral Commissions
-  const commRes = await db.query<{
-    id: string;
-    public_commission_id: string;
-    amount_usd: string | number;
-    status: string;
-    earned_at: Date;
-    reversed_at: Date | null;
-  }>(
-    `
-    SELECT id, public_commission_id, amount_usd, status, earned_at, reversed_at
-    FROM referral_commissions
-    WHERE sponsor_user_id = $1
-    `,
-    [userId]
-  );
+  // After atomic pre-launch Unilevel reset, legacy binary matching & spot referral tables remain
+  // strictly read-only archive tables and must NOT re-credit financial_ledger_entries.
+  const resetMarkerRes = await db
+    .query<{ config_value: string }>(
+      `SELECT config_value::text FROM unilevel_master_configs WHERE config_key = 'pre_launch_unilevel_reset_completed' LIMIT 1`
+    )
+    .catch(() => ({ rows: [] as Array<{ config_value: string }> }));
+  const skipLegacyCommissionSync = Number(resetMarkerRes.rows[0]?.config_value || 0) >= 1;
 
-  for (const c of commRes.rows) {
-    // Post CREDIT
-    await postLedgerCredit({
-      userId,
-      sourceType: 'REFERRAL_COMMISSION',
-      sourceId: c.id,
-      sourceRef: c.public_commission_id,
-      amount: Number(c.amount_usd),
-      description: 'Direct Referral Commission - Node Activation',
-      createdAt: new Date(c.earned_at),
-      dbClient: db,
-    });
+  if (!skipLegacyCommissionSync) {
+    // 1. Reconcile Referral Commissions
+    const commRes = await db.query<{
+      id: string;
+      public_commission_id: string;
+      amount_usd: string | number;
+      status: string;
+      earned_at: Date;
+      reversed_at: Date | null;
+    }>(
+      `
+      SELECT id, public_commission_id, amount_usd, status, earned_at, reversed_at
+      FROM referral_commissions
+      WHERE sponsor_user_id = $1
+      `,
+      [userId]
+    );
 
-    // If reversed, post REVERSAL
-    if (c.status === 'REVERSED') {
-      await postLedgerReversal({
+    for (const c of commRes.rows) {
+      // Post CREDIT
+      await postLedgerCredit({
         userId,
         sourceType: 'REFERRAL_COMMISSION',
         sourceId: c.id,
         sourceRef: c.public_commission_id,
         amount: Number(c.amount_usd),
-        description: 'Direct Referral Commission Reversal',
-        createdAt: c.reversed_at ? new Date(c.reversed_at) : new Date(),
+        description: 'Direct Referral Commission - Node Activation',
+        createdAt: new Date(c.earned_at),
         dbClient: db,
       });
+
+      // If reversed, post REVERSAL
+      if (c.status === 'REVERSED') {
+        await postLedgerReversal({
+          userId,
+          sourceType: 'REFERRAL_COMMISSION',
+          sourceId: c.id,
+          sourceRef: c.public_commission_id,
+          amount: Number(c.amount_usd),
+          description: 'Direct Referral Commission Reversal',
+          createdAt: c.reversed_at ? new Date(c.reversed_at) : new Date(),
+          dbClient: db,
+        });
+      }
     }
-  }
 
-  // 2. Reconcile Matching Settlements
-  const matchRes = await db.query<{
-    id: string;
-    public_settlement_id: string;
-    business_date: string | Date;
-    total_bonus_usd: string | number;
-    status: string;
-    settled_at: Date;
-  }>(
-    `
-    SELECT id, public_settlement_id, business_date, total_bonus_usd, status, settled_at
-    FROM binary_matching_settlements
-    WHERE user_id = $1 AND total_bonus_usd > 0
-    `,
-    [userId]
-  );
+    // 2. Reconcile Matching Settlements
+    const matchRes = await db.query<{
+      id: string;
+      public_settlement_id: string;
+      business_date: string | Date;
+      total_bonus_usd: string | number;
+      status: string;
+      settled_at: Date;
+    }>(
+      `
+      SELECT id, public_settlement_id, business_date, total_bonus_usd, status, settled_at
+      FROM binary_matching_settlements
+      WHERE user_id = $1 AND total_bonus_usd > 0
+      `,
+      [userId]
+    );
 
-  for (const m of matchRes.rows) {
-    const bDate = typeof m.business_date === 'string' ? m.business_date.split('T')[0] : new Date(m.business_date).toISOString().split('T')[0];
+    for (const m of matchRes.rows) {
+      const bDate = typeof m.business_date === 'string' ? m.business_date.split('T')[0] : new Date(m.business_date).toISOString().split('T')[0];
 
-    // Post CREDIT
-    await postLedgerCredit({
-      userId,
-      sourceType: 'MATCHING_BONUS',
-      sourceId: m.id,
-      sourceRef: m.public_settlement_id,
-      amount: Number(m.total_bonus_usd),
-      description: `Daily Binary Matching Settlement (${bDate})`,
-      createdAt: new Date(m.settled_at),
-      dbClient: db,
-    });
-
-    // If reversed, post REVERSAL
-    if (m.status === 'REVERSED') {
-      await postLedgerReversal({
+      // Post CREDIT
+      await postLedgerCredit({
         userId,
         sourceType: 'MATCHING_BONUS',
         sourceId: m.id,
         sourceRef: m.public_settlement_id,
         amount: Number(m.total_bonus_usd),
-        description: `Daily Binary Matching Settlement Reversal (${bDate})`,
-        createdAt: new Date(),
+        description: `Daily Binary Matching Settlement (${bDate})`,
+        createdAt: new Date(m.settled_at),
         dbClient: db,
       });
+
+      // If reversed, post REVERSAL
+      if (m.status === 'REVERSED') {
+        await postLedgerReversal({
+          userId,
+          sourceType: 'MATCHING_BONUS',
+          sourceId: m.id,
+          sourceRef: m.public_settlement_id,
+          amount: Number(m.total_bonus_usd),
+          description: `Daily Binary Matching Settlement Reversal (${bDate})`,
+          createdAt: new Date(),
+          dbClient: db,
+        });
+      }
     }
-  }
 
-  // 3. Reconcile Promotion Bonuses
-  const promoRes = await db.query<{
-    id: string;
-    public_bonus_id: string;
-    milestone: string;
-    amount_usd: string | number;
-    status: string;
-    qualified_at: Date;
-  }>(
-    `
-    SELECT id, public_bonus_id, milestone, amount_usd, status, qualified_at
-    FROM promotion_bonuses
-    WHERE user_id = $1
-    `,
-    [userId]
-  );
+    // 3. Reconcile Promotion Bonuses
+    const promoRes = await db.query<{
+      id: string;
+      public_bonus_id: string;
+      milestone: string;
+      amount_usd: string | number;
+      status: string;
+      qualified_at: Date;
+    }>(
+      `
+      SELECT id, public_bonus_id, milestone, amount_usd, status, qualified_at
+      FROM promotion_bonuses
+      WHERE user_id = $1
+      `,
+      [userId]
+    );
 
-  for (const p of promoRes.rows) {
-    // Post CREDIT
-    await postLedgerCredit({
-      userId,
-      sourceType: 'PROMOTION_BONUS',
-      sourceId: p.id,
-      sourceRef: p.public_bonus_id,
-      amount: Number(p.amount_usd),
-      description: `Promotion Milestone Bonus - ${p.milestone}`,
-      createdAt: new Date(p.qualified_at),
-      dbClient: db,
-    });
-
-    // If reversed, post REVERSAL
-    if (p.status === 'REVERSED') {
-      await postLedgerReversal({
+    for (const p of promoRes.rows) {
+      // Post CREDIT
+      await postLedgerCredit({
         userId,
         sourceType: 'PROMOTION_BONUS',
         sourceId: p.id,
         sourceRef: p.public_bonus_id,
         amount: Number(p.amount_usd),
-        description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
-        createdAt: new Date(),
+        description: `Promotion Milestone Bonus - ${p.milestone}`,
+        createdAt: new Date(p.qualified_at),
         dbClient: db,
       });
+
+      // If reversed, post REVERSAL
+      if (p.status === 'REVERSED') {
+        await postLedgerReversal({
+          userId,
+          sourceType: 'PROMOTION_BONUS',
+          sourceId: p.id,
+          sourceRef: p.public_bonus_id,
+          amount: Number(p.amount_usd),
+          description: `Promotion Milestone Bonus Reversal - ${p.milestone}`,
+          createdAt: new Date(),
+          dbClient: db,
+        });
+      }
     }
   }
 
@@ -688,6 +724,10 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     nodeReward: 0,
     swap: 0,
     deposit: 0,
+    tradingPoolYield: 0,
+    chronoVaultYield: 0,
+    unilevelRoyalty: 0,
+    leadershipRankReward: 0,
   };
 
   const reversals = {
@@ -697,6 +737,10 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     nodeReward: 0,
     swap: 0,
     deposit: 0,
+    tradingPoolYield: 0,
+    chronoVaultYield: 0,
+    unilevelRoyalty: 0,
+    leadershipRankReward: 0,
   };
 
   for (const row of aggRes.rows) {
@@ -705,7 +749,17 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     transactionCount += cnt;
 
     const st = row.source_type;
-    const isEarningSource = st === 'REFERRAL_COMMISSION' || st === 'MATCHING_BONUS' || st === 'PROMOTION_BONUS' || st === 'NODE_REWARD';
+    const isEarningSource =
+      st === 'REFERRAL_COMMISSION' ||
+      st === 'MATCHING_BONUS' ||
+      st === 'PROMOTION_BONUS' ||
+      st === 'NODE_REWARD' ||
+      st === 'TRADING_POOL_YIELD' ||
+      st === 'CHRONO_VAULT_YIELD' ||
+      st === 'UNILEVEL_ROYALTY' ||
+      st === 'LEADERSHIP_RANK_REWARD' ||
+      st === 'GLOBAL_TURNOVER_POOL' ||
+      st === 'FOUNDERS_COUNCIL_DIVIDEND';
 
     if (row.entry_type === 'CREDIT') {
       if (isEarningSource) {
@@ -717,6 +771,16 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
       else if (row.source_type === 'NODE_REWARD') grossCredits.nodeReward += amt;
       else if (row.source_type === 'COIN_SWAP') grossCredits.swap += amt;
       else if (row.source_type === 'BLOCKCHAIN_DEPOSIT') grossCredits.deposit += amt;
+      else if (row.source_type === 'TRADING_POOL_YIELD') grossCredits.tradingPoolYield += amt;
+      else if (row.source_type === 'CHRONO_VAULT_YIELD') grossCredits.chronoVaultYield += amt;
+      else if (row.source_type === 'UNILEVEL_ROYALTY') grossCredits.unilevelRoyalty += amt;
+      else if (
+        row.source_type === 'LEADERSHIP_RANK_REWARD' ||
+        row.source_type === 'GLOBAL_TURNOVER_POOL' ||
+        row.source_type === 'FOUNDERS_COUNCIL_DIVIDEND'
+      ) {
+        grossCredits.leadershipRankReward += amt;
+      }
     } else if (row.entry_type === 'REVERSAL') {
       if (row.source_type === 'WITHDRAWAL') {
         withdrawalReversals += amt;
@@ -730,6 +794,16 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
         else if (row.source_type === 'NODE_REWARD') reversals.nodeReward += amt;
         else if (row.source_type === 'COIN_SWAP') reversals.swap += amt;
         else if (row.source_type === 'BLOCKCHAIN_DEPOSIT') reversals.deposit += amt;
+        else if (row.source_type === 'TRADING_POOL_YIELD') reversals.tradingPoolYield += amt;
+        else if (row.source_type === 'CHRONO_VAULT_YIELD') reversals.chronoVaultYield += amt;
+        else if (row.source_type === 'UNILEVEL_ROYALTY') reversals.unilevelRoyalty += amt;
+        else if (
+          row.source_type === 'LEADERSHIP_RANK_REWARD' ||
+          row.source_type === 'GLOBAL_TURNOVER_POOL' ||
+          row.source_type === 'FOUNDERS_COUNCIL_DIVIDEND'
+        ) {
+          reversals.leadershipRankReward += amt;
+        }
       }
     } else if (row.entry_type === 'DEBIT') {
       totalDebited += amt;
@@ -779,7 +853,10 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     `
     SELECT entry_type, COALESCE(SUM(amount), 0) AS total
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED' AND source_type = 'ADMIN_ADJUSTMENT'
+    WHERE user_id = $1
+      AND currency = 'PHIVO'
+      AND status = 'SETTLED'
+      AND source_type IN ('ADMIN_ADJUSTMENT', 'UNILEVEL_ROYALTY', 'P2P_TRANSFER_SENT', 'P2P_TRANSFER_RECEIVED')
     GROUP BY entry_type
     `,
     [userId]
@@ -793,6 +870,10 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
   const phivoBalance = Math.max(
     0,
     Number((totalPhivoRewards + totalPhivoBought + adminPhivoNet - totalPhivoSwappedOut).toFixed(4))
+  );
+  const claimedPhivoBalance = Math.max(
+    0,
+    Number((claimedPhivo + totalPhivoBought + adminPhivoNet - totalPhivoSwappedOut).toFixed(8))
   );
 
   // Fetch current PHIVO conversion rate in USDT
@@ -809,6 +890,13 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     nodeReward: nodeRewardUsd,
     swap: Math.max(0, grossCredits.swap - reversals.swap),
     deposit: Math.max(0, grossCredits.deposit - reversals.deposit),
+    tradingPoolYield: Math.max(0, grossCredits.tradingPoolYield - reversals.tradingPoolYield),
+    chronoVaultYield: Math.max(0, grossCredits.chronoVaultYield - reversals.chronoVaultYield),
+    unilevelRoyalty: Math.max(0, grossCredits.unilevelRoyalty - reversals.unilevelRoyalty),
+    leadershipRankReward: Math.max(
+      0,
+      grossCredits.leadershipRankReward - reversals.leadershipRankReward
+    ),
   };
 
   const netWithdrawn = Math.max(0, totalDebited - withdrawalReversals);
@@ -864,7 +952,21 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
   const mainWalletBalance = Math.max(0, ledgerBalance - nodeVaultBalance);
 
   // Total unified earnings across all protocol income streams (USD + USDT equivalent of PHIVO mining)
-  const unifiedTotalEarned = Math.max(0, Number((breakdown.referral + breakdown.matching + breakdown.promotion + nodeRewardUsd).toFixed(2)));
+  const unifiedTotalEarned = Math.max(
+    0,
+    Number(
+      (
+        breakdown.referral +
+        breakdown.matching +
+        breakdown.promotion +
+        breakdown.tradingPoolYield +
+        breakdown.chronoVaultYield +
+        breakdown.unilevelRoyalty +
+        breakdown.leadershipRankReward +
+        nodeRewardUsd
+      ).toFixed(2)
+    )
+  );
 
   return {
     totalEarned: unifiedTotalEarned,
@@ -875,6 +977,8 @@ export async function getWalletSummary(userId: string): Promise<WalletSummaryRes
     mainWalletBalance,
     nodeVaultBalance,
     phivoBalance,
+    claimedPhivoBalance,
+    unclaimedAccruedPhivo: Number(unclaimedAccruedPhivo.toFixed(8)),
     phivoValueUsdt: nodeRewardUsd,
     phivoTotalEarned: totalPhivoRewards,
     transactionCount,
@@ -1063,7 +1167,7 @@ export async function executeEcosystemWalletTransfer(
 
     // Check available balance in source vault
     const walletSummary = await getWalletSummary(userId);
-    const available = walletSummary.availableBalance;
+    const available = fromVault === 'MAIN_WALLET' ? walletSummary.mainWalletBalance : walletSummary.availableBalance;
     if (available < amount) {
       throw new Error(`INSUFFICIENT_BALANCE: Available balance of $${available.toFixed(2)} USDT is insufficient for $${amount.toFixed(2)} USDT transfer.`);
     }
@@ -1129,3 +1233,18 @@ export async function executeEcosystemWalletTransfer(
     };
   });
 }
+
+export {
+  verifyUserLedgerReconciliation,
+  verifyAllUsersLedgerReconciliation,
+  getUserUnifiedStatement,
+  classifyLedgerSourceCategory,
+} from './unifiedLedgerService';
+export type {
+  UnifiedStatementCategory,
+  UserLedgerReconciliationResult,
+  SystemLedgerReconciliationReport,
+  UnifiedStatementEntry,
+  UnifiedStatementResponse,
+} from './unifiedLedgerService';
+

@@ -13,6 +13,7 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist-server/server.js --packages=external",
     "start": "node dist-server/server.js",
     "test": "tsx scripts/test-production-db-startup.ts && tsx scripts/test-production-startup.ts && tsx scripts/test-cloudsql-live-connection.ts && tsx scripts/test-cloudsql-diagnostic-endpoint.ts && tsx scripts/test-auth.ts && tsx scripts/test-task6-nodes.ts && tsx scripts/test-task10-volume.ts && tsx scripts/test-task14-rewards.ts && tsx scripts/test-task17-withdrawals.ts && tsx scripts/test-task18-admin.ts && tsx scripts/test-task17-1-bsc.ts && tsx scripts/test-automatic-usdt-deposit.ts && tsx scripts/test-production-deposit-wallet.ts && tsx scripts/test-task20-notifications.ts && tsx scripts/test-task21-reconciliation.ts && tsx scripts/test-task22-security.ts && tsx scripts/test-task23-e2e.ts && tsx scripts/test-task23-3a-matching.ts && tsx scripts/test-task23-3b-promotional.ts && tsx scripts/test-task23-4-email.ts && tsx scripts/test-production-persistence-safety.ts && tsx scripts/test-pf03-regression.ts && tsx scripts/test-task24-admin-user360.ts",
+    "test:task13": "tsx scripts/test-task13-final-audit.ts",
     "test:ci": "tsx scripts/run-ci-tests.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-server server.js",
@@ -21,7 +22,7 @@
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@google-cloud/firestore": "^9.2.0",
-    "@google/genai": "^2.4.0",
+    "@google/genai": "^3.6.1",
     "@tailwindcss/vite": "^4.3.3",
     "@types/cookie-parser": "^1.4.10",
     "@types/d3": "^7.4.3",

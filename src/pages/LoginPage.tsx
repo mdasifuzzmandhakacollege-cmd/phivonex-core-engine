@@ -145,7 +145,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     }
   };
 
-  const resetForgotModal = () => {
+  const resetForgotModal = (prefillEmail?: string) => {
+    if (prefillEmail) {
+      setIdentifier(prefillEmail.trim().toLowerCase());
+      setPassword('');
+    }
     setIsForgotModalOpen(false);
     setForgotStep('EMAIL');
     setForgotEmail('');
@@ -412,7 +416,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </span>
               </div>
               <button
-                onClick={resetForgotModal}
+                onClick={() => resetForgotModal()}
                 className="p-1 rounded-md text-[#98A2B3] hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
               >
                 <X className="w-4 h-4" />
@@ -431,7 +435,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   </p>
                 </div>
                 <button
-                  onClick={resetForgotModal}
+                  onClick={() => resetForgotModal(forgotEmail)}
                   className="w-full py-2.5 rounded-lg bg-gradient-to-r from-[#00CFFF] to-[#168BFF] text-[#05070B] font-semibold text-xs cursor-pointer min-h-[44px]"
                 >
                   Proceed to Sign In
@@ -520,7 +524,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                       setIsSendingForgot(true);
                       setForgotError(null);
                       try {
-                        await forgotPassword(forgotEmail);
+                        await forgotPassword(forgotEmail.trim().toLowerCase());
                         setForgotError(null);
                         setForgotMessage('New code sent to your email!');
                       } catch (err: any) {
@@ -538,7 +542,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <div className="flex gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={resetForgotModal}
+                    onClick={() => resetForgotModal()}
                     className="flex-1 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] font-medium text-xs cursor-pointer min-h-[44px]"
                   >
                     Cancel
@@ -582,7 +586,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 <div className="flex gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={resetForgotModal}
+                    onClick={() => resetForgotModal()}
                     className="flex-1 py-2.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] font-medium text-xs cursor-pointer min-h-[44px]"
                   >
                     Cancel

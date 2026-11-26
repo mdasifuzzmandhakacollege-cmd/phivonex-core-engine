@@ -12,24 +12,33 @@ const router = Router();
 const SESSION_COOKIE_NAME = 'phx_session';
 const SESSION_DURATION_DAYS = 30;
 
-function setSessionCookie(res: Response, rawToken: string, rememberMe = true) {
-  const maxAge = rememberMe ? SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000 : undefined;
-  res.cookie(SESSION_COOKIE_NAME, rawToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge,
-    path: '/',
-  });
+function isHttpsRequest(req: Request): boolean {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return req.secure || proto === 'https';
 }
 
-function clearSessionCookie(res: Response) {
+function setSessionCookie(req: Request, res: Response, rawToken: string, rememberMe = true) {
+  const maxAge = rememberMe ? SESSION_DURATION_DAYS * 24 * 60 * 60 * 1000 : undefined;
+  const secure = isHttpsRequest(req);
+  res.cookie(SESSION_COOKIE_NAME, rawToken, {
+    httpOnly: true,
+    secure,
+    sameSite: secure ? 'none' : 'lax',
+    ...(secure ? { partitioned: true } : {}),
+    maxAge,
+    path: '/',
+  } as any);
+}
+
+function clearSessionCookie(req: Request, res: Response) {
+  const secure = isHttpsRequest(req);
   res.clearCookie(SESSION_COOKIE_NAME, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
+    secure,
+    sameSite: secure ? 'none' : 'lax',
+    ...(secure ? { partitioned: true } : {}),
     path: '/',
-  });
+  } as any);
 }
 
 /**
@@ -79,11 +88,11 @@ async function syncUserToFirebase(userData: {
   try {
     const { adminAuth, adminFirestore } = await import('../../lib/firebase-admin');
     
-    // 1. Firebase Auth sync
+    // 1. Firebase Auth sync (keep password synchronized when provided so stale Firebase credentials never drift)
     try {
       await adminAuth.createUser({
         uid: userData.id,
-        email: userData.email,
+        email: userData.email.trim().toLowerCase(),
         displayName: userData.fullName,
         password: userData.password && userData.password.length >= 6 ? userData.password : undefined,
       });
@@ -91,11 +100,22 @@ async function syncUserToFirebase(userData: {
     } catch (authErr: any) {
       if (authErr?.code === 'auth/uid-already-exists' || authErr?.code === 'auth/email-already-exists') {
         try {
-          await adminAuth.updateUser(userData.id, {
+          const updatePayload: Record<string, any> = {
             displayName: userData.fullName,
-          });
+          };
+          if (userData.password && userData.password.length >= 6) {
+            updatePayload.password = userData.password;
+          }
+          let targetUid = userData.id;
+          try {
+            const existingFbUser = await adminAuth.getUserByEmail(userData.email.trim().toLowerCase());
+            if (existingFbUser?.uid) targetUid = existingFbUser.uid;
+          } catch {
+            // fallback to userData.id
+          }
+          await adminAuth.updateUser(targetUid, updatePayload);
         } catch {
-          // ignore
+          // ignore offline/test adminAuth sync
         }
       } else {
         console.warn(`[Firebase Sync] Firebase Auth notice:`, authErr?.message || authErr);
@@ -167,7 +187,7 @@ router.post('/register/request-verification', registrationLimiter, async (req: R
     const cleanPhone = phone ? phone.trim() : null;
 
     // 2. Check for duplicate email in users table
-    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [normalizedEmail]);
+    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(TRIM(email)) = $1`, [normalizedEmail]);
     if (existingEmail.rowCount > 0) {
       res.status(409).json({ error: 'EMAIL_EXISTS', message: 'An account with this email address already exists.' });
       return;
@@ -397,7 +417,7 @@ router.post('/register/complete', registrationLimiter, async (req: Request, res:
     const data = JSON.parse(record.registration_data);
 
     // 5. Final check for duplicate email in users table before final creation
-    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [normalizedEmail]);
+    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(TRIM(email)) = $1`, [normalizedEmail]);
     if (existingEmail.rowCount > 0) {
       res.status(409).json({ error: 'EMAIL_EXISTS', message: 'An account with this email address already exists.' });
       return;
@@ -509,7 +529,7 @@ router.post('/register/complete', registrationLimiter, async (req: Request, res:
       role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'mdasifuzzman.official@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
-    setSessionCookie(res, rawSessionToken, true);
+    setSessionCookie(req, res, rawSessionToken, true);
 
     res.status(201).json({
       message: 'Account created and verified successfully',
@@ -569,7 +589,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
     const cleanPhone = phone ? phone.trim() : null;
 
     // 2. Check for duplicate email
-    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(email) = $1`, [normalizedEmail]);
+    const existingEmail = await db.query(`SELECT id FROM users WHERE LOWER(TRIM(email)) = $1`, [normalizedEmail]);
     if (existingEmail.rowCount > 0) {
       res.status(409).json({ error: 'EMAIL_EXISTS', message: 'An account with this email address already exists.' });
       return;
@@ -669,7 +689,7 @@ router.post('/register', registrationLimiter, async (req: Request, res: Response
       role: (normalizedEmail === 'md.asifuzzman.dhakacollege@gmail.com' || normalizedEmail === 'mdasifuzzman.official@gmail.com' || normalizedEmail === 'admin@phivonex.com') ? 'ADMIN' : 'USER',
     }).catch(() => {});
 
-    setSessionCookie(res, rawSessionToken, true);
+    setSessionCookie(req, res, rawSessionToken, true);
 
     res.status(201).json({
       message: 'Account created successfully',
@@ -715,7 +735,7 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
     // Check if user already exists in PostgreSQL
     const existing = await db.query(
       `SELECT id, public_id, full_name, email, phone, country, status, email_verified_at 
-       FROM users WHERE LOWER(email) = $1`,
+       FROM users WHERE LOWER(TRIM(email)) = $1`,
       [normalizedEmail]
     );
 
@@ -810,7 +830,7 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
       country: userRecord.country || 'Global',
     }).catch(() => {});
 
-    setSessionCookie(res, rawSessionToken, true);
+    setSessionCookie(req, res, rawSessionToken, true);
 
     res.status(200).json({
       message: 'Authenticated successfully with Google',
@@ -837,10 +857,10 @@ router.post('/google', authLimiter, async (req: Request, res: Response): Promise
  */
 router.post('/login', loginLimiter, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { identifier, password, rememberMe = true } = req.body;
-    const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || '127.0.0.1';
+    const { identifier, email: bodyEmail, password, rememberMe = true } = req.body;
+    const rawIdentifier = typeof identifier === 'string' && identifier.trim() ? identifier : bodyEmail;
 
-    if (!identifier || !password) {
+    if (!rawIdentifier || typeof rawIdentifier !== 'string' || !password || typeof password !== 'string') {
       res.status(400).json({
         error: 'MISSING_FIELDS',
         message: 'Identifier (email/phone) and password are required.',
@@ -849,9 +869,10 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
     }
 
     const db = await getDb();
-    const cleanIdentifier = identifier.trim().toLowerCase();
+    const cleanIdentifier = String(rawIdentifier).trim().toLowerCase();
+    const trimmedPhone = String(rawIdentifier).trim();
 
-    // Query user by email or phone joined with user_referrals
+    // Query user by normalized LOWER(TRIM(email)) or phone joined with user_referrals
     const result = await db.query<{
       id: string;
       public_id: string;
@@ -867,14 +888,15 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       `SELECT u.id, u.public_id, u.full_name, u.email, u.phone, u.country, u.password_hash, u.status, u.email_verified_at, r.referral_code
        FROM users u
        LEFT JOIN user_referrals r ON u.id = r.user_id
-       WHERE LOWER(u.email) = $1 OR u.phone = $2`,
-      [cleanIdentifier, identifier.trim()]
+       WHERE LOWER(TRIM(u.email)) = $1 OR TRIM(COALESCE(u.phone, '')) = $2
+       LIMIT 1`,
+      [cleanIdentifier, trimmedPhone]
     );
 
     let user = result.rowCount > 0 ? result.rows[0] : null;
 
     if (!user) {
-      // Check Firestore cloud storage to restore user across rollouts
+      // Check Firestore cloud storage ONLY if user is missing in PostgreSQL AND has a verifiable passwordHash
       try {
         const { adminFirestore } = await import('../../lib/firebase-admin');
         const snap = await adminFirestore.collection('users')
@@ -891,15 +913,11 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
           const isSuperAdmin = cleanIdentifier === 'md.asifuzzman.dhakacollege@gmail.com' || cleanIdentifier === 'mdasifuzzman.official@gmail.com' || cleanIdentifier === 'admin@phivonex.com';
           const restoredRole = isSuperAdmin ? 'ADMIN' : (docData.role || 'USER');
 
-          let passwordValid = false;
-          if (restoredPasswordHash) {
-            passwordValid = await verifyPassword(restoredPasswordHash, password);
-          } else {
-            passwordValid = true;
-          }
+          // Security invariant: never accept a Firestore restore without a valid passwordHash match
+          const passwordValid = Boolean(restoredPasswordHash) && await verifyPassword(restoredPasswordHash, password);
 
           if (passwordValid) {
-            const freshHash = restoredPasswordHash || await hashPassword(password);
+            const freshHash = restoredPasswordHash;
             await db.query(`
               INSERT INTO users (
                 id, public_id, full_name, email, phone, country, password_hash,
@@ -1024,7 +1042,7 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
         userAgent,
       }).catch(() => {});
 
-      setSessionCookie(res, rawSessionToken, rememberMe);
+      setSessionCookie(req, res, rawSessionToken, rememberMe);
 
       res.status(200).json({
         message: 'Logged in successfully',
@@ -1120,7 +1138,7 @@ router.post('/logout', requireAuth, async (req: AuthRequest, res: Response): Pro
       });
     }
 
-    clearSessionCookie(res);
+    clearSessionCookie(req, res);
     res.status(200).json({ message: 'Logged out successfully.' });
   } catch (err) {
     console.error('[Auth API] Error in /logout:', err);
@@ -1191,11 +1209,25 @@ router.post('/change-password', requireAuth, async (req: AuthRequest, res: Respo
     // Hash new password with Argon2id
     const newPasswordHash = await hashPassword(newPassword);
 
-    // Update password in database
+    // Update password in canonical PostgreSQL record and clear any legacy password reset flags
     await db.query(
-      `UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+      `UPDATE users SET password_hash = $1, must_reset_password = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
       [newPasswordHash, user.id]
     );
+
+    // Sync updated passwordHash to Firebase/Firestore asynchronously so cloud backup stays in lockstep
+    syncUserToFirebase({
+      id: user.id,
+      email: String(user.email).trim().toLowerCase(),
+      fullName: user.fullName,
+      publicId: user.public_id,
+      phone: user.phone,
+      country: user.country,
+      status: user.status,
+      password: newPassword,
+      passwordHash: newPasswordHash,
+      role: user.role,
+    }).catch(() => {});
 
     // Revoke all OTHER active sessions for this user (keep current session active)
     if (req.sessionId) {
@@ -1315,7 +1347,7 @@ router.delete('/sessions/:sessionId', requireAuth, async (req: AuthRequest, res:
 
     const isCurrent = sessionId === req.sessionId;
     if (isCurrent) {
-      clearSessionCookie(res);
+      clearSessionCookie(req, res);
     }
 
     // Log security activity
@@ -1365,7 +1397,7 @@ router.post('/sessions/:sessionId/revoke', requireAuth, async (req: AuthRequest,
 
     const isCurrent = sessionId === req.sessionId;
     if (isCurrent) {
-      clearSessionCookie(res);
+      clearSessionCookie(req, res);
     }
 
     await logSecurityEvent(db, {
@@ -1456,8 +1488,8 @@ router.post('/resend-verification', async (req: Request, res: Response): Promise
 
     if (!targetUserId && req.body.email) {
       const emailRes = await db.query<{ id: string; email: string; email_verified_at: Date | null }>(
-        `SELECT id, email, email_verified_at FROM users WHERE LOWER(email) = $1`,
-        [req.body.email.trim().toLowerCase()]
+        `SELECT id, email, email_verified_at FROM users WHERE LOWER(TRIM(email)) = $1`,
+        [String(req.body.email).trim().toLowerCase()]
       );
       if (emailRes.rowCount > 0) {
         if (emailRes.rows[0].email_verified_at) {
@@ -1509,21 +1541,30 @@ router.post('/forgot-password', passwordResetLimiter, async (req: Request, res: 
       return;
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = String(email).trim().toLowerCase();
     const db = await getDb();
     const userRes = await db.query<{ id: string; email: string }>(
-      `SELECT id, email FROM users WHERE LOWER(email) = $1`,
+      `SELECT id, email FROM users WHERE LOWER(TRIM(email)) = $1 LIMIT 1`,
       [normalizedEmail]
     );
 
     if (userRes.rowCount > 0) {
       const user = userRes.rows[0];
-      // Generate 6-digit numeric OTP code
-      const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate cryptographically secure 6-digit numeric OTP code
+      const crypto = await import('crypto');
+      const rawOtp = crypto.randomInt(100000, 999999).toString();
       const otpHash = hashToken(rawOtp);
       const rawResetToken = generateRandomToken(32);
       const tokenHash = hashToken(rawResetToken);
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+      // Normalize stored email on the user record if legacy whitespace/casing existed
+      if (user.email !== normalizedEmail) {
+        await db.query(
+          `UPDATE users SET email = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+          [normalizedEmail, user.id]
+        ).catch(() => {});
+      }
 
       // Invalidate previous unused reset tokens for this user
       await db.query(
@@ -1547,7 +1588,7 @@ router.post('/forgot-password', passwordResetLimiter, async (req: Request, res: 
 
       // Dispatch OTP Email
       const { sendPasswordResetOtpEmail } = await import('../services/emailService');
-      await sendPasswordResetOtpEmail(user.email, rawOtp);
+      await sendPasswordResetOtpEmail(normalizedEmail, rawOtp);
     }
 
     res.status(200).json({
@@ -1583,12 +1624,12 @@ router.post('/reset-password', passwordResetLimiter, async (req: Request, res: R
 
     let tokenRes: any;
     if (email && typeof email === 'string') {
-      const normalizedEmail = email.trim().toLowerCase();
+      const normalizedEmail = String(email).trim().toLowerCase();
       tokenRes = await db.query<{ id: string; user_id: string; expires_at: Date; used_at: Date | null }>(
         `SELECT t.id, t.user_id, t.expires_at, t.used_at 
          FROM auth_tokens t
          INNER JOIN users u ON t.user_id = u.id
-         WHERE t.token_hash = $1 AND t.type = 'PASSWORD_RESET' AND LOWER(u.email) = $2`,
+         WHERE t.token_hash = $1 AND t.type = 'PASSWORD_RESET' AND LOWER(TRIM(u.email)) = $2`,
         [tokenHash, normalizedEmail]
       );
     } else {
@@ -1615,24 +1656,45 @@ router.post('/reset-password', passwordResetLimiter, async (req: Request, res: R
       return;
     }
 
+    // Hash exact password with the exact same Argon2id function used by /api/auth/login
     const newPasswordHash = await hashPassword(newPassword);
 
-    await db.query(
-      `UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-      [newPasswordHash, tokenRecord.user_id]
-    );
-
-    await db.query(
-      `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [tokenRecord.id]
-    );
-
-    // Invalidate all tokens of this type for user
-    await db.query(
-      `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND type = 'PASSWORD_RESET' AND used_at IS NULL`,
+    // Fetch canonical user record for normalization and cloud backup synchronization
+    const canonicalUserRes = await db.query<{
+      id: string;
+      public_id: string;
+      full_name: string;
+      email: string;
+      phone: string | null;
+      country: string;
+      status: string;
+      role: string;
+    }>(
+      `SELECT id, public_id, full_name, email, phone, country, status, role FROM users WHERE id = $1 LIMIT 1`,
       [tokenRecord.user_id]
     );
+    const canonicalUser = canonicalUserRes.rows[0];
+    const cleanCanonicalEmail = canonicalUser ? String(canonicalUser.email).trim().toLowerCase() : null;
 
+    // Update canonical user record: normalize email, store new password_hash, clear legacy must_reset_password flag
+    await db.query(
+      `UPDATE users
+       SET password_hash = $1,
+           email = COALESCE($2, LOWER(TRIM(email))),
+           must_reset_password = FALSE,
+           email_verified_at = COALESCE(email_verified_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3`,
+      [newPasswordHash, cleanCanonicalEmail, tokenRecord.user_id]
+    );
+
+    // Invalidate the used reset token and all outstanding PASSWORD_RESET tokens for this user
+    await db.query(
+      `UPDATE auth_tokens SET used_at = CURRENT_TIMESTAMP WHERE id = $1 OR (user_id = $2 AND type = 'PASSWORD_RESET' AND used_at IS NULL)`,
+      [tokenRecord.id, tokenRecord.user_id]
+    );
+
+    // Revoke all previous active sessions so subsequent logins authenticate freshly with the new password
     await db.query(
       `UPDATE sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = $1 AND revoked_at IS NULL`,
       [tokenRecord.user_id]
@@ -1641,9 +1703,25 @@ router.post('/reset-password', passwordResetLimiter, async (req: Request, res: R
     await logSecurityEvent(db, {
       userId: tokenRecord.user_id,
       eventType: 'PASSWORD_CHANGED',
-      description: 'Password reset via cryptographic recovery code.',
+      description: 'Password reset via cryptographic recovery code. Legacy reset flags cleared.',
       userAgent: req.headers['user-agent'],
     });
+
+    // Synchronize the new passwordHash & password to Firestore/Firebase Auth asynchronously so stale cloud state can NEVER overwrite it
+    if (canonicalUser && cleanCanonicalEmail) {
+      syncUserToFirebase({
+        id: canonicalUser.id,
+        email: cleanCanonicalEmail,
+        fullName: canonicalUser.full_name,
+        publicId: canonicalUser.public_id,
+        phone: canonicalUser.phone,
+        country: canonicalUser.country,
+        status: canonicalUser.status,
+        password: newPassword,
+        passwordHash: newPasswordHash,
+        role: canonicalUser.role,
+      }).catch(() => {});
+    }
 
     res.status(200).json({
       message: 'Your password has been successfully reset. You may now sign in with your new password.',

@@ -1,43 +1,31 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  User,
-  Tag,
-  Copy,
-  Check,
-  Share2,
-  UserCheck,
-  Clock,
-  Server,
-  ArrowUpRight,
   ArrowDownLeft,
+  ArrowUpRight,
   ArrowRight,
   Repeat,
-  Coins,
   Users,
-  GitFork,
-  ChevronRight,
   Activity,
   Trophy,
   Zap,
   ShieldCheck,
   ShieldAlert,
-  QrCode,
+  Clock,
+  Layers,
+  Share2,
+  Send,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { buildPublicReferralUrl } from '../../utils/referralUrl';
 import { ReferralShareModal } from '../modals/ReferralShareModal';
 import { BinanceKYCModal } from '../modals/BinanceKYCModal';
-import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { TokenPriceTrendChart } from './TokenPriceTrendChart';
 import { RewardTrend30DaysChart } from './RewardTrend30DaysChart';
-import { PromotionalBannerCarousel } from './PromotionalBannerCarousel';
-import { ActiveOfferCards } from './ActiveOfferCards';
 import { Premium3DFlipCard } from './Premium3DFlipCard';
+import { OverviewPromoCarousel } from './OverviewPromoCarousel';
 import { RecentActivityLog } from './RecentActivityLog';
 import { useSystemConfig } from '../../context/SystemConfigContext';
-import { getTransactionUserDescription } from '../../utils/transactionDisplay';
 
-// TypeScript Interfaces for Authoritative Data
 interface ReferralMeResponse {
   publicId: string;
   referralCode: string;
@@ -53,6 +41,9 @@ interface WalletBreakdown {
   matching: number;
   promotion: number;
   nodeReward?: number;
+  quantumAlpha?: number;
+  chronoVaults?: number;
+  unilevelRoyalty?: number;
   deposit?: number;
   swap?: number;
 }
@@ -65,7 +56,6 @@ interface WalletSummary {
   phivoBalance?: number;
   transactionCount: number;
   breakdown: WalletBreakdown;
-  grossBreakdown?: WalletBreakdown;
 }
 
 interface LedgerTransactionItem {
@@ -83,50 +73,20 @@ interface LedgerTransactionItem {
   createdAt: string;
 }
 
-interface NodeSummaryData {
-  totalNodes: number;
-  activeNodes: number;
-  totalRewardsPhivo: number;
-  unclaimedPhivo?: number;
-  claimedPhivo?: number;
-  latestRewardEpoch?: string | null;
+interface UnilevelRoyaltiesOverview {
+  personalActiveInvestmentUsd: number;
+  unlockedGenerationsCount: number;
+  directActiveSponsorsCount: number;
+  usdtRoyaltiesTotal: number;
+  phivoRoyaltiesTotal: number;
+  activeNodesCount: number;
 }
 
-interface MatchingSummaryData {
-  todayVolume: {
-    left: number;
-    right: number;
-  };
-  carry: {
-    left: number;
-    right: number;
-  };
-  totalMatchingEarnedUsd: number;
-  nextSettlement?: {
-    scheduledTime: string;
-    nextSettlementIso: string;
-  };
-}
-
-interface UserRankStatusData {
-  currentRank: string;
+interface UnilevelRankOverview {
+  currentRankLevel: number;
   currentRankName: string;
-  nextRank: string | null;
   nextRankName: string | null;
-  stageProgress?: {
-    matching?: {
-      leftProgress: number;
-      rightProgress: number;
-      requiredLeft: number;
-      requiredRight: number;
-      progressPct: number;
-    };
-    leadership?: {
-      progressPct: number;
-      requiredLeaderRank?: string;
-    };
-  };
-  rewardUsd?: number;
+  progressPct: number;
 }
 
 interface OverviewViewProps {
@@ -135,28 +95,34 @@ interface OverviewViewProps {
 }
 
 export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab }) => {
-  const { coinPriceUsdt, nodeBasePriceUsd, directReferralCommissionRate, lastUpdated } = useSystemConfig();
+  const { coinPriceUsdt, nodeBasePriceUsd } = useSystemConfig();
 
-  // 1. Data States
   const [referralData, setReferralData] = useState<ReferralMeResponse | null>(null);
   const [walletData, setWalletData] = useState<WalletSummary | null>(null);
   const [recentTransactions, setRecentTransactions] = useState<LedgerTransactionItem[]>([]);
-  const [nodeData, setNodeData] = useState<NodeSummaryData | null>(null);
-  const [matchingData, setMatchingData] = useState<MatchingSummaryData | null>(null);
-  const [rankData, setRankData] = useState<UserRankStatusData | null>(null);
+  const [activeNodesCount, setActiveNodesCount] = useState<number>(0);
+  const [totalMinedPhivo, setTotalMinedPhivo] = useState<number>(0);
   const [directReferralsCount, setDirectReferralsCount] = useState<number>(0);
   const [phivoRate, setPhivoRate] = useState<number>(coinPriceUsdt || 0.1);
+  const [royaltiesOverview, setRoyaltiesOverview] = useState<UnilevelRoyaltiesOverview>({
+    personalActiveInvestmentUsd: 0,
+    unlockedGenerationsCount: 0,
+    directActiveSponsorsCount: 0,
+    usdtRoyaltiesTotal: 0,
+    phivoRoyaltiesTotal: 0,
+    activeNodesCount: 0,
+  });
+  const [rankOverview, setRankOverview] = useState<UnilevelRankOverview>({
+    currentRankLevel: 0,
+    currentRankName: 'Initiate Member',
+    nextRankName: 'Quantum Architect',
+    progressPct: 0,
+  });
 
-  // 2. UI & Interaction States
-  const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [copiedId, setCopiedId] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
 
-  // Fetch all authoritative dashboard data in parallel
   const fetchDashboardData = useCallback(async (isManual = false) => {
     if (isManual) setIsRefreshing(true);
 
@@ -167,107 +133,113 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
         txRes,
         nodesRes,
         rewardsRes,
-        matchingRes,
+        royaltiesRes,
         rankRes,
         directsRes,
-        econRes
+        econRes,
       ] = await Promise.allSettled([
         fetch('/api/referrals/me', { credentials: 'include' }),
         fetch('/api/wallet/me', { credentials: 'include' }),
-        fetch('/api/wallet/transactions?page=1&limit=5', { credentials: 'include' }),
+        fetch('/api/wallet/transactions?page=1&limit=25', { credentials: 'include' }),
         fetch('/api/nodes/me', { credentials: 'include' }),
         fetch('/api/rewards/me', { credentials: 'include' }),
-        fetch('/api/matching/summary', { credentials: 'include' }),
-        fetch('/api/promotions/ranks/me', { credentials: 'include' }),
+        fetch('/api/unilevel/royalties/overview?page=1&limit=10', { credentials: 'include' }),
+        fetch('/api/unilevel/ranks/overview', { credentials: 'include' }),
         fetch('/api/referrals/direct', { credentials: 'include' }),
         fetch('/api/economic/public'),
       ]);
 
-      // 1. Referral Me
       if (refRes.status === 'fulfilled' && refRes.value.ok) {
         const data = await refRes.value.json();
         setReferralData(data);
       }
 
-      // 2. Wallet Me
       if (walletRes.status === 'fulfilled' && walletRes.value.ok) {
         const data = await walletRes.value.json();
         setWalletData(data);
       }
 
-      // 3. Recent Transactions
       if (txRes.status === 'fulfilled' && txRes.value.ok) {
         const data = await txRes.value.json();
-        setRecentTransactions(data.transactions || []);
+        setRecentTransactions(Array.isArray(data.transactions) ? data.transactions : []);
       }
 
-      // 4. Node Summary
-      let totalNodesCount = 0;
-      let activeNodesCount = 0;
       if (nodesRes.status === 'fulfilled' && nodesRes.value.ok) {
         const data = await nodesRes.value.json();
-        const userNodes = data.nodes || [];
-        totalNodesCount = userNodes.length;
-        activeNodesCount = userNodes.filter((n: any) => n.status === 'ACTIVE' || n.status === 'EMITTING').length;
+        const userNodes = Array.isArray(data.nodes) ? data.nodes : [];
+        const active = userNodes.filter(
+          (n: any) => n.status === 'ACTIVE' || n.status === 'EMITTING'
+        ).length;
+        setActiveNodesCount(active);
       }
 
-      let totalMiningRewards = 0;
-      let unclaimedPhivo = 0;
-      let claimedPhivo = 0;
-      let latestEpoch = null;
       if (rewardsRes.status === 'fulfilled' && rewardsRes.value.ok) {
         const rData = await rewardsRes.value.json();
-        unclaimedPhivo = Number(rData.totalAccrued || 0);
-        claimedPhivo = Number(rData.totalClaimed || 0);
-        totalMiningRewards = rData.totalRewards ?? (unclaimedPhivo + claimedPhivo);
-        latestEpoch = rData.latestEpoch?.publicEpochId || null;
+        const accrued = Number(rData.totalAccrued || 0);
+        const claimed = Number(rData.totalClaimed || 0);
+        setTotalMinedPhivo(Number(rData.totalRewards ?? accrued + claimed));
       }
 
-      setNodeData({
-        totalNodes: totalNodesCount,
-        activeNodes: activeNodesCount,
-        totalRewardsPhivo: totalMiningRewards,
-        unclaimedPhivo,
-        claimedPhivo,
-        latestRewardEpoch: latestEpoch,
-      });
-
-      // 5. Binary Matching
-      if (matchingRes.status === 'fulfilled' && matchingRes.value.ok) {
-        const data = await matchingRes.value.json();
-        setMatchingData(data);
+      if (royaltiesRes.status === 'fulfilled' && royaltiesRes.value.ok) {
+        const json = await royaltiesRes.value.json();
+        const d = json?.data || json;
+        if (d) {
+          const tradingRoyalty = Number(d.byProductBreakdown?.tradingPoolRoyaltyUsd || 0);
+          const vaultRoyalty = Number(d.byProductBreakdown?.chronoVaultRoyaltyUsd || 0);
+          const nodeRoyaltyPhivo = Number(d.byProductBreakdown?.genesisNodeRoyaltyUsd || 0);
+          setRoyaltiesOverview({
+            personalActiveInvestmentUsd: Number(d.personalActiveInvestmentUsd || 0),
+            unlockedGenerationsCount: Number(d.unlockedGenerationsCount || 0),
+            directActiveSponsorsCount: Number(d.directActiveSponsorsCount || 0),
+            usdtRoyaltiesTotal: tradingRoyalty + vaultRoyalty,
+            phivoRoyaltiesTotal: nodeRoyaltyPhivo,
+            activeNodesCount: Number(d.activeBreakdown?.activeNodesCount || 0),
+          });
+        }
       }
 
-      // 6. Promotions / Rank
       if (rankRes.status === 'fulfilled' && rankRes.value.ok) {
-        const data = await rankRes.value.json();
-        setRankData(data.state || data);
+        const json = await rankRes.value.json();
+        const d = json?.data || json;
+        if (d?.currentRank) {
+          const qualifiedVol = Number(d.teamVolumeSummary?.nextRankQualifiedTeamVolumeUsd || 0);
+          const requiredVol = Number(d.teamVolumeSummary?.nextRankRequiredTeamVolumeUsd || 0);
+          const computedPct =
+            d.nextTargetRank && requiredVol > 0
+              ? Math.min(100, Math.round((qualifiedVol / requiredVol) * 100))
+              : d.currentRank.rankLevel >= 6
+              ? 100
+              : 0;
+
+          setRankOverview({
+            currentRankLevel: Number(d.currentRank.rankLevel || 0),
+            currentRankName: d.currentRank.rankName || 'Initiate Member',
+            nextRankName: d.nextTargetRank?.rankName || null,
+            progressPct: computedPct,
+          });
+        }
       }
 
-      // 7. Direct Referrals Count
       if (directsRes.status === 'fulfilled' && directsRes.value.ok) {
         const data = await directsRes.value.json();
         setDirectReferralsCount(Array.isArray(data.referrals) ? data.referrals.length : 0);
       }
 
-      // 8. Economic Public (Rate)
       if (econRes.status === 'fulfilled' && econRes.value.ok) {
         const data = await econRes.value.json();
-        if (typeof data.phivoPriceUsd === 'number') {
+        if (typeof data.phivoPriceUsd === 'number' && data.phivoPriceUsd > 0) {
           setPhivoRate(data.phivoPriceUsd);
         }
       }
-    } catch (err: any) {
-      console.warn('[OverviewView] Data fetch warning:', err);
+    } catch (err) {
+      console.warn('[OverviewView] Sync notice:', err);
     } finally {
-      setLoading(false);
       setIsRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     fetchDashboardData();
-    // Auto refresh every 60 seconds when tab is visible
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchDashboardData(false);
@@ -276,164 +248,99 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
     return () => clearInterval(interval);
   }, [fetchDashboardData]);
 
-  // Synchronize PHIVO conversion rate live from system config
   useEffect(() => {
     if (typeof coinPriceUsdt === 'number' && coinPriceUsdt > 0) {
       setPhivoRate(coinPriceUsdt);
     }
   }, [coinPriceUsdt]);
 
-  // Live refresh on balance, transaction, or notification updates
   useEffect(() => {
-    const handleUpdate = () => {
-      fetchDashboardData(false);
-    };
+    const handleUpdate = () => fetchDashboardData(false);
     window.addEventListener('phivonex:balance-or-tx-updated', handleUpdate);
     return () => window.removeEventListener('phivonex:balance-or-tx-updated', handleUpdate);
   }, [fetchDashboardData]);
 
-  // Copy Handlers
-  const rawReferralCode = referralData?.referralCode || user?.referralCode;
-  const isReferralPending = !rawReferralCode || rawReferralCode === 'PHX-PENDING' || rawReferralCode.trim() === '';
-  const displayReferralCode = isReferralPending ? 'Not Available Yet' : rawReferralCode;
+  const rawReferralCode =
+    referralData?.referralCode ||
+    user?.referralCode ||
+    (user?.publicId ? `PHX-${user.publicId.replace('PHX-', '')}` : 'PHX-MEMBER');
+  const effectiveReferralUrl = buildPublicReferralUrl(rawReferralCode, referralData?.referralUrl);
 
-  const handleCopyId = () => {
-    const id = referralData?.publicId || user?.publicId;
-    if (!id) return;
-    navigator.clipboard.writeText(id);
-    setCopiedId(true);
-    setTimeout(() => setCopiedId(false), 2000);
-  };
-
-  const effectiveReferralUrl = isReferralPending
-    ? ''
-    : buildPublicReferralUrl(rawReferralCode, referralData?.referralUrl);
-
-  const handleCopyCode = () => {
-    if (isReferralPending || !rawReferralCode) return;
-    navigator.clipboard.writeText(rawReferralCode);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  const handleCopyLink = () => {
-    if (isReferralPending || !effectiveReferralUrl) return;
-    navigator.clipboard.writeText(effectiveReferralUrl);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
-
-  // Safe navigation helper
-  const navigateTo = (tabKey: string) => {
-    if (onNavigateTab) {
-      onNavigateTab(tabKey);
-    }
-  };
-
-  // Calculations & Formatters
   const firstName = useMemo(() => {
     if (!user?.fullName) return 'Member';
-    const parts = user.fullName.trim().split(' ');
-    return parts[0] || 'Member';
+    return user.fullName.trim().split(/\s+/)[0] || 'Member';
   }, [user?.fullName]);
+
+  const navigateTo = (tabKey: string) => {
+    onNavigateTab?.(tabKey);
+  };
 
   const availableUsdt = walletData?.availableBalance ?? walletData?.ledgerBalance ?? 0;
   const phivoBalance = walletData?.phivoBalance ?? 0;
-  const phivoValueUsdt = phivoBalance * phivoRate;
+  const effectiveRate = phivoRate || 0.1;
 
-  // Strict Total Earnings Reconciled Calculation:
-  // ONLY genuinely earned income rewards (Referral + Matching + Promotion + Node Rewards).
-  // Excludes Account Credit, deposits, swaps, and funding adjustments.
-  const totalEarnedUsd = walletData?.breakdown
-    ? ((walletData.breakdown.referral || 0) +
-       (walletData.breakdown.matching || 0) +
-       (walletData.breakdown.promotion || 0) +
-       (walletData.breakdown.nodeReward || 0))
-    : (walletData?.totalEarned ?? 0);
+  const activePortfolioCapitalUsd =
+    royaltiesOverview.personalActiveInvestmentUsd > 0
+      ? royaltiesOverview.personalActiveInvestmentUsd
+      : activeNodesCount * (nodeBasePriceUsd || 1000);
 
-  const activeNodesCount = nodeData?.activeNodes ?? 0;
-  const currentRankName = rankData?.currentRankName || 'Standard Member';
-  const nextRankName = rankData?.nextRankName;
+  const usdtEarnedFromWallet = walletData?.breakdown
+    ? (walletData.breakdown.quantumAlpha || 0) +
+      (walletData.breakdown.chronoVaults || 0) +
+      (walletData.breakdown.unilevelRoyalty || 0) +
+      (walletData.breakdown.promotion || 0) +
+      (walletData.breakdown.referral || 0)
+    : walletData?.totalEarned ?? 0;
 
-  // Dynamic direct referral reward per eligible node (flat USD amount configured by admin)
-  const directRewardPerNode = directReferralCommissionRate || 50;
+  const phivoEarnedUsd = (totalMinedPhivo + royaltiesOverview.phivoRoyaltiesTotal) * effectiveRate;
+  const totalAllTimeEarningsUsd = usdtEarnedFromWallet + phivoEarnedUsd;
 
-  const formatDate = (dateStr?: string) => {
-    if (!dateStr) return 'Not Available';
-    try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return 'Not Available';
-      return d.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'short',
-        day: 'numeric',
-      });
-    } catch {
-      return 'Not Available';
-    }
-  };
+  const totalDirectPartners = Math.max(
+    directReferralsCount,
+    royaltiesOverview.directActiveSponsorsCount
+  );
 
-  const formatCurrency = (val: number, minimumFractionDigits = 2) => {
-    return val.toLocaleString('en-US', {
-      minimumFractionDigits,
+  const formatUsd = (val: number) =>
+    Number(val || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-  };
 
   return (
-    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
-      {/* ========================================================
-          0. BINANCE-GRADE KYC STATUS BANNER (REAL-TIME SYNC)
-         ======================================================== */}
+    <div className="w-full max-w-full min-w-0 space-y-5 sm:space-y-6 animate-fadeIn">
+      {/* Compact KYC Verification Banner (Shown only until Verified) */}
       {user?.kycStatus !== 'VERIFIED' && (
-        <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg transition-all animate-fadeIn ${
-          user?.kycStatus === 'PENDING'
-            ? 'bg-amber-950/30 border-amber-500/30 text-amber-200'
-            : user?.kycStatus === 'REJECTED'
-            ? 'bg-rose-950/30 border-rose-500/30 text-rose-200'
-            : 'bg-gradient-to-r from-amber-950/40 via-[#0A162B] to-[#07101E] border-amber-500/30 text-amber-100'
-        }`}>
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-2xl border flex items-center justify-center shrink-0 ${
-              user?.kycStatus === 'PENDING'
-                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300 animate-pulse'
-                : user?.kycStatus === 'REJECTED'
-                ? 'bg-rose-500/20 border-rose-500/30 text-rose-300'
-                : 'bg-amber-500/20 border-amber-400/30 text-amber-300'
-            }`}>
+        <div
+          className={`w-full min-w-0 p-3.5 sm:p-4 rounded-[24px] border flex flex-col sm:flex-row sm:items-center justify-between gap-3 backdrop-blur-xl ${
+            user?.kycStatus === 'PENDING'
+              ? 'bg-amber-950/25 border-[#F5B800]/30'
+              : user?.kycStatus === 'REJECTED'
+              ? 'bg-rose-950/25 border-[#F04438]/35'
+              : 'bg-[rgba(14,21,19,0.78)] border-[#F5B800]/30'
+          }`}
+        >
+          <div className="flex items-start sm:items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-2xl bg-[#F5B800]/15 border border-[#F5B800]/35 flex items-center justify-center shrink-0">
               {user?.kycStatus === 'PENDING' ? (
-                <Clock className="w-5 h-5 text-amber-400 animate-spin" />
+                <Clock className="w-4 h-4 text-[#F5B800]" />
               ) : user?.kycStatus === 'REJECTED' ? (
-                <ShieldAlert className="w-5 h-5 text-rose-400" />
+                <ShieldAlert className="w-4 h-4 text-[#F04438]" />
               ) : (
-                <ShieldCheck className="w-5 h-5 text-amber-400" />
+                <ShieldCheck className="w-4 h-4 text-[#F5B800]" />
               )}
             </div>
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-xs sm:text-sm font-bold text-white font-mono">
-                  {user?.kycStatus === 'PENDING'
-                    ? 'Identity Verification Under Review'
-                    : user?.kycStatus === 'REJECTED'
-                    ? 'Identity Verification Attention Required'
-                    : 'Level 1 Identity Verification (KYC)'}
-                </span>
-                <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase ${
-                  user?.kycStatus === 'PENDING'
-                    ? 'bg-amber-500/20 text-amber-300'
-                    : user?.kycStatus === 'REJECTED'
-                    ? 'bg-rose-500/20 text-rose-300'
-                    : 'bg-amber-500/20 text-amber-300'
-                }`}>
-                  {user?.kycStatus || 'Action Required'}
-                </span>
-              </div>
-              <p className="text-[11px] text-[#98A2B3]">
+            <div className="min-w-0">
+              <div className="text-xs sm:text-sm font-bold text-white leading-snug">
                 {user?.kycStatus === 'PENDING'
-                  ? 'Your identity documents and biometric facial scan are undergoing real-time review. Estimated completion: 2-10 mins.'
+                  ? 'Identity Verification Under Review'
                   : user?.kycStatus === 'REJECTED'
-                  ? `Previous submission note: "${user?.kycRejectReason || 'Please resubmit sharp document images'}". Click below to resubmit.`
-                  : 'Unlock up to 100,000 USDT daily withdrawal capacity and unrestricted Genesis Node privileges.'}
+                  ? 'Identity Verification Requires Resubmission'
+                  : 'Complete Level 1 Identity Verification'}
+              </div>
+              <p className="text-[11px] text-[#98A2B3] leading-relaxed mt-0.5">
+                {user?.kycStatus === 'PENDING'
+                  ? 'Your verification submission is being reviewed.'
+                  : 'Unlock full BEP-20 withdrawal capacity and institutional member limits.'}
               </p>
             </div>
           </div>
@@ -441,678 +348,272 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
           <button
             type="button"
             onClick={() => setIsKycModalOpen(true)}
-            className={`px-4 py-2 rounded-xl font-bold text-xs font-mono shrink-0 flex items-center gap-1.5 transition-all shadow-md cursor-pointer ${
-              user?.kycStatus === 'PENDING'
-                ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40'
-                : user?.kycStatus === 'REJECTED'
-                ? 'bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30'
-                : 'bg-amber-400 hover:bg-amber-300 text-black shadow-amber-400/20'
-            }`}
+            className="min-h-[42px] px-4 py-2 rounded-2xl bg-[#F5B800] hover:brightness-105 text-[#050807] font-extrabold text-xs inline-flex items-center justify-center gap-1.5 shrink-0 cursor-pointer transition-all active:scale-95"
           >
-            <span>{user?.kycStatus === 'PENDING' ? 'View Review Status' : user?.kycStatus === 'REJECTED' ? 'Resubmit Documents' : 'Verify Identity Now'}</span>
+            <span>{user?.kycStatus === 'PENDING' ? 'View Status' : 'Verify Now'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
-      {/* ========================================================
-          0. DYNAMIC PROMOTIONAL & PROTOCOL NOTICES
-         ======================================================== */}
-      <PromotionalBannerCarousel onNavigateTab={navigateTo} />
-      <ActiveOfferCards onNavigateTab={navigateTo} />
-
-      {/* ========================================================
-          1. PREMIUM 3D FLIP OVERVIEW HERO CARD (UNTOUCHED)
-         ======================================================== */}
+      {/* 1. HERO: INTERACTIVE 3D HOLOGRAPHIC BALANCE FLIP CARD */}
       <Premium3DFlipCard
         user={user}
         displayName={firstName}
         availableUsdt={availableUsdt}
-        activeNodes={activeNodesCount}
-        currentRankName={currentRankName}
-        networkStatus="Synchronized"
+        phivoBalance={phivoBalance}
+        phivoRate={effectiveRate}
+        activePortfolioCapitalUsd={activePortfolioCapitalUsd}
+        activeNodes={Math.max(activeNodesCount, royaltiesOverview.activeNodesCount)}
+        currentRankLevel={rankOverview.currentRankLevel}
+        currentRankName={rankOverview.currentRankName}
+        unlockedGenerations={royaltiesOverview.unlockedGenerationsCount}
+        directPartnersCount={totalDirectPartners}
+        referralUrl={effectiveReferralUrl}
         onNavigateTab={navigateTo}
         onRefresh={() => fetchDashboardData(true)}
         isRefreshing={isRefreshing}
       />
 
-      {/* ========================================================
-          2. PRIMARY METRICS GRID (6 Coherent Cards)
-         ======================================================== */}
-      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3 sm:gap-4">
-        {/* Metric 1: Available USDT */}
+      {/* 2. ADMIN-CONTROLLED ANIMATED PROMO & SUPPLY SPOTLIGHT CAROUSEL */}
+      <OverviewPromoCarousel onNavigateTab={navigateTo} />
+
+      {/* 3. COMPACT 4-CARD TELEMETRY GRID (2x2 ON 360px MOBILE, 4-COL ON DESKTOP) */}
+      <section
+        aria-label="Key Portfolio Telemetry"
+        className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 w-full max-w-full min-w-0"
+      >
+        {/* Card 1: Total All-Time Earnings */}
         <div
-          onClick={() => navigateTo('wallet')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
+          onClick={() => navigateTo('reward-analytics')}
+          className="min-w-0 p-3.5 sm:p-5 rounded-[24px] oneui-glass-card hover:border-[#00E676]/40 transition-all cursor-pointer flex flex-col justify-between gap-2.5 group"
         >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">USDT Balance</span>
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] group-hover:scale-110 transition-transform">
-              <UsdtIcon size={16} />
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[11px] sm:text-xs font-semibold text-[#98A2B3] truncate">
+              Total All-Time Earnings
+            </span>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#00E676]/12 border border-[#00E676]/25 flex items-center justify-center text-[#00E676] shrink-0">
+              <Activity className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums">
-              ${formatCurrency(availableUsdt)}
+          <div className="min-w-0">
+            <div
+              className="font-mono font-extrabold text-[#00E676] tabular-nums truncate leading-tight"
+              style={{ fontSize: 'clamp(1.05rem, 3.8vw, 1.5rem)' }}
+            >
+              ${formatUsd(totalAllTimeEarningsUsd)}
             </div>
-            <div className="flex items-center gap-1 text-[11px] text-[#00CFFF] mt-1 font-medium group-hover:translate-x-0.5 transition-transform">
-              <span>Deposit / Manage</span>
-              <ArrowRight className="w-3 h-3" />
+            <div className="text-[10px] sm:text-[11px] font-mono text-[#98A2B3] mt-1 truncate">
+              USDT + PHIVO Value
             </div>
           </div>
         </div>
 
-        {/* Metric 2: PHIVO Balance */}
+        {/* Card 2: 16-Gen Unilevel Royalties */}
         <div
-          onClick={() => navigateTo('swap')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
+          onClick={() => navigateTo('network')}
+          className="min-w-0 p-3.5 sm:p-5 rounded-[24px] oneui-glass-card hover:border-[#00E5FF]/40 transition-all cursor-pointer flex flex-col justify-between gap-2.5 group"
         >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">PHIVO Balance</span>
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] group-hover:scale-110 transition-transform">
-              <PhivoCoinIcon size={16} />
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[11px] sm:text-xs font-semibold text-[#98A2B3] truncate">
+              16-Gen Royalties
+            </span>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#00E5FF]/12 border border-[#00E5FF]/25 flex items-center justify-center text-[#00E5FF] shrink-0">
+              <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#00CFFF] tabular-nums">
-              {formatCurrency(phivoBalance)}
+          <div className="min-w-0">
+            <div
+              className="font-mono font-extrabold text-white tabular-nums truncate leading-tight"
+              style={{ fontSize: 'clamp(1.05rem, 3.8vw, 1.5rem)' }}
+            >
+              ${formatUsd(royaltiesOverview.usdtRoyaltiesTotal)}
             </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1 font-mono">
-              ≈ ${formatCurrency(phivoValueUsdt)} USDT
-              {nodeData?.unclaimedPhivo && nodeData.unclaimedPhivo > 0 ? (
-                <span className="text-[#00CFFF] block text-[10px]">
-                  ({formatCurrency(nodeData.unclaimedPhivo)} unclaimed)
-                </span>
-              ) : null}
+            <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] font-mono mt-1">
+              <span className="text-[#00E5FF] truncate">
+                +{royaltiesOverview.phivoRoyaltiesTotal.toFixed(2)} PHIVO
+              </span>
+              <span className="text-[#98A2B3] shrink-0">
+                {royaltiesOverview.unlockedGenerationsCount}/16
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Metric 3: Active Nodes */}
+        {/* Card 3: Leadership Rank */}
         <div
-          onClick={() => navigateTo('nodes')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#32D583]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
+          onClick={() => navigateTo('network')}
+          className="min-w-0 p-3.5 sm:p-5 rounded-[24px] oneui-glass-card hover:border-[#F5B800]/40 transition-all cursor-pointer flex flex-col justify-between gap-2.5 group"
         >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">Active Nodes</span>
-            <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583] group-hover:scale-110 transition-transform">
-              <Server className="w-4 h-4" />
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[11px] sm:text-xs font-semibold text-[#98A2B3] truncate">
+              Leadership Rank
+            </span>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#F5B800]/12 border border-[#F5B800]/25 flex items-center justify-center text-[#F5B800] shrink-0">
+              <Trophy className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums flex items-baseline gap-1.5">
-              <span>{activeNodesCount}</span>
-              <span className="text-xs font-normal text-[#98A2B3]">Nodes</span>
+          <div className="min-w-0 space-y-1.5">
+            <div className="text-xs sm:text-sm font-extrabold text-white truncate leading-tight">
+              #{rankOverview.currentRankLevel} {rankOverview.currentRankName}
             </div>
-            <div className="flex items-center gap-1.5 text-[11px] text-[#32D583] mt-1 font-medium">
-              <span className={`w-1.5 h-1.5 rounded-full ${activeNodesCount > 0 ? 'bg-[#32D583] animate-pulse' : 'bg-[#98A2B3]'}`} />
-              <span>{activeNodesCount > 0 ? 'Mining Active' : 'Ready to activate'}</span>
+            <div className="h-1.5 w-full rounded-full bg-white/[0.08] overflow-hidden">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-[#F5B800] to-[#00E5FF] transition-all duration-500"
+                style={{ width: `${Math.max(8, rankOverview.progressPct)}%` }}
+              />
+            </div>
+            <div className="text-[10px] font-mono text-[#F5B800] truncate">
+              {rankOverview.nextRankName
+                ? `Next: ${rankOverview.nextRankName}`
+                : 'Apex Sovereign Achieved'}
             </div>
           </div>
         </div>
 
-        {/* Metric 4: Current Rank */}
+        {/* Card 4: Direct Partners (Clean Institutional Copy — ZERO legacy $50 copy) */}
         <div
-          onClick={() => navigateTo('rewards')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#F59E0B]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
+          onClick={() => navigateTo('network')}
+          className="min-w-0 p-3.5 sm:p-5 rounded-[24px] oneui-glass-card hover:border-[#00E5FF]/40 transition-all cursor-pointer flex flex-col justify-between gap-2.5 group"
         >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">Current Rank</span>
-            <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B] group-hover:scale-110 transition-transform">
-              <Trophy className="w-4 h-4" />
+          <div className="flex items-center justify-between gap-1.5">
+            <span className="text-[11px] sm:text-xs font-semibold text-[#98A2B3] truncate">
+              Direct Partners
+            </span>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-xl bg-[#00E5FF]/12 border border-[#00E5FF]/25 flex items-center justify-center text-[#00E5FF] shrink-0">
+              <Users className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div>
-            <div className="text-base sm:text-lg font-bold text-white truncate">
-              {currentRankName}
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-1.5">
+              <span
+                className="font-mono font-extrabold text-white tabular-nums leading-tight"
+                style={{ fontSize: 'clamp(1.1rem, 3.8vw, 1.5rem)' }}
+              >
+                {totalDirectPartners}
+              </span>
+              <span className="text-[10px] sm:text-xs text-[#98A2B3] truncate">Active Gen-1</span>
             </div>
-            <div className="text-[11px] text-[#F59E0B] mt-1 font-medium truncate">
-              {nextRankName ? `Next: ${nextRankName}` : (currentRankName === 'Crown Ambassador' ? 'Highest Tier' : 'Tier In Progress')}
+            <div className="text-[10px] sm:text-[11px] text-[#00E5FF] font-medium mt-1 truncate">
+              16-Gen Unilevel Frontline
             </div>
           </div>
         </div>
+      </section>
 
-        {/* Metric 5: Total Earnings (Strictly Reconciled Rewards) */}
-        <div
-          onClick={() => navigateTo('wallet')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#32D583]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">Total Earnings</span>
-            <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583] group-hover:scale-110 transition-transform">
-              <Activity className="w-4 h-4" />
-            </div>
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] tabular-nums">
-              ${formatCurrency(totalEarnedUsd)}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1 truncate">
-              Protocol rewards earned
-            </div>
-          </div>
+      {/* 4. ONE-TAP QUICK ACTIONS PILL STRIP */}
+      <section
+        aria-label="Quick Actions"
+        className="w-full max-w-full min-w-0 p-3.5 sm:p-4 rounded-[24px] oneui-glass-card space-y-3"
+      >
+        <div className="flex items-center justify-between px-1">
+          <h2 className="text-[11px] font-mono uppercase tracking-[0.16em] text-[#98A2B3] flex items-center gap-1.5">
+            <Zap className="w-3.5 h-3.5 text-[#00E5FF]" />
+            <span>Quick Actions</span>
+          </h2>
+          <span className="text-[10px] font-mono text-[#00E5FF] tabular-nums">
+            1 PHIVO = ${effectiveRate.toFixed(4)} USDT
+          </span>
         </div>
 
-        {/* Metric 6: Direct Referrals */}
-        <div
-          onClick={() => navigateTo('referrals')}
-          className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] hover:border-[#168BFF]/40 transition-all duration-200 shadow-lg cursor-pointer group flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-xs">Direct Referrals</span>
-            <div className="w-7 h-7 rounded-lg bg-[#168BFF]/10 border border-[#168BFF]/20 flex items-center justify-center text-[#168BFF] group-hover:scale-110 transition-transform">
-              <Users className="w-4 h-4" />
-            </div>
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums flex items-baseline gap-1.5">
-              <span>{directReferralsCount}</span>
-              <span className="text-xs font-normal text-[#98A2B3]">Members</span>
-            </div>
-            <div className="text-[11px] text-[#168BFF] mt-1 font-medium truncate">
-              ${directRewardPerNode} per eligible node
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          3. QUICK ACTIONS (Consistent Button Hierarchy)
-         ======================================================== */}
-      <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg space-y-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-[#98A2B3] flex items-center gap-1.5">
-          <Zap className="w-3.5 h-3.5 text-[#00CFFF]" />
-          <span>Quick Actions</span>
-        </h2>
-
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          {/* Action 1: Deposit USDT (Primary) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5">
           <button
+            type="button"
             onClick={() => navigateTo('deposit')}
-            className="p-3.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 hover:border-[#00CFFF]/60 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-[#00E5FF]/12 hover:bg-[#00E5FF]/20 border border-[#00E5FF]/35 flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
           >
-            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF] shrink-0 group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 rounded-xl bg-[#00E5FF]/20 flex items-center justify-center text-[#00E5FF] shrink-0">
               <ArrowDownLeft className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <span className="text-xs font-bold text-white block truncate">Deposit USDT</span>
-              <span className="text-[10px] text-[#00CFFF] block truncate">BEP-20 Network</span>
+              <span className="text-xs font-bold text-white block truncate">Deposit</span>
+              <span className="text-[10px] text-[#00E5FF] block truncate">USDT BEP-20</span>
             </div>
           </button>
 
-          {/* Action 2: Activate Node (Primary) */}
           <button
-            onClick={() => navigateTo('nodes')}
-            className="p-3.5 rounded-xl bg-[#32D583]/10 hover:bg-[#32D583]/20 border border-[#32D583]/30 hover:border-[#32D583]/60 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            type="button"
+            onClick={() => navigateTo('wallet:transfer')}
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-[#F5B800]/14 hover:bg-[#F5B800]/22 border border-[#F5B800]/40 flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
           >
-            <div className="w-8 h-8 rounded-lg bg-[#32D583]/20 flex items-center justify-center text-[#32D583] shrink-0 group-hover:scale-105 transition-transform">
-              <Server className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-xl bg-[#F5B800]/20 flex items-center justify-center text-[#F5B800] shrink-0">
+              <Send className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <span className="text-xs font-bold text-white block truncate">Activate Node</span>
-              <span className="text-[10px] text-[#32D583] block truncate">${nodeBasePriceUsd || 1000} Genesis</span>
+              <span className="text-xs font-bold text-white block truncate">Send / Transfer</span>
+              <span className="text-[10px] text-[#F5B800] block truncate">Instant P2P</span>
             </div>
           </button>
 
-          {/* Action 3: Swap PHIVO (Secondary) */}
           <button
-            onClick={() => navigateTo('swap')}
-            className="p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-[#00CFFF]/30 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            type="button"
+            onClick={() => navigateTo('products:alpha')}
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-[#F5B800]/12 hover:bg-[#F5B800]/20 border border-[#F5B800]/35 flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
           >
-            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#98A2B3] group-hover:text-[#00CFFF] shrink-0 transition-colors">
+            <div className="w-8 h-8 rounded-xl bg-[#F5B800]/20 flex items-center justify-center text-[#F5B800] shrink-0">
+              <Layers className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <span className="text-xs font-bold text-white block truncate">Ecosystem Hubs</span>
+              <span className="text-[10px] text-[#F5B800] block truncate">3 Flagship Suites</span>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigateTo('wallet')}
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.09] flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
+          >
+            <div className="w-8 h-8 rounded-xl bg-white/[0.07] flex items-center justify-center text-[#00E5FF] shrink-0">
               <Repeat className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Swap PHIVO</span>
-              <span className="text-[10px] text-[#98A2B3] block truncate">Protocol Liquidity</span>
+              <span className="text-[10px] text-[#98A2B3] block truncate">Instant Liquidity</span>
             </div>
           </button>
 
-          {/* Action 4: Withdraw (Secondary) */}
           <button
+            type="button"
             onClick={() => navigateTo('withdrawals')}
-            className="p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-white/[0.15] transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.09] flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
           >
-            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#98A2B3] shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-white/[0.07] flex items-center justify-center text-[#D0D5DD] shrink-0">
               <ArrowUpRight className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Withdraw</span>
-              <span className="text-[10px] text-[#98A2B3] block truncate">External Wallet</span>
+              <span className="text-[10px] text-[#98A2B3] block truncate">BEP-20 Payout</span>
             </div>
           </button>
 
-          {/* Action 5: Invite & Earn (Secondary) */}
           <button
-            onClick={() => navigateTo('referrals')}
-            className="col-span-2 sm:col-span-1 p-3.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.08] hover:border-[#168BFF]/30 transition-all duration-150 flex items-center gap-3 text-left cursor-pointer min-h-[52px] group"
+            type="button"
+            onClick={() => setShareModalOpen(true)}
+            className="min-h-[48px] px-3 py-2.5 rounded-2xl bg-[#00E676]/10 hover:bg-[#00E676]/18 border border-[#00E676]/30 flex items-center gap-2.5 text-left transition-all cursor-pointer active:scale-95 min-w-0"
           >
-            <div className="w-8 h-8 rounded-lg bg-white/[0.05] flex items-center justify-center text-[#168BFF] shrink-0">
+            <div className="w-8 h-8 rounded-xl bg-[#00E676]/18 flex items-center justify-center text-[#00E676] shrink-0">
               <Share2 className="w-4 h-4" />
             </div>
             <div className="min-w-0">
               <span className="text-xs font-bold text-white block truncate">Invite &amp; Earn</span>
-              <span className="text-[10px] text-[#98A2B3] block truncate">Referral Link</span>
+              <span className="text-[10px] text-[#00E676] block truncate">Partner QR &amp; Link</span>
             </div>
           </button>
         </div>
-      </div>
+      </section>
 
-      {/* ========================================================
-          4. PHIVO REFERENCE RATE (Institutional Utility Card)
-         ======================================================== */}
-      <TokenPriceTrendChart onNavigateTab={onNavigateTab} compact={false} />
-
-      {/* ========================================================
-          4B. 30-DAY PHIVO REWARDS TREND GRAPH (Recharts Integration)
-          ======================================================== */}
-      <RewardTrend30DaysChart onNavigateTab={onNavigateTab} />
-
-      {/* ========================================================
-          5. CORE PERFORMANCE GRID (Nodes & Binary Network)
-         ======================================================== */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Left: Genesis Node Summary */}
-        <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl flex flex-col justify-between space-y-5">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-[#32D583]/10 border border-[#32D583]/20 flex items-center justify-center text-[#32D583]">
-                  <Server className="w-4 h-4" />
-                </div>
-                <h3 className="text-sm font-bold text-white">Genesis Node Summary</h3>
-              </div>
-
-              {/* Truthful Node Status Badge */}
-              {activeNodesCount > 0 ? (
-                <span className="text-[11px] font-medium text-[#32D583] bg-[#32D583]/10 border border-[#32D583]/25 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
-                  <span>Mining Active ({activeNodesCount})</span>
-                </span>
-              ) : (
-                <span className="text-[11px] font-medium text-[#98A2B3] bg-white/[0.04] border border-white/[0.08] px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#98A2B3]" />
-                  <span>Ready to Activate</span>
-                </span>
-              )}
-            </div>
-
-            <p className="text-xs text-[#98A2B3] leading-relaxed">
-              Your active Genesis Nodes validate protocol consensus and generate daily PHIVO mining rewards through the halving schedule.
-            </p>
-
-            <div className="grid grid-cols-3 gap-3 pt-1">
-              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Active</span>
-                <span className="text-lg font-bold font-mono text-white mt-0.5 block tabular-nums">
-                  {nodeData?.activeNodes ?? 0}
-                </span>
-              </div>
-
-              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Total Owned</span>
-                <span className="text-lg font-bold font-mono text-white mt-0.5 block tabular-nums">
-                  {nodeData?.totalNodes ?? 0}
-                </span>
-              </div>
-
-              <div className="p-3 rounded-xl bg-[#050B14]/80 border border-white/[0.05]">
-                <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Mined PHIVO</span>
-                <span className="text-lg font-bold font-mono text-[#00CFFF] mt-0.5 block tabular-nums truncate">
-                  {formatCurrency(nodeData?.totalRewardsPhivo ?? 0)}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              onClick={() => navigateTo('nodes')}
-              className="flex-1 py-2.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[42px] shadow-md shadow-[#00CFFF]/15"
-            >
-              <Zap className="w-3.5 h-3.5" />
-              <span>Activate Node</span>
-            </button>
-            <button
-              onClick={() => navigateTo('nodes')}
-              className="py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-medium flex items-center justify-center gap-1.5 transition-all cursor-pointer min-h-[42px]"
-            >
-              <span>Manage Nodes</span>
-              <ChevronRight className="w-3.5 h-3.5 text-[#98A2B3]" />
-            </button>
-          </div>
+      {/* 5. LIVE PHIVO REFERENCE RATE & 30-DAY EARNINGS TELEMETRY */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-5 w-full max-w-full min-w-0">
+        <div className="min-w-0">
+          <TokenPriceTrendChart onNavigateTab={onNavigateTab} compact={true} />
         </div>
-
-        {/* Right: Binary Network Progress */}
-        <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl flex flex-col justify-between space-y-5">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-                  <GitFork className="w-4 h-4" />
-                </div>
-                <h3 className="text-sm font-bold text-white">Binary Network Progress</h3>
-              </div>
-              <span className="text-[11px] font-mono text-[#98A2B3] bg-white/[0.04] px-2 py-0.5 rounded-md flex items-center gap-1">
-                <Clock className="w-3 h-3 text-[#00CFFF]" />
-                <span>Daily 18:00 UTC</span>
-              </span>
-            </div>
-
-            <p className="text-xs text-[#98A2B3] leading-relaxed">
-              Paired sales volume between Left and Right team legs settles daily. Remaining units carry forward to the next cycle.
-            </p>
-
-            {/* Symmetrical Left / Right Modules */}
-            <div className="grid grid-cols-2 gap-3 pt-1">
-              {/* Left Leg */}
-              <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-                <div className="flex items-center justify-between text-xs text-[#98A2B3]">
-                  <span className="font-semibold text-[#00CFFF]">LEFT LEG</span>
-                  <span className="text-[10px] font-mono">Today / Carry</span>
-                </div>
-                <div className="flex items-baseline gap-2 pt-1">
-                  <span className="text-xl font-mono font-bold text-white tabular-nums">
-                    {matchingData?.todayVolume?.left ?? 0}
-                  </span>
-                  <span className="text-xs font-mono text-[#98A2B3] tabular-nums">
-                    (+{matchingData?.carry?.left ?? 0} carry)
-                  </span>
-                </div>
-              </div>
-
-              {/* Right Leg */}
-              <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-                <div className="flex items-center justify-between text-xs text-[#98A2B3]">
-                  <span className="font-semibold text-[#32D583]">RIGHT LEG</span>
-                  <span className="text-[10px] font-mono">Today / Carry</span>
-                </div>
-                <div className="flex items-baseline gap-2 pt-1">
-                  <span className="text-xl font-mono font-bold text-white tabular-nums">
-                    {matchingData?.todayVolume?.right ?? 0}
-                  </span>
-                  <span className="text-xs font-mono text-[#98A2B3] tabular-nums">
-                    (+{matchingData?.carry?.right ?? 0} carry)
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between pt-2 border-t border-white/[0.06]">
-            <div>
-              <span className="text-[10px] text-[#98A2B3] block uppercase tracking-wider font-medium">Matching Rewards</span>
-              <span className="text-base font-bold font-mono text-[#32D583] tabular-nums">
-                ${formatCurrency(matchingData?.totalMatchingEarnedUsd ?? walletData?.breakdown?.matching ?? 0)}
-              </span>
-            </div>
-            <button
-              onClick={() => navigateTo('network')}
-              className="py-2 px-3.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer min-h-[40px]"
-            >
-              <span>View Network Tree</span>
-              <ArrowRight className="w-3.5 h-3.5 text-[#00CFFF]" />
-            </button>
-          </div>
+        <div className="min-w-0">
+          <RewardTrend30DaysChart onNavigateTab={onNavigateTab} />
         </div>
       </div>
 
-      {/* ========================================================
-          6. LEADERSHIP & PROMOTION PROGRESS
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B]">
-              <Trophy className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Leadership &amp; Promotion Progress</h3>
-              <p className="text-[11px] text-[#98A2B3]">Track your sequential rank advancement through the PHIVONEX career ladder.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigateTo('rewards')}
-            className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 self-start sm:self-auto cursor-pointer transition-colors"
-          >
-            <span>View Rank Ladder</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
-          {/* Current vs Next Badge */}
-          <div className="p-4 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Career Rank</span>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-bold text-white">{currentRankName}</span>
-              {nextRankName && (
-                <>
-                  <ArrowRight className="w-4 h-4 text-[#F59E0B]" />
-                  <span className="text-sm font-bold text-[#F59E0B]">{nextRankName}</span>
-                </>
-              )}
-            </div>
-            <span className="text-[11px] text-[#98A2B3] block">
-              {rankData?.rewardUsd ? `Milestone Reward: $${formatCurrency(rankData.rewardUsd)}` : 'Active Network Participation'}
-            </span>
-          </div>
-
-          {/* Matching Leg Progress Bars */}
-          <div className="md:col-span-2 p-4 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-3">
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-[#98A2B3] font-sans">Left Team Requirement:</span>
-                <span className="text-white font-bold tabular-nums">
-                  {rankData?.stageProgress?.matching?.leftProgress ?? 0} / {rankData?.stageProgress?.matching?.requiredLeft ?? 20}
-                </span>
-              </div>
-              <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[#00CFFF] to-[#168BFF] rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      ((rankData?.stageProgress?.matching?.leftProgress ?? 0) /
-                        (rankData?.stageProgress?.matching?.requiredLeft || 20)) *
-                        100
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-xs font-mono">
-                <span className="text-[#98A2B3] font-sans">Right Team Requirement:</span>
-                <span className="text-white font-bold tabular-nums">
-                  {rankData?.stageProgress?.matching?.rightProgress ?? 0} / {rankData?.stageProgress?.matching?.requiredRight ?? 20}
-                </span>
-              </div>
-              <div className="w-full h-2 rounded-full bg-white/[0.06] overflow-hidden">
-                <div
-                  className="h-full bg-gradient-to-r from-[#32D583] to-[#12B76A] rounded-full transition-all duration-500"
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      ((rankData?.stageProgress?.matching?.rightProgress ?? 0) /
-                        (rankData?.stageProgress?.matching?.requiredRight || 20)) *
-                        100
-                    )}%`,
-                  }}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          7. REFERRAL SECTION (Clean Read-Only Copy Modules)
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <Tag className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Your Referral Link &amp; Code</h3>
-              <p className="text-[11px] text-[#98A2B3]">Current direct reward: ${directRewardPerNode} per eligible activated node.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigateTo('referrals')}
-            className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 self-start sm:self-auto cursor-pointer transition-colors"
-          >
-            <span>View All Referrals ({directReferralsCount})</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Referral Code Box */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2 flex flex-col justify-between">
-            <div>
-              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Referral Code</span>
-              <span className={`text-xl font-mono font-bold mt-1 block tracking-wider ${isReferralPending ? 'text-[#98A2B3] text-sm' : 'text-[#00CFFF]'}`}>
-                {displayReferralCode}
-              </span>
-            </div>
-            <button
-              onClick={handleCopyCode}
-              disabled={isReferralPending}
-              className={`w-full py-2 px-3 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors min-h-[38px] ${
-                isReferralPending
-                  ? 'bg-white/[0.02] border-white/[0.04] text-[#667085] cursor-not-allowed'
-                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] text-white cursor-pointer'
-              }`}
-            >
-              {copiedCode ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedCode ? 'Copied' : 'Copy Code'}</span>
-            </button>
-          </div>
-
-          {/* Referral Link & 1-Click Share */}
-          <div className="md:col-span-2 p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-2 flex flex-col justify-between">
-            <div>
-              <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Registration Link</span>
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 mt-1">
-                <input
-                  type="text"
-                  readOnly
-                  value={isReferralPending ? 'Referral link generating...' : effectiveReferralUrl}
-                  className="flex-1 bg-white/[0.03] border border-white/[0.08] rounded-lg px-3 py-2 text-xs font-mono text-white select-all focus:outline-none min-h-[38px]"
-                />
-                <button
-                  onClick={handleCopyLink}
-                  disabled={isReferralPending}
-                  className={`px-3 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] ${
-                    isReferralPending
-                      ? 'bg-white/[0.04] border border-white/[0.08] text-[#667085] cursor-not-allowed'
-                      : 'bg-white/[0.08] hover:bg-white/[0.15] text-white border border-white/[0.1] cursor-pointer'
-                  }`}
-                >
-                  {copiedLink ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? 'Copied' : 'Copy'}</span>
-                </button>
-                <button
-                  onClick={() => setShareModalOpen(true)}
-                  disabled={isReferralPending}
-                  className={`px-3.5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition-all shrink-0 min-h-[38px] shadow-[0_0_20px_rgba(0,207,255,0.25)] ${
-                    isReferralPending
-                      ? 'bg-white/[0.04] border border-white/[0.08] text-[#667085] cursor-not-allowed'
-                      : 'bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] cursor-pointer'
-                  }`}
-                  title="Open QR Code & Social Share"
-                >
-                  <QrCode className="w-3.5 h-3.5" />
-                  <Share2 className="w-3.5 h-3.5" />
-                  <span>Share & QR</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Sponsor attribution */}
-            <div className="flex items-center gap-2 text-[11px] text-[#98A2B3] pt-1 border-t border-white/[0.04]">
-              <UserCheck className="w-3.5 h-3.5 text-[#32D583]" />
-              <span>
-                {referralData?.sponsor ? (
-                  <>Sponsor: <strong className="text-white font-medium">{referralData.sponsor.displayName}</strong> ({referralData.sponsor.publicId})</>
-                ) : (
-                  <>Direct Genesis Account (No intermediate sponsor)</>
-                )}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          8. WALLET & EARNINGS BREAKDOWN (Reconciled Financial Summary)
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <Coins className="w-4 h-4" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Wallet &amp; Earnings Breakdown</h3>
-              <p className="text-[11px] text-[#98A2B3]">Reconciled summary of your multi-stream earnings.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigateTo('wallet')}
-            className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 cursor-pointer transition-colors"
-          >
-            <span>Open Wallet</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Direct Referral Bonus */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Direct Referrals</span>
-            <span className="text-base sm:text-lg font-mono font-bold text-white tabular-nums block">
-              ${formatCurrency(walletData?.breakdown?.referral ?? 0)}
-            </span>
-            <span className="text-[10px] text-[#98A2B3] block">Direct sponsorship</span>
-          </div>
-
-          {/* Daily Matching Bonus */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Binary Matching</span>
-            <span className="text-base sm:text-lg font-mono font-bold text-[#32D583] tabular-nums block">
-              ${formatCurrency(walletData?.breakdown?.matching ?? 0)}
-            </span>
-            <span className="text-[10px] text-[#98A2B3] block">Paired volume settlements</span>
-          </div>
-
-          {/* Promotion Milestones */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Promotion Rewards</span>
-            <span className="text-base sm:text-lg font-mono font-bold text-[#F59E0B] tabular-nums block">
-              ${formatCurrency(walletData?.breakdown?.promotion ?? 0)}
-            </span>
-            <span className="text-[10px] text-[#98A2B3] block">Rank milestones</span>
-          </div>
-
-          {/* Node Rewards */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Node Mining</span>
-            <span className="text-base sm:text-lg font-mono font-bold text-[#00CFFF] tabular-nums block">
-              {formatCurrency(nodeData?.totalRewardsPhivo ?? 0)} <span className="text-xs">PHIVO</span>
-            </span>
-            <span className="text-[10px] text-[#98A2B3] block">Genesis validator rewards</span>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          9. REAL-TIME RECENT ACTIVITY LOG (Node Activations, Rewards, Commissions)
-         ======================================================== */}
+      {/* 6. REAL-TIME ACTIVITY LOG */}
       <RecentActivityLog
         transactions={recentTransactions}
         onNavigateTab={navigateTo}
@@ -1120,85 +621,14 @@ export const OverviewView: React.FC<OverviewViewProps> = ({ user, onNavigateTab 
         isRefreshing={isRefreshing}
       />
 
-      {/* ========================================================
-          10. ACCOUNT PROFILE SNAPSHOT (Compact Clean Footer)
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#98A2B3]">
-              <User className="w-4 h-4 text-[#00CFFF]" />
-            </div>
-            <div>
-              <h3 className="text-sm font-bold text-white">Account Profile Snapshot</h3>
-              <p className="text-[11px] text-[#98A2B3]">Verified account attributes and registry identifier.</p>
-            </div>
-          </div>
-          <button
-            onClick={() => navigateTo('profile')}
-            className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 cursor-pointer transition-colors"
-          >
-            <span>View Full Profile</span>
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          {/* Public PHIVONEX ID */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">PHIVONEX ID</span>
-            <div className="flex items-center justify-between">
-              <span className="text-xs sm:text-sm font-mono font-bold text-[#00CFFF] truncate">
-                {referralData?.publicId || user?.publicId || 'PHX-PENDING'}
-              </span>
-              <button
-                onClick={handleCopyId}
-                className="p-1 text-[#98A2B3] hover:text-white transition-colors cursor-pointer"
-                title="Copy ID"
-                aria-label="Copy PHIVONEX ID"
-              >
-                {copiedId ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-          </div>
-
-          {/* Account Status */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Status</span>
-            <span className="text-xs sm:text-sm font-bold text-[#32D583] flex items-center gap-1.5 pt-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#32D583]" />
-              <span>{user?.status ? user.status.toUpperCase() : 'ACTIVE'}</span>
-            </span>
-          </div>
-
-          {/* Country */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Country</span>
-            <span className="text-xs sm:text-sm font-semibold text-white truncate block pt-0.5">
-              {user?.country && user.country.trim() !== '' ? user.country : 'Not Set'}
-            </span>
-          </div>
-
-          {/* Member Since */}
-          <div className="p-3.5 rounded-xl bg-[#050B14]/80 border border-white/[0.05] space-y-1">
-            <span className="text-[10px] text-[#98A2B3] uppercase tracking-wider font-medium block">Member Since</span>
-            <span className="text-xs sm:text-sm font-semibold text-white truncate block pt-0.5">
-              {formatDate(user?.createdAt)}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Branded Referral Share & QR Code Modal */}
+      {/* Modals */}
       <ReferralShareModal
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
-        referralCode={displayReferralCode}
+        referralCode={rawReferralCode}
         referralUrl={effectiveReferralUrl}
-        userName={user?.fullName || referralData?.sponsor?.displayName}
       />
 
-      {/* Binance-Grade KYC Modal */}
       <BinanceKYCModal
         isOpen={isKycModalOpen}
         onClose={() => setIsKycModalOpen(false)}

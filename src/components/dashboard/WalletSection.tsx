@@ -90,9 +90,9 @@ const FILTER_OPTIONS: {
 }[] = [
   { id: 'all', label: 'All Transactions', icon: Layers },
   { id: 'deposit', label: 'Deposits', icon: ArrowDownLeft },
-  { id: 'referral_commission', label: 'Referral ($50)', icon: Users },
-  { id: 'matching_bonus', label: 'Binary Matching', icon: GitFork },
-  { id: 'promotion_bonus', label: 'Rank Promotion', icon: Award },
+  { id: 'referral_commission', label: '16-Gen Royalties', icon: Users },
+  { id: 'matching_bonus', label: 'Yield Settlements', icon: GitFork },
+  { id: 'promotion_bonus', label: 'Rank Milestones', icon: Award },
   { id: 'node_activation', label: 'Node Mining', icon: Coins },
 ];
 
@@ -324,7 +324,7 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
             </h1>
 
             <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
-              Real-time audit ledger tracking all node mining rewards, direct referral commissions, binary matching, and promotion bonuses.
+              Real-time audit ledger tracking Genesis Core emissions, 16-generation royalties, Quantum Alpha settlements, Chrono Vault payouts, and rank milestones.
             </p>
           </div>
 
@@ -494,78 +494,78 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
             </p>
           </div>
 
-          {/* Channel 2: Direct Referral */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
+          {/* Channel 2: 16-Gen Affiliate Royalties */}
+          <div className="p-4 rounded-2xl bg-[#050807]/70 border border-white/[0.07] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
-                <Users className="w-3.5 h-3.5 text-[#00CFFF]" />
-                <span>Referral</span>
+              <span className="text-xs text-slate-400 flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-[#00E5FF]" />
+                <span>16-Gen Royalties</span>
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#00CFFF]/10 text-[#00CFFF]">
-                $50 / Node
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#00E5FF]/12 text-[#00E5FF]">
+                Unilevel
               </span>
             </div>
             <div className="text-xl font-mono font-bold text-white tabular-nums">
               {loading ? '...' : formatUsd(summary?.breakdown.referral || 0)}
             </div>
-            <p className="text-[10px] text-[#667085]">
-              Direct sponsor commissions
+            <p className="text-[10px] text-slate-400">
+              Asset-matched affiliate royalties
             </p>
           </div>
 
-          {/* Channel 3: Binary Matching */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
+          {/* Channel 3: Ecosystem Yields */}
+          <div className="p-4 rounded-2xl bg-[#050807]/70 border border-white/[0.07] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
-                <GitFork className="w-3.5 h-3.5 text-[#7F56D9]" />
-                <span>Matching</span>
+              <span className="text-xs text-slate-400 flex items-center gap-1.5">
+                <GitFork className="w-3.5 h-3.5 text-[#00E676]" />
+                <span>Product Yields</span>
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#7F56D9]/10 text-[#D6BBFB]">
-                Daily Pairs
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#00E676]/12 text-[#00E676]">
+                Daily
               </span>
             </div>
             <div className="text-xl font-mono font-bold text-white tabular-nums">
               {loading ? '...' : formatUsd(summary?.breakdown.matching || 0)}
             </div>
-            <p className="text-[10px] text-[#667085]">
-              Daily binary pairs settlement
+            <p className="text-[10px] text-slate-400">
+              Alpha &amp; Chrono vault settlements
             </p>
           </div>
 
-          {/* Channel 4: Promotion Bonuses */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
+          {/* Channel 4: Rank Milestones */}
+          <div className="p-4 rounded-2xl bg-[#050807]/70 border border-white/[0.07] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
-                <Award className="w-3.5 h-3.5 text-[#F79009]" />
-                <span>Promotion</span>
+              <span className="text-xs text-slate-400 flex items-center gap-1.5">
+                <Award className="w-3.5 h-3.5 text-[#F5B800]" />
+                <span>Rank Milestones</span>
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#F79009]/10 text-[#FEC84B]">
-                Ladder
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#F5B800]/12 text-[#F5B800]">
+                7-Stage
               </span>
             </div>
             <div className="text-xl font-mono font-bold text-white tabular-nums">
               {loading ? '...' : formatUsd(summary?.breakdown.promotion || 0)}
             </div>
-            <p className="text-[10px] text-[#667085]">
-              Leadership rank milestones
+            <p className="text-[10px] text-slate-400">
+              Leadership rank milestone rewards
             </p>
           </div>
 
           {/* Channel 5: Node Mining */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
+          <div className="p-4 rounded-2xl bg-[#050807]/70 border border-white/[0.07] space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-[#98A2B3] flex items-center gap-1.5">
+              <span className="text-xs text-slate-400 flex items-center gap-1.5">
                 <PhivoCoinIcon size={14} />
                 <span>Node Mining</span>
               </span>
-              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-[#00CFFF]/10 text-[#00CFFF]">
-                Epoch
+              <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-[#00E5FF]/12 text-[#00E5FF]">
+                PHIVO
               </span>
             </div>
             <div className="text-xl font-mono font-bold text-white tabular-nums">
               {loading ? '...' : formatUsd(summary?.breakdown.nodeReward || 0)}
             </div>
-            <p className="text-[10px] text-[#667085]">
+            <p className="text-[10px] text-slate-400">
               Genesis validator epoch accruals
             </p>
           </div>
@@ -575,7 +575,7 @@ export const WalletSection: React.FC<WalletSectionProps> = ({ onNavigateTab }) =
       {/* ========================================================
           4. TRANSACTION LEDGER TABLE WITH FILTERS & SEARCH
          ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+      <div className="p-5 sm:p-6 rounded-[24px] oneui-glass-card space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
           <div className="space-y-0.5">
             <h3 className="text-sm font-bold text-white flex items-center gap-2">

@@ -339,7 +339,7 @@ export const PromotionSection: React.FC<PromotionSectionProps> = ({ onNavigateTa
                 {/* Left Leg Progress */}
                 <div className="p-3.5 rounded-lg bg-[#07101D] border border-white/[0.04] space-y-2">
                   <div className="flex items-center justify-between text-xs font-mono">
-                    <span className="text-[#98A2B3]">Left Team Requirement</span>
+                    <span className="text-[#98A2B3]">Team Volume Requirement</span>
                     <span className="text-[#00CFFF] font-bold tabular-nums">
                       {matchingStage.leftProgress} / {matchingStage.requiredLeft} Units
                     </span>

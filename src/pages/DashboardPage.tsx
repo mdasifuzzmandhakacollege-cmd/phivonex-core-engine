@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Sidebar, DashboardTab } from '../components/dashboard/Sidebar';
 import { Topbar } from '../components/dashboard/Topbar';
@@ -6,21 +6,17 @@ import { MobileBottomNav } from '../components/dashboard/MobileBottomNav';
 import { OverviewView } from '../components/dashboard/OverviewView';
 import { ProfileView } from '../components/dashboard/ProfileView';
 import { SecurityView } from '../components/dashboard/SecurityView';
-import { MyNodesView } from '../components/dashboard/MyNodesView';
-import { NodeHealthView } from '../components/dashboard/NodeHealthView';
 import { RewardAnalytics } from '../components/dashboard/RewardAnalytics';
 import { BuyNodeView } from '../components/dashboard/BuyNodeView';
-import { DirectReferralsView } from '../components/dashboard/DirectReferralsView';
 import { NetworkView } from '../components/dashboard/NetworkView';
 import { WalletView } from '../components/dashboard/WalletView';
 import { WithdrawalsView } from '../components/dashboard/WithdrawalsView';
 import { DepositView } from '../components/dashboard/DepositView';
-import { SwapView } from '../components/dashboard/SwapView';
 import { NotificationsView } from '../components/dashboard/NotificationsView';
-import { RewardsView } from '../components/dashboard/RewardsView';
-import { TransactionsView } from '../components/dashboard/TransactionsView';
-import { PlaceholderView } from '../components/dashboard/PlaceholderView';
-import { NotificationPermissionModal } from '../components/notifications/NotificationPermissionModal';
+import { SupportView } from '../components/dashboard/SupportView';
+import { PhivonexProductSuite } from '../components/products';
+import { LegacyMemberHub } from '../components/legacy/LegacyMemberHub';
+import { SmartLaunchModals } from '../components/common/SmartLaunchModals';
 import { Loader2, AlertCircle, LogIn } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 
@@ -35,25 +31,51 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
   // Helper to determine initial tab from URL path
   const getTabFromPath = (path: string): DashboardTab => {
     const cleanPath = path.toLowerCase().split('?')[0];
-    if (cleanPath === '/app/profile' || cleanPath.startsWith('/app/profile/')) return 'profile';
-    if (cleanPath === '/app/security' || cleanPath.startsWith('/app/security/')) return 'security';
-    if (cleanPath === '/app/node-health' || cleanPath.startsWith('/app/node-health/')) return 'node-health';
-    if (cleanPath === '/app/reward-analytics' || cleanPath.startsWith('/app/reward-analytics/')) return 'reward-analytics';
-    if (cleanPath === '/app/nodes' || cleanPath.startsWith('/app/nodes/')) return 'nodes';
+    if (cleanPath === '/app/products' || cleanPath.startsWith('/app/products/')) return 'products';
     if (cleanPath === '/app/network' || cleanPath.startsWith('/app/network/')) return 'network';
-    if (cleanPath === '/app/referrals' || cleanPath.startsWith('/app/referrals/')) return 'referrals';
+    if (cleanPath === '/app/reward-analytics' || cleanPath.startsWith('/app/reward-analytics/')) return 'reward-analytics';
     if (cleanPath === '/app/wallet' || cleanPath.startsWith('/app/wallet/')) return 'wallet';
-    if (cleanPath === '/app/swap' || cleanPath.startsWith('/app/swap/')) return 'swap';
     if (cleanPath === '/app/deposit' || cleanPath.startsWith('/app/deposit/')) return 'deposit';
     if (cleanPath === '/app/withdrawals' || cleanPath.startsWith('/app/withdrawals/')) return 'withdrawals';
     if (cleanPath === '/app/notifications' || cleanPath.startsWith('/app/notifications/')) return 'notifications';
-    if (cleanPath === '/app/rewards' || cleanPath.startsWith('/app/rewards/')) return 'rewards';
-    if (cleanPath === '/app/transactions' || cleanPath.startsWith('/app/transactions/')) return 'transactions';
+    if (cleanPath === '/app/profile' || cleanPath.startsWith('/app/profile/')) return 'profile';
+    if (cleanPath === '/app/security' || cleanPath.startsWith('/app/security/')) return 'security';
+    if (cleanPath === '/app/support' || cleanPath.startsWith('/app/support/')) return 'support';
+    if (cleanPath === '/app/legacy' || cleanPath.startsWith('/app/legacy/')) return 'legacy';
+    // Backwards compatibility mappings for removed/merged tabs:
+    if (cleanPath === '/app/unilevel-matrix' || cleanPath === '/app/leadership-ranks' || cleanPath === '/app/referrals') return 'network';
+    if (cleanPath === '/app/nodes' || cleanPath === '/app/node-health' || cleanPath === '/app/swap' || cleanPath === '/app/transactions' || cleanPath === '/app/rewards' || cleanPath === '/app/unified-ledger') return 'wallet';
     return 'overview';
   };
 
   const [activeTab, setActiveTab] = useState<DashboardTab>(() => getTabFromPath(currentPath));
+  const [activeProductHub, setActiveProductHub] = useState<'alpha' | 'genesis' | 'chrono'>('alpha');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [hasLegacyPortfolio, setHasLegacyPortfolio] = useState(false);
+
+  // Stealth Legacy Isolation: Only enable Legacy Portfolio tab if backend confirms historical records
+  useEffect(() => {
+    if (!user) {
+      setHasLegacyPortfolio(false);
+      return;
+    }
+    let cancelled = false;
+    fetch('/api/legacy/status', { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data && data.hasLegacyPortfolio === true) {
+          setHasLegacyPortfolio(true);
+        } else if (!cancelled) {
+          setHasLegacyPortfolio(false);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setHasLegacyPortfolio(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   // Lock body scroll and listen for Escape key when mobile menu is open
   useEffect(() => {
@@ -94,6 +116,49 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
     onNavigate(targetUrl);
   };
 
+  // Unified tab + sub-product router for Overview, 3D Flip Card, and Promo Carousel CTAs
+  const handleNavigateTarget = (target: string) => {
+    const normalized = (target || '').trim().toLowerCase();
+    if (normalized === 'nodes/buy') {
+      onNavigate('/app/nodes/buy');
+      return;
+    }
+    if (normalized === 'products:alpha') {
+      setActiveProductHub('alpha');
+      handleSelectTab('products');
+      return;
+    }
+    if (normalized === 'products:genesis' || normalized === 'nodes') {
+      setActiveProductHub('genesis');
+      handleSelectTab('products');
+      return;
+    }
+    if (normalized === 'products:chrono') {
+      setActiveProductHub('chrono');
+      handleSelectTab('products');
+      return;
+    }
+    if (normalized === 'unilevel-matrix' || normalized === 'leadership-ranks' || normalized === 'referrals') {
+      handleSelectTab('network');
+      return;
+    }
+    if (normalized === 'wallet:transfer' || normalized === 'transfer' || normalized === 'p2p') {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage.setItem('phivonex_scroll_p2p', '1');
+      }
+      handleSelectTab('wallet');
+      setTimeout(() => {
+        window.dispatchEvent(new Event('phivonex:focus-p2p-transfer'));
+      }, 150);
+      return;
+    }
+    if (normalized === 'swap' || normalized === 'transactions' || normalized === 'rewards') {
+      handleSelectTab('wallet');
+      return;
+    }
+    handleSelectTab((normalized || 'overview') as DashboardTab);
+  };
+
   // Handle session logout
   const handleLogout = async () => {
     try {
@@ -108,15 +173,15 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
   // 1. Loading State
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#05070B] text-white flex flex-col items-center justify-center p-4 selection:bg-[#00CFFF]/20">
-        <div className="p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-2xl flex flex-col items-center text-center space-y-4 max-w-sm w-full">
+      <div className="min-h-screen bg-[#050807] text-white flex flex-col items-center justify-center p-4 selection:bg-[#00E5FF]/20">
+        <div className="p-8 rounded-[28px] oneui-glass-card flex flex-col items-center text-center space-y-4 max-w-sm w-full">
           <PhivonexLogo size="lg" />
-          <div className="flex items-center gap-3 text-xs font-mono text-[#00CFFF] pt-2">
+          <div className="flex items-center gap-3 text-xs font-mono text-[#00E5FF] pt-2">
             <Loader2 className="w-5 h-5 animate-spin" />
             <span>Verifying session security...</span>
           </div>
           <p className="text-[11px] text-[#98A2B3]">
-            Establishing cryptographic handshake with PHIVONEX protocol node.
+            Establishing secure session with PHIVONEX protocol workspace.
           </p>
         </div>
       </div>
@@ -126,18 +191,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
   // 2. Unauthenticated State (Fallback before redirect)
   if (!user) {
     return (
-      <div className="min-h-screen bg-[#05070B] text-white flex flex-col items-center justify-center p-4">
-        <div className="p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-2xl flex flex-col items-center text-center space-y-4 max-w-sm w-full">
-          <div className="w-12 h-12 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-center justify-center text-[#F04438]">
+      <div className="min-h-screen bg-[#050807] text-white flex flex-col items-center justify-center p-4">
+        <div className="p-8 rounded-[28px] oneui-glass-card flex flex-col items-center text-center space-y-4 max-w-sm w-full">
+          <div className="w-12 h-12 rounded-2xl bg-[#F04438]/10 border border-[#F04438]/30 flex items-center justify-center text-[#F04438]">
             <AlertCircle className="w-6 h-6" />
           </div>
           <h2 className="text-lg font-bold text-white">Authentication Required</h2>
           <p className="text-xs text-[#98A2B3]">
-            Your operator session is invalid or expired. Please sign in to access the protocol dashboard.
+            Your member session is invalid or expired. Please sign in to access the protocol dashboard.
           </p>
           <button
             onClick={() => onNavigate('/login')}
-            className="w-full py-2.5 px-4 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer min-h-[44px]"
+            className="w-full py-2.5 px-4 rounded-2xl bg-[#00E5FF] hover:bg-[#00E5FF]/90 text-[#050807] font-bold text-xs flex items-center justify-center gap-2 transition-colors cursor-pointer min-h-[44px]"
           >
             <LogIn className="w-4 h-4" />
             <span>Proceed to Login</span>
@@ -153,13 +218,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
       return (
         <BuyNodeView
           user={user}
-          onNavigateTab={(tab) => {
-            if (tab === 'nodes') {
-              handleSelectTab('nodes');
-            } else {
-              handleSelectTab(tab as DashboardTab);
-            }
-          }}
+          onNavigateTab={handleNavigateTarget}
         />
       );
     }
@@ -169,111 +228,73 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
         return (
           <OverviewView
             user={user}
-            onNavigateTab={(tab) => {
-              if (tab === 'nodes/buy') {
-                onNavigate('/app/nodes/buy');
-              } else {
-                handleSelectTab(tab as DashboardTab);
-              }
-            }}
+            onNavigateTab={handleNavigateTarget}
           />
         );
-      case 'nodes':
+      case 'products':
         return (
-          <MyNodesView
+          <PhivonexProductSuite
             user={user}
-            onNavigateTab={(tab) => {
-              if (tab === 'nodes/buy') {
-                onNavigate('/app/nodes/buy');
-              } else {
-                handleSelectTab(tab as DashboardTab);
-              }
-            }}
+            initialProduct={activeProductHub}
+            onNavigateTab={handleNavigateTarget}
           />
         );
-      case 'node-health':
-        return (
-          <NodeHealthView
-            user={user}
-            onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
-          />
-        );
+      case 'network':
+        return <NetworkView user={user} />;
       case 'reward-analytics':
         return (
           <RewardAnalytics
             user={user}
-            onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
+            onNavigateTab={handleNavigateTarget}
           />
         );
-      case 'network':
-        return <NetworkView />;
       case 'wallet':
-        return <WalletView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
-      case 'transactions':
-        return <TransactionsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
-      case 'swap':
-        return <SwapView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+        return <WalletView user={user} onNavigateTab={handleNavigateTarget} />;
       case 'deposit':
-        return <DepositView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+        return <DepositView user={user} onNavigateTab={handleNavigateTarget} />;
       case 'withdrawals':
-        return <WithdrawalsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
+        return <WithdrawalsView user={user} onNavigateTab={handleNavigateTarget} />;
       case 'notifications':
-        return <NotificationsView user={user} onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)} />;
-      case 'rewards':
-        return (
-          <RewardsView
-            user={user}
-            onNavigateTab={(tab) => {
-              if (tab === 'nodes/buy') {
-                onNavigate('/app/nodes/buy');
-              } else {
-                handleSelectTab(tab as DashboardTab);
-              }
-            }}
-          />
-        );
-      case 'referrals':
-        return (
-          <DirectReferralsView
-            user={user}
-            onNavigateTab={(tab) => {
-              if (tab === 'nodes/buy') {
-                onNavigate('/app/nodes/buy');
-              } else {
-                handleSelectTab(tab as DashboardTab);
-              }
-            }}
-          />
-        );
+        return <NotificationsView user={user} onNavigateTab={handleNavigateTarget} />;
       case 'profile':
         return (
           <ProfileView
             user={user}
-            onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
+            onNavigateTab={handleNavigateTarget}
           />
         );
       case 'security':
         return (
           <SecurityView
             user={user}
-            onNavigateTab={(tab) => handleSelectTab(tab as DashboardTab)}
+            onNavigateTab={handleNavigateTarget}
             onLogout={handleLogout}
           />
         );
       case 'support':
         return (
-          <PlaceholderView
-            tab={activeTab}
+          <SupportView
+            displayName={user?.fullName}
+            email={user?.email}
+          />
+        );
+      case 'legacy':
+        return hasLegacyPortfolio ? (
+          <LegacyMemberHub
             user={user}
-            onNavigateTab={handleSelectTab}
+            onNavigateTab={handleNavigateTarget}
+          />
+        ) : (
+          <OverviewView
+            user={user}
+            onNavigateTab={handleNavigateTarget}
           />
         );
       default:
         return (
-          <PlaceholderView
-            tab={activeTab}
+          <OverviewView
             user={user}
-            onNavigateTab={handleSelectTab}
+            onNavigateTab={handleNavigateTarget}
           />
         );
     }
@@ -292,9 +313,17 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
     )
   );
 
-  // 3. Authenticated Dashboard Layout
   return (
-    <div className="min-h-screen bg-[#05070B] text-[#F7FAFC] flex font-sans selection:bg-[#00CFFF]/20 selection:text-[#00CFFF]">
+    <div className="min-h-screen w-full max-w-full overflow-x-hidden bg-[#050807] text-[#F7FAFC] flex font-sans selection:bg-[#00E5FF]/20 selection:text-[#00E5FF]">
+      {/* Subtle One UI 9.5 Ambient Atmospheric Glows */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 overflow-hidden z-0"
+      >
+        <div className="absolute -top-32 left-1/4 w-[28rem] h-[28rem] rounded-full bg-[#00E5FF]/[0.04] blur-[120px]" />
+        <div className="absolute top-1/3 -right-24 w-[24rem] h-[24rem] rounded-full bg-[#F5B800]/[0.035] blur-[120px]" />
+      </div>
+
       {/* Desktop Sidebar (hidden on mobile) */}
       <div className="hidden lg:block fixed inset-y-0 left-0 z-30 w-64">
         <Sidebar
@@ -302,6 +331,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           onSelectTab={handleSelectTab}
           publicId={user.publicId}
           isAdmin={isAdmin}
+          hasLegacyPortfolio={hasLegacyPortfolio}
           onNavigate={onNavigate}
         />
       </div>
@@ -309,15 +339,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
       {/* Mobile Slide-out Drawer & Overlay */}
       {isMobileMenuOpen && (
         <div className="lg:hidden fixed inset-0 z-50 flex" role="dialog" aria-modal="true" aria-label="Navigation Menu">
-          {/* Backdrop */}
           <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+            className="fixed inset-0 bg-black/75 backdrop-blur-md transition-opacity"
             onClick={() => setIsMobileMenuOpen(false)}
             aria-hidden="true"
           />
 
-          {/* Drawer Content */}
-          <div className="relative flex flex-col w-[min(88vw,360px)] h-[100dvh] max-h-[100dvh] bg-[#07101D] border-r border-white/[0.08] z-10 overflow-hidden shadow-2xl animate-slideRight">
+          <div className="relative flex flex-col w-[min(86vw,340px)] h-[100dvh] max-h-[100dvh] z-10 overflow-hidden shadow-2xl animate-slideRight">
             <Sidebar
               activeTab={activeTab}
               onSelectTab={handleSelectTab}
@@ -325,6 +353,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
               isMobile={true}
               onCloseMobile={() => setIsMobileMenuOpen(false)}
               isAdmin={isAdmin}
+              hasLegacyPortfolio={hasLegacyPortfolio}
               onNavigate={onNavigate}
             />
           </div>
@@ -332,8 +361,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col lg:pl-64 min-w-0">
-        {/* Topbar */}
+      <div className="relative z-10 flex-1 flex flex-col lg:pl-64 min-w-0 max-w-full">
         <Topbar
           user={user}
           activeTab={activeTab}
@@ -343,21 +371,18 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({ onNavigate, curren
           onNavigate={onNavigate}
         />
 
-        {/* Dynamic Main Body Content (with bottom padding on mobile so persistent bottom nav never obstructs content) */}
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-28 lg:pb-8">
+        <main className="flex-1 w-full max-w-7xl mx-auto min-w-0 px-3 sm:px-6 lg:px-8 pt-[max(1rem,env(safe-area-inset-top))] sm:pt-6 pb-[calc(5.75rem+env(safe-area-inset-bottom))] lg:pb-10">
           {renderTabContent()}
         </main>
       </div>
 
-      {/* Persistent Native-Style Mobile Bottom Navigation Bar (5 Items: Overview, Nodes, Deposit [Center], Network, Wallet) */}
       <MobileBottomNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
         currentPath={currentPath}
       />
 
-      {/* Global Notification Permission Prompt Modal */}
-      <NotificationPermissionModal userPublicId={user.publicId} />
+      <SmartLaunchModals isAuthenticated={!!user} />
     </div>
   );
 };

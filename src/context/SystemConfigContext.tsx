@@ -1,6 +1,4 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../lib/firebase';
 
 export interface SystemConfigState {
   minWithdrawalAmount: number;
@@ -33,7 +31,7 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     autoWithdrawalEnabled: false,
     coinPriceUsdt: 0.10,
     nodeBasePriceUsd: 1000.0,
-    directReferralCommissionRate: 50,
+    directReferralCommissionRate: 0,
     genesisNodeCap: 10000,
     captchaEnabled: false,
     cryptoDepositsEnabled: true,
@@ -45,13 +43,13 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     isConnected: true,
   });
 
-  // REST Snapshot fetch
+  // Authoritative PostgreSQL REST snapshot fetch
   const fetchConfigs = useCallback(async () => {
     try {
       const [platformRes, withdrawalRes, networkRes] = await Promise.all([
-        fetch('/api/economic/platform-settings').catch(() => null),
-        fetch('/api/withdrawals/config').catch(() => null),
-        fetch('/api/public/network/summary').catch(() => null),
+        fetch('/api/economic/platform-settings', { credentials: 'include' }).catch(() => null),
+        fetch('/api/withdrawals/config', { credentials: 'include' }).catch(() => null),
+        fetch('/api/public/network/summary', { credentials: 'include' }).catch(() => null),
       ]);
 
       const platformData = platformRes && platformRes.ok ? await platformRes.json().catch(() => null) : null;
@@ -59,7 +57,7 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const networkData = networkRes && networkRes.ok ? await networkRes.json().catch(() => null) : null;
 
       setConfigs((p) => {
-        let next = { ...p };
+        const next = { ...p, isConnected: true };
         let changed = false;
 
         if (platformData && platformData.success && platformData.settings) {
@@ -102,9 +100,15 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
           }
         }
 
-        if (withdrawalData && typeof withdrawalData.minWithdrawalAmount === 'number' && withdrawalData.minWithdrawalAmount !== next.minWithdrawalAmount) {
-          next.minWithdrawalAmount = withdrawalData.minWithdrawalAmount;
-          changed = true;
+        if (withdrawalData) {
+          if (typeof withdrawalData.minWithdrawalAmount === 'number' && withdrawalData.minWithdrawalAmount !== next.minWithdrawalAmount) {
+            next.minWithdrawalAmount = withdrawalData.minWithdrawalAmount;
+            changed = true;
+          }
+          if (typeof withdrawalData.autoWithdrawalEnabled === 'boolean' && withdrawalData.autoWithdrawalEnabled !== next.autoWithdrawalEnabled) {
+            next.autoWithdrawalEnabled = withdrawalData.autoWithdrawalEnabled;
+            changed = true;
+          }
         }
 
         if (networkData) {
@@ -128,96 +132,12 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
         next.lastUpdated = new Date().toISOString();
         return next;
       });
-    } catch (err) {
-      console.warn('[SystemConfigContext] REST sync error:', err);
+    } catch {
+      // Silently rely on cached config and retry on next scheduled sync
     }
   }, []);
 
-  // 1. Subscribe to Firestore Real-Time Settings Snapshots
-  useEffect(() => {
-    let unsubscribeWithdrawals: () => void = () => {};
-    let unsubscribeConfigs: () => void = () => {};
-    let unsubscribeEconomic: () => void = () => {};
-
-    try {
-      // Document 1: 'withdrawals'
-      unsubscribeWithdrawals = onSnapshot(
-        doc(db, 'system_settings', 'withdrawals'),
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            setConfigs((prev) => ({
-              ...prev,
-              minWithdrawalAmount: typeof data.minWithdrawalAmount === 'number' ? data.minWithdrawalAmount : prev.minWithdrawalAmount,
-              autoWithdrawalEnabled: typeof data.autoWithdrawalEnabled === 'boolean' ? data.autoWithdrawalEnabled : prev.autoWithdrawalEnabled,
-              lastUpdated: data.updatedAt || new Date().toISOString(),
-              isConnected: true,
-            }));
-          }
-        },
-        (err) => {
-          // Gracefully fallback to REST endpoints
-          fetchConfigs();
-        }
-      );
-
-      // Document 2: 'configs'
-      unsubscribeConfigs = onSnapshot(
-        doc(db, 'system_settings', 'configs'),
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            setConfigs((prev) => {
-              const updated = { ...prev, isConnected: true };
-              if (typeof data.MIN_WITHDRAWAL_AMOUNT === 'number') updated.minWithdrawalAmount = data.MIN_WITHDRAWAL_AMOUNT;
-              if (typeof data.AUTO_WITHDRAWAL_ENABLED === 'boolean') updated.autoWithdrawalEnabled = data.AUTO_WITHDRAWAL_ENABLED;
-              if (typeof data.INTERNAL_COIN_PRICE_USDT === 'number') updated.coinPriceUsdt = data.INTERNAL_COIN_PRICE_USDT;
-              if (typeof data.NODE_BASE_PRICE_USD === 'number') updated.nodeBasePriceUsd = data.NODE_BASE_PRICE_USD;
-              if (typeof data.DIRECT_REFERRAL_COMMISSION_USD === 'number') updated.directReferralCommissionRate = data.DIRECT_REFERRAL_COMMISSION_USD;
-              updated.lastUpdated = data.updatedAt || new Date().toISOString();
-              return updated;
-            });
-          }
-        },
-        (err) => {
-          // Gracefully fallback to REST endpoints
-          fetchConfigs();
-        }
-      );
-
-      // Document 3: 'economic'
-      unsubscribeEconomic = onSnapshot(
-        doc(db, 'system_settings', 'economic'),
-        (snapshot) => {
-          if (snapshot.exists()) {
-            const data = snapshot.data();
-            setConfigs((prev) => {
-              const updated = { ...prev, isConnected: true };
-              if (typeof data.INTERNAL_COIN_PRICE_USDT === 'number') updated.coinPriceUsdt = data.INTERNAL_COIN_PRICE_USDT;
-              if (typeof data.NODE_BASE_PRICE_USD === 'number') updated.nodeBasePriceUsd = data.NODE_BASE_PRICE_USD;
-              if (typeof data.GENESIS_NODE_CAP === 'number') updated.genesisNodeCap = data.GENESIS_NODE_CAP;
-              updated.lastUpdated = data.updatedAt || new Date().toISOString();
-              return updated;
-            });
-          }
-        },
-        (err) => {
-          // Gracefully fallback to REST endpoints
-          fetchConfigs();
-        }
-      );
-    } catch (e) {
-      fetchConfigs();
-    }
-
-    return () => {
-      unsubscribeWithdrawals();
-      unsubscribeConfigs();
-      unsubscribeEconomic();
-    };
-  }, []);
-
-  // 2. Connect to Server-Sent Events (SSE) Stream
+  // Connect to Server-Sent Events (SSE) Stream with resilient error handling
   useEffect(() => {
     let es: EventSource | null = null;
     try {
@@ -232,7 +152,7 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
             setConfigs((prev) => {
               if (payload.updatedAt && prev.lastUpdated && new Date(payload.updatedAt).getTime() < new Date(prev.lastUpdated).getTime()) {
-                return prev; // Ignore out-of-order older event
+                return prev;
               }
 
               const updated = { ...prev, lastUpdated: new Date().toISOString() };
@@ -253,23 +173,22 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
               if (key === 'INTERNAL_COIN_SWAP_ENABLED') updated.internalCoinSwapEnabled = Boolean(val);
               if (key === 'NODE_REWARDS_ENABLED') updated.nodeRewardsEnabled = Boolean(val);
               if (key === 'SYSTEM_NOTICE') updated.systemNotice = val ? String(val) : null;
-              if (
-                key === 'DAILY_REWARD_AUTOMATION' ||
-                key === 'NODE_REWARD_RATE_PER_EPOCH' ||
-                key === 'PROMOTIONAL_OFFERS_UPDATED' ||
-                key === 'PROMOTIONAL_BANNERS_UPDATED'
-              ) {
-                updated.lastUpdated = new Date().toISOString();
-              }
               return updated;
             });
           }
         } catch {
-          // ignore parse errors
+          // ignore non-JSON keepalive heartbeats
         }
       });
-    } catch (err) {
-      console.warn('[SystemConfigContext] SSE connection error:', err);
+
+      es.onerror = () => {
+        // Gracefully close on transport interruption; REST polling keeps settings synchronized
+        if (es && es.readyState === EventSource.CLOSED) {
+          es.close();
+        }
+      };
+    } catch {
+      // Fallback cleanly to REST polling
     }
 
     return () => {
@@ -277,7 +196,7 @@ export const SystemConfigProvider: React.FC<{ children: React.ReactNode }> = ({ 
     };
   }, []);
 
-  // 3. Fallback poll every 60 seconds when tab is visible (SSE + Firestore handle real-time push)
+  // Periodic REST sync when tab is visible
   useEffect(() => {
     fetchConfigs();
     const interval = setInterval(() => {

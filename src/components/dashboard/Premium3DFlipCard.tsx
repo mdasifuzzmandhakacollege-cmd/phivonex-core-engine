@@ -1,27 +1,33 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import {
-  Mail,
-  Globe,
   RotateCw,
-  Wallet,
-  Server,
-  Trophy,
+  Copy,
+  Check,
+  ArrowDownLeft,
+  ArrowUpRight,
+  Layers,
   Users,
-  ShieldCheck,
-  ArrowRight,
+  Sparkles,
+  Share2,
   ArrowLeft,
-  CheckCircle2,
 } from 'lucide-react';
 import { UserProfile } from '../../context/AuthContext';
 import { PhivonexSymbol } from '../brand/PhivonexSymbol';
+import { RankCrestEmblem } from '../brand/RankCrestEmblem';
 
 interface Premium3DFlipCardProps {
   user: UserProfile | null;
-  displayName: string;
+  displayName?: string;
   availableUsdt: number;
+  phivoBalance: number;
+  phivoRate: number;
+  activePortfolioCapitalUsd: number;
   activeNodes: number;
+  currentRankLevel: number;
   currentRankName: string;
-  networkStatus?: string;
+  unlockedGenerations: number;
+  directPartnersCount: number;
+  referralUrl: string;
   onNavigateTab?: (tab: string) => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -29,11 +35,15 @@ interface Premium3DFlipCardProps {
 
 export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
   user,
-  displayName,
   availableUsdt,
-  activeNodes,
+  phivoBalance,
+  phivoRate,
+  activePortfolioCapitalUsd,
+  currentRankLevel,
   currentRankName,
-  networkStatus = 'Synchronized',
+  unlockedGenerations,
+  directPartnersCount,
+  referralUrl,
   onNavigateTab,
   onRefresh,
   isRefreshing = false,
@@ -42,9 +52,10 @@ export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
   const [isHovered, setIsHovered] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedReferral, setCopiedReferral] = useState(false);
   const sceneRef = useRef<HTMLDivElement>(null);
 
-  // Detect prefers-reduced-motion
   useEffect(() => {
     if (typeof window !== 'undefined' && window.matchMedia) {
       const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -55,7 +66,6 @@ export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
     }
   }, []);
 
-  // Desktop subtle pointer tilt (±3deg to ±4deg max)
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (prefersReducedMotion || !sceneRef.current) return;
@@ -69,16 +79,12 @@ export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
       const cx = rect.width / 2;
       const cy = rect.height / 2;
 
-      // Subtle tilt: max 3.2 degrees
-      const tiltX = -((y - cy) / cy) * 3.2;
-      const tiltY = ((x - cx) / cx) * 3.5;
-
+      const tiltX = -((y - cy) / cy) * 2.5;
+      const tiltY = ((x - cx) / cx) * 2.8;
       setTilt({ x: tiltX, y: tiltY });
     },
     [prefersReducedMotion]
   );
-
-  const handleMouseEnter = () => setIsHovered(true);
 
   const handleMouseLeave = () => {
     setIsHovered(false);
@@ -89,137 +95,136 @@ export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
     setIsFlipped((prev) => !prev);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleFlipToggle();
-    }
+  const handleCopyPublicId = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const id = user?.publicId || 'PHX-MEMBER';
+    navigator.clipboard.writeText(id);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
   };
 
-  const formatCurrency = (val: number) => {
-    return val.toLocaleString('en-US', {
+  const handleCopyReferralLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!referralUrl) return;
+    navigator.clipboard.writeText(referralUrl);
+    setCopiedReferral(true);
+    setTimeout(() => setCopiedReferral(false), 2200);
+  };
+
+  const formatUsd = (val: number) =>
+    Number(val || 0).toLocaleString('en-US', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-  };
 
-  // Safe public identifier
+  const formatPhivo = (val: number) =>
+    Number(val || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
   const publicId = user?.publicId || 'PHX-MEMBER';
+  const phivoValueUsd = phivoBalance * (phivoRate || 0.1);
+  const clampedGenerations = Math.max(0, Math.min(16, unlockedGenerations || 0));
 
-  // Compute transform: combines flip state with pointer tilt
   const cardTransform = prefersReducedMotion
     ? isFlipped
       ? 'rotateY(180deg)'
       : 'rotateY(0deg)'
     : isFlipped
-    ? `rotateY(${180 + (isHovered ? tilt.y * 0.4 : 0)}deg) rotateX(${isHovered ? tilt.x * 0.4 : 0}deg)`
+    ? `rotateY(${180 + (isHovered ? tilt.y * 0.35 : 0)}deg) rotateX(${isHovered ? tilt.x * 0.35 : 0}deg)`
     : `rotateY(${isHovered ? tilt.y : 0}deg) rotateX(${isHovered ? tilt.x : 0}deg)`;
 
   return (
-    <div className="w-full space-y-2.5 select-none">
-      {/* ========================================================
-          1. CARD SCENE: Owns fixed dimensions & 3D perspective
-         ======================================================== */}
+    <section aria-label="PHIVONEX Interactive Balance Card" className="w-full max-w-full min-w-0 space-y-2.5 select-none">
       <div
         ref={sceneRef}
-        className="card-scene relative w-full max-w-[940px] mx-auto"
-        style={{ perspective: '1400px' }}
+        className="relative w-full max-w-full"
+        style={{ perspective: '1600px' }}
         onMouseMove={handleMouseMove}
-        onMouseEnter={handleMouseEnter}
+        onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={handleMouseLeave}
       >
-        {/* ========================================================
-            2. CARD-3D: The single physical Visa-proportioned card
-            Aspect Ratio 1.586 : 1 (ISO/IEC 7810 ID-1 Standard)
-           ======================================================== */}
+        {/* CSS Grid Overlay ensures Front and Back share exact natural height with zero clipping at 360px */}
         <div
-          role="button"
-          tabIndex={0}
-          aria-pressed={isFlipped}
-          aria-label={
-            isFlipped
-              ? 'PHIVONEX Network Card. Press Enter or Space to return to Overview.'
-              : 'PHIVONEX Overview Card. Press Enter or Space to show Network Card.'
-          }
-          onClick={(e) => {
-            const target = e.target as HTMLElement;
-            if (target.closest('button:not(.flip-trigger)')) return;
-            handleFlipToggle();
-          }}
-          onKeyDown={handleKeyDown}
-          className={`card-3d relative w-full rounded-2xl sm:rounded-3xl cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#00CFFF] ${
-            isFlipped ? 'is-flipped' : ''
-          }`}
+          className="grid w-full transition-transform"
           style={{
-            aspectRatio: '1.586 / 1',
             transformStyle: 'preserve-3d',
             transform: cardTransform,
             transition: isHovered
-              ? 'transform 0.12s ease-out'
-              : 'transform 780ms cubic-bezier(0.22, 1, 0.36, 1)',
+              ? 'transform 140ms ease-out'
+              : 'transform 720ms cubic-bezier(0.22, 1, 0.36, 1)',
           }}
         >
-          {/* ========================================================
-              FRONT FACE: VISA-STYLE PHIVONEX OVERVIEW
-              Absolute inset-0 (occupies exact same coordinates as Back)
-             ======================================================== */}
+          {/* ================================================================
+              FRONT FACE: ONE UI 9.5 HOLOGRAPHIC BALANCE & PORTFOLIO CARD
+             ================================================================ */}
           <div
-            className="card-face card-front absolute inset-0 w-full h-full rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 md:p-6 lg:p-7 overflow-hidden flex flex-col justify-between"
+            className={`col-start-1 row-start-1 relative w-full min-w-0 rounded-[28px] p-4 sm:p-6 lg:p-7 overflow-hidden flex flex-col justify-between gap-4 sm:gap-5 ${
+              isFlipped ? 'pointer-events-none' : 'pointer-events-auto'
+            }`}
             style={{
               backfaceVisibility: 'hidden',
               WebkitBackfaceVisibility: 'hidden',
               transform: 'rotateY(0deg)',
-              background: 'linear-gradient(135deg, rgba(9, 21, 38, 0.98) 0%, rgba(6, 14, 27, 0.99) 55%, rgba(3, 7, 14, 0.99) 100%)',
-              border: '1px solid rgba(0, 207, 255, 0.35)',
-              boxShadow: isHovered
-                ? '0 25px 50px -12px rgba(0, 0, 0, 0.85), 0 0 30px rgba(0, 207, 255, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.25), inset 0 0 20px rgba(0, 207, 255, 0.08)'
-                : '0 20px 40px -15px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 207, 255, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.2), inset 0 0 15px rgba(0, 207, 255, 0.05)',
+              background:
+                'linear-gradient(145deg, rgba(16, 26, 23, 0.86) 0%, rgba(10, 17, 15, 0.90) 52%, rgba(6, 11, 10, 0.94) 100%)',
+              backdropFilter: 'blur(28px)',
+              WebkitBackdropFilter: 'blur(28px)',
+              border: '1px solid rgba(255, 255, 255, 0.13)',
+              boxShadow:
+                '0 24px 60px -22px rgba(0, 0, 0, 0.9), 0 0 36px -12px rgba(0, 229, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.22)',
             }}
           >
-            {/* Top Specular Rim */}
-            <div className="absolute top-0 inset-x-6 sm:inset-x-12 h-[1px] bg-gradient-to-r from-transparent via-[#80EAFF]/70 to-transparent pointer-events-none" />
-
-            {/* Subtle Diagonal Brushed Glass Sheen */}
+            {/* Top Specular Rim Highlight */}
             <div
-              className="absolute inset-0 pointer-events-none opacity-25"
+              aria-hidden="true"
+              className="absolute top-0 inset-x-8 h-[1px] bg-gradient-to-r from-transparent via-[#00E5FF]/70 to-transparent pointer-events-none"
+            />
+
+            {/* Subtle Holographic Cyan/Gold Refraction Orbs */}
+            <div
+              aria-hidden="true"
+              className="absolute -top-20 -right-16 w-60 h-60 rounded-full pointer-events-none"
               style={{
-                background: 'linear-gradient(115deg, rgba(255,255,255,0.15) 0%, transparent 35%, rgba(0,207,255,0.08) 65%, transparent 100%)',
+                background:
+                  'radial-gradient(circle, rgba(0, 229, 255, 0.18) 0%, rgba(245, 184, 0, 0.08) 45%, transparent 72%)',
+                filter: 'blur(28px)',
+              }}
+            />
+            <div
+              aria-hidden="true"
+              className="absolute -bottom-24 -left-16 w-56 h-56 rounded-full pointer-events-none"
+              style={{
+                background:
+                  'radial-gradient(circle, rgba(0, 230, 118, 0.12) 0%, transparent 70%)',
+                filter: 'blur(28px)',
               }}
             />
 
-            {/* Right Ambient Cyan Light Flare */}
-            <div
-              className="absolute right-0 top-1/2 -translate-y-1/2 w-48 h-48 sm:w-72 sm:h-72 rounded-full pointer-events-none"
-              style={{
-                background: 'radial-gradient(circle, rgba(0, 207, 255, 0.24) 0%, rgba(0, 136, 255, 0.08) 50%, transparent 75%)',
-                filter: 'blur(30px)',
-              }}
-            />
-
-            {/* FRONT TOP ROW: Status Badges & Quick Flip Control */}
-            <div className="relative z-10 flex items-center justify-between gap-2">
-              {/* Badges Container */}
-              <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap max-w-[80%]">
-                {/* Account Active */}
-                <span className="inline-flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-0.5 rounded-full bg-[#052E1C]/90 border border-[#32D583]/40 text-[#32D583] text-[9px] sm:text-[10px] md:text-[11px] font-semibold tracking-wide whitespace-nowrap">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
+            {/* FRONT TOP BAR: Account Active + PHIVONEX ID Copy + Flip Button */}
+            <div className="relative z-10 flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[#00E676]/12 border border-[#00E676]/35 text-[#00E676] text-[10px] sm:text-[11px] font-semibold tracking-wide whitespace-nowrap">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse" />
                   <span>Account Active</span>
                 </span>
 
-                {/* Email Verified */}
-                <span className="inline-flex items-center gap-1 px-2 sm:px-2.5 py-0.5 rounded-full bg-[#08182B]/90 border border-[#00CFFF]/30 text-white/90 text-[9px] sm:text-[10px] md:text-[11px] whitespace-nowrap">
-                  <Mail className="w-3 h-3 text-[#00CFFF]" />
-                  <span>{user?.emailVerified ? 'Email Verified' : 'Confirmed'}</span>
-                </span>
-
-                {/* Network Synchronized (Hidden on ultra-narrow 320px screens if needed) */}
-                <span className="hidden xs:inline-flex items-center gap-1 px-2 sm:px-2.5 py-0.5 rounded-full bg-[#08182B]/90 border border-[#00CFFF]/30 text-[#00CFFF] text-[9px] sm:text-[10px] md:text-[11px] whitespace-nowrap">
-                  <Globe className="w-3 h-3 text-[#00CFFF]" />
-                  <span>Network Synchronized</span>
-                </span>
+                <button
+                  type="button"
+                  onClick={handleCopyPublicId}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-[#D0D5DD] hover:text-white text-[10px] sm:text-[11px] font-mono transition-colors cursor-pointer active:scale-95"
+                  title="Copy PHIVONEX ID"
+                >
+                  <span className="truncate max-w-[110px] sm:max-w-none">{publicId}</span>
+                  {copiedId ? (
+                    <Check className="w-3 h-3 text-[#00E676] shrink-0" />
+                  ) : (
+                    <Copy className="w-3 h-3 text-[#00E5FF] shrink-0" />
+                  )}
+                </button>
               </div>
 
-              {/* Top-Right Flip Icon Indicator */}
               <div className="flex items-center gap-1.5 shrink-0">
                 {onRefresh && (
                   <button
@@ -229,293 +234,263 @@ export const Premium3DFlipCard: React.FC<Premium3DFlipCardProps> = ({
                       onRefresh();
                     }}
                     disabled={isRefreshing}
-                    className="p-1 sm:p-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-all cursor-pointer"
-                    title="Synchronize metrics"
-                    aria-label="Synchronize metrics"
+                    className="min-h-[36px] min-w-[36px] rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-[#98A2B3] hover:text-white flex items-center justify-center transition-all cursor-pointer active:scale-95"
+                    aria-label="Refresh portfolio balances"
+                    title="Refresh balances"
                   >
-                    <RotateCw className={`w-3 h-3 text-[#00CFFF] ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <RotateCw className={`w-3.5 h-3.5 text-[#00E5FF] ${isRefreshing ? 'animate-spin' : ''}`} />
                   </button>
                 )}
-                <div
-                  className="p-1 sm:p-1.5 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF] transition-all hover:bg-[#00CFFF]/20"
-                  title="Flip to Network Card"
+
+                <button
+                  type="button"
+                  onClick={handleFlipToggle}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-xl bg-[#00E5FF]/12 hover:bg-[#00E5FF]/20 border border-[#00E5FF]/40 text-[#00E5FF] hover:text-white text-[11px] font-semibold tracking-wide transition-all cursor-pointer active:scale-95"
+                  aria-label="Flip card to Leadership & Referral identity"
                 >
-                  <RotateCw className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
-                </div>
+                  <span>Flip Card</span>
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
 
-            {/* FRONT MIDDLE: Greeting & 3D PHIVONEX Core Emblem */}
-            <div className="relative z-10 flex items-center justify-between gap-3 sm:gap-6 my-auto">
-              {/* Left Column: Greeting Typography */}
-              <div className="space-y-1 sm:space-y-2 max-w-[62%]">
-                <h1 className="text-[clamp(15px,3.2vw,32px)] font-black text-white tracking-tight leading-tight">
-                  Welcome back,{' '}
-                  <span className="text-[#00CFFF] drop-shadow-[0_0_14px_rgba(0,207,255,0.45)]">
-                    {displayName}
+            {/* FRONT HERO BALANCE DISPLAY */}
+            <div className="relative z-10 flex items-center justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <div className="text-[10px] sm:text-[11px] font-mono uppercase tracking-[0.16em] text-[#98A2B3]">
+                  Available USDT Balance
+                </div>
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span
+                    className="font-mono font-extrabold text-white tabular-nums tracking-tight leading-none"
+                    style={{ fontSize: 'clamp(1.75rem, 6vw, 2.5rem)' }}
+                  >
+                    ${formatUsd(availableUsdt)}
                   </span>
-                </h1>
-                <p className="text-[clamp(8.5px,1.4vw,13px)] text-[#98A2B3] leading-relaxed line-clamp-2 sm:line-clamp-3">
-                  Manage your PHIVONEX nodes, wallet balance, network growth, and daily rewards from your unified dashboard.
-                </p>
+                  <span className="text-xs sm:text-sm font-mono font-semibold text-[#00E5FF]">
+                    USDT
+                  </span>
+                </div>
               </div>
 
-              {/* Right Column: 3D Emblem Core Motif */}
-              <div className="shrink-0 flex flex-col items-center justify-center relative">
-                <div className="relative w-[clamp(68px,15vw,170px)] h-[clamp(68px,15vw,170px)] flex items-center justify-center">
-                  {/* Outer Glowing Energy Ring */}
-                  <div className="absolute inset-0 rounded-full border border-[#00CFFF]/35 shadow-[0_0_15px_rgba(0,207,255,0.3)] pointer-events-none" />
+              <div className="hidden sm:flex w-14 h-14 rounded-2xl bg-[#050807]/70 border border-white/[0.1] items-center justify-center shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.14)]">
+                <PhivonexSymbol size={34} glow={true} animated={!prefersReducedMotion} />
+              </div>
+            </div>
 
-                  {/* Concentric Tech Dashed Ring */}
-                  <div
-                    className="absolute inset-2 rounded-full border border-dashed border-[#00CFFF]/45 pointer-events-none opacity-80"
-                    style={{ animation: prefersReducedMotion ? undefined : 'spin 45s linear infinite' }}
-                  />
+            {/* FRONT DUAL SPLIT STRIP: PHIVO MINING WALLET + ACTIVE PORTFOLIO CAPITAL */}
+            <div className="relative z-10 grid grid-cols-1 xs:grid-cols-2 gap-2.5 sm:gap-3">
+              <div
+                onClick={() => onNavigateTab?.('wallet')}
+                className="p-3 sm:p-3.5 rounded-2xl bg-black/35 hover:bg-black/45 border border-white/[0.08] hover:border-[#00E5FF]/35 transition-all cursor-pointer min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1 text-[10px] font-mono uppercase tracking-wider text-[#98A2B3]">
+                  <span className="truncate">PHIVO Mining Wallet</span>
+                  <Sparkles className="w-3 h-3 text-[#00E5FF] shrink-0" />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
+                  <span className="text-sm sm:text-base font-mono font-bold text-[#00E5FF] tabular-nums">
+                    {formatPhivo(phivoBalance)}
+                  </span>
+                  <span className="text-[10px] font-mono text-[#98A2B3]">PHIVO</span>
+                </div>
+                <div className="text-[10px] sm:text-[11px] font-mono text-[#D0D5DD]/80 tabular-nums mt-0.5 truncate">
+                  ≈ ${formatUsd(phivoValueUsd)} USD (@ ${(phivoRate || 0.1).toFixed(2)})
+                </div>
+              </div>
 
-                  {/* Metallic 3D Base Disc */}
-                  <div className="absolute inset-4 rounded-full bg-gradient-to-b from-[#0F2648] via-[#08172C] to-[#030812] border-2 border-[#00CFFF]/65 shadow-[0_10px_25px_rgba(0,0,0,0.65),_inset_0_2px_4px_rgba(128,234,255,0.65)] flex items-center justify-center overflow-hidden">
-                    {/* Top Specular Disc Arc */}
-                    <div className="absolute top-0 inset-x-1 h-1/2 bg-gradient-to-b from-white/[0.15] to-transparent rounded-t-full pointer-events-none" />
-
-                    {/* Stylized PHIVONEX Symbol */}
-                    <div className="relative z-10 transform scale-90 sm:scale-110 drop-shadow-[0_0_16px_rgba(0,207,255,0.65)]">
-                      <PhivonexSymbol size={52} glow={true} animated={!prefersReducedMotion} />
-                    </div>
-                  </div>
-
-                  {/* Light Pedestal Floor Reflection */}
-                  <div
-                    className="absolute -bottom-2 inset-x-2 h-4 rounded-full pointer-events-none"
-                    style={{
-                      background: 'radial-gradient(ellipse at center, rgba(0, 207, 255, 0.5) 0%, rgba(0, 136, 255, 0.15) 50%, transparent 80%)',
-                      filter: 'blur(5px)',
-                    }}
-                  />
+              <div
+                onClick={() => onNavigateTab?.('products:alpha')}
+                className="p-3 sm:p-3.5 rounded-2xl bg-black/35 hover:bg-black/45 border border-white/[0.08] hover:border-[#F5B800]/35 transition-all cursor-pointer min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1 text-[10px] font-mono uppercase tracking-wider text-[#98A2B3]">
+                  <span className="truncate">Active Portfolio Capital</span>
+                  <Layers className="w-3 h-3 text-[#F5B800] shrink-0" />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1.5 flex-wrap">
+                  <span className="text-sm sm:text-base font-mono font-bold text-white tabular-nums">
+                    ${formatUsd(activePortfolioCapitalUsd)}
+                  </span>
+                  <span className="text-[10px] font-mono text-[#F5B800]">USDT</span>
+                </div>
+                <div className="text-[10px] sm:text-[11px] text-[#98A2B3] mt-0.5 truncate">
+                  Alpha™ • Vaults™ • Genesis Core™
                 </div>
               </div>
             </div>
 
-            {/* FRONT BOTTOM ROW: Flip Action Pill & Subtle Brand Mark */}
-            <div className="relative z-10 flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06]">
-              {/* Flip Button */}
+            {/* FRONT INTEGRATED QUICK PILLS: Deposit • Withdraw • Allocate Capital */}
+            <div className="relative z-10 grid grid-cols-3 gap-2 pt-1">
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleFlipToggle();
-                }}
-                className="flip-trigger group inline-flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-[#00CFFF]/15 via-[#00CFFF]/10 to-[#0077FF]/15 hover:from-[#00CFFF]/25 hover:to-[#0077FF]/25 border border-[#00CFFF]/45 text-[#00CFFF] hover:text-white text-[10px] sm:text-xs font-semibold tracking-wide transition-all shadow-sm active:scale-95 cursor-pointer"
-                aria-label="Flip to Network Card"
+                onClick={() => onNavigateTab?.('deposit')}
+                className="min-h-[44px] px-2.5 py-2 rounded-2xl bg-gradient-to-r from-[#00E5FF] to-[#00B8D4] hover:brightness-110 text-[#050807] font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 shadow-[0_10px_24px_-10px_rgba(0,229,255,0.65)]"
               >
-                <RotateCw className="w-3 h-3 text-[#00CFFF] transition-transform duration-500 group-hover:rotate-180" />
-                <span>Flip Card</span>
-                <ArrowRight className="w-3 h-3 text-[#00CFFF] transition-transform duration-300 group-hover:translate-x-0.5" />
+                <ArrowDownLeft className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Deposit</span>
               </button>
 
-              {/* Brand Line */}
-              <div className="text-[8.5px] sm:text-[10px] font-mono tracking-[0.3em] text-[#00CFFF]/75 uppercase">
-                P H I V O N E X
-              </div>
+              <button
+                type="button"
+                onClick={() => onNavigateTab?.('withdrawals')}
+                className="min-h-[44px] px-2.5 py-2 rounded-2xl bg-white/[0.07] hover:bg-white/[0.12] border border-white/[0.12] text-white font-semibold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+              >
+                <ArrowUpRight className="w-3.5 h-3.5 text-[#D0D5DD] shrink-0" />
+                <span className="truncate">Withdraw</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onNavigateTab?.('products:alpha')}
+                className="min-h-[44px] px-2.5 py-2 rounded-2xl bg-[#F5B800]/14 hover:bg-[#F5B800]/22 border border-[#F5B800]/40 text-[#F5B800] hover:text-white font-bold text-[11px] sm:text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95"
+              >
+                <Layers className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">Allocate</span>
+              </button>
             </div>
           </div>
 
-          {/* ========================================================
-              BACK FACE: VISA-STYLE PHIVONEX NETWORK CARD
-              Absolute inset-0 (occupies exact same coordinates as Front)
-             ======================================================== */}
+          {/* ================================================================
+              BACK FACE: LEADERSHIP RANK, 16-GEN DEPTH & PARTNER REFERRAL LINK
+             ================================================================ */}
           <div
-            className="card-face card-back absolute inset-0 w-full h-full rounded-2xl sm:rounded-3xl p-3.5 sm:p-5 md:p-6 lg:p-7 overflow-hidden flex flex-col justify-between"
+            className={`col-start-1 row-start-1 relative w-full min-w-0 rounded-[28px] p-4 sm:p-6 lg:p-7 overflow-hidden flex flex-col justify-between gap-4 sm:gap-5 ${
+              isFlipped ? 'pointer-events-auto' : 'pointer-events-none'
+            }`}
             style={{
               backfaceVisibility: 'hidden',
               WebkitBackfaceVisibility: 'hidden',
               transform: 'rotateY(180deg)',
-              background: 'linear-gradient(135deg, rgba(8, 19, 36, 0.98) 0%, rgba(5, 13, 26, 0.99) 55%, rgba(3, 7, 14, 0.99) 100%)',
-              border: '1px solid rgba(0, 207, 255, 0.35)',
-              boxShadow: isHovered
-                ? '0 25px 50px -12px rgba(0, 0, 0, 0.85), 0 0 30px rgba(0, 207, 255, 0.2), inset 0 1px 1px rgba(255, 255, 255, 0.25), inset 0 0 20px rgba(0, 207, 255, 0.08)'
-                : '0 20px 40px -15px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 207, 255, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.2), inset 0 0 15px rgba(0, 207, 255, 0.05)',
+              background:
+                'linear-gradient(145deg, rgba(20, 24, 18, 0.90) 0%, rgba(11, 17, 15, 0.92) 55%, rgba(6, 10, 9, 0.96) 100%)',
+              backdropFilter: 'blur(28px)',
+              WebkitBackdropFilter: 'blur(28px)',
+              border: '1px solid rgba(245, 184, 0, 0.28)',
+              boxShadow:
+                '0 24px 60px -22px rgba(0, 0, 0, 0.92), 0 0 36px -12px rgba(245, 184, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.2)',
             }}
           >
-            {/* Top Specular Rim */}
-            <div className="absolute top-0 inset-x-6 sm:inset-x-12 h-[1px] bg-gradient-to-r from-transparent via-[#80EAFF]/70 to-transparent pointer-events-none" />
+            {/* Top Metallic Gold Specular Rim */}
+            <div
+              aria-hidden="true"
+              className="absolute top-0 inset-x-8 h-[1px] bg-gradient-to-r from-transparent via-[#F5B800]/75 to-transparent pointer-events-none"
+            />
 
-            {/* Faint Wireframe Globe Watermark Motif on the Right */}
-            <div className="absolute -right-6 -bottom-6 w-40 h-40 sm:w-56 sm:h-56 opacity-10 pointer-events-none text-[#00CFFF]">
-              <Globe className="w-full h-full stroke-[1]" />
-            </div>
-
-            {/* BACK TOP ROW: Protocol Identity & Network Card Branding */}
-            <div className="relative z-10 flex items-center justify-between border-b border-white/[0.08] pb-2 sm:pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
-                  <ShieldCheck className="w-3.5 h-3.5" />
+            {/* Back Top Bar */}
+            <div className="relative z-10 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#F5B800]">
+                  PHIVONEX Partner Identity
                 </div>
-                <div>
-                  <div className="text-[8px] sm:text-[9.5px] font-mono tracking-wider text-[#98A2B3] uppercase">
-                    Protocol Identity
-                  </div>
-                  <div className="text-[10px] sm:text-xs font-bold text-white font-mono">
-                    {publicId}
-                  </div>
+                <div className="text-xs font-mono font-bold text-white truncate">
+                  {publicId}
                 </div>
               </div>
 
-              {/* Right: PHIVONEX NETWORK CARD Branding */}
-              <div className="text-right">
-                <div className="text-[10px] sm:text-xs md:text-sm font-extrabold tracking-[0.25em] text-[#00CFFF] uppercase">
-                  PHIVONEX
-                </div>
-                <div className="text-[8px] sm:text-[9.5px] font-mono text-[#98A2B3] tracking-widest uppercase">
-                  NETWORK CARD
-                </div>
-              </div>
-            </div>
-
-            {/* BACK MIDDLE: 4 Compact Data Modules in 2x2 Grid */}
-            <div className="relative z-10 grid grid-cols-2 gap-2 sm:gap-3 my-auto">
-              {/* Module 1: Wallet Status */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateTab?.('wallet');
-                }}
-                className="p-2 sm:p-3 rounded-xl bg-[#050B14]/85 border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all cursor-pointer group"
-              >
-                <div className="flex items-center justify-between text-[#98A2B3] mb-0.5">
-                  <div className="flex items-center gap-1.5 text-[8.5px] sm:text-[10px] font-medium">
-                    <Wallet className="w-3 h-3 text-[#00CFFF]" />
-                    <span>Wallet Status</span>
-                  </div>
-                  <span className="flex items-center gap-1 text-[7.5px] sm:text-[9px] text-[#32D583] font-medium">
-                    <span className="w-1 h-1 rounded-full bg-[#32D583]" />
-                    <span>Active</span>
-                  </span>
-                </div>
-                <div className="text-[11px] sm:text-sm md:text-base font-bold font-mono text-white tabular-nums truncate">
-                  ${formatCurrency(availableUsdt)}{' '}
-                  <span className="text-[8.5px] sm:text-[10px] text-[#98A2B3] font-normal">USDT</span>
-                </div>
-              </div>
-
-              {/* Module 2: Active Nodes */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateTab?.('nodes');
-                }}
-                className="p-2 sm:p-3 rounded-xl bg-[#050B14]/85 border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all cursor-pointer group"
-              >
-                <div className="flex items-center justify-between text-[#98A2B3] mb-0.5">
-                  <div className="flex items-center gap-1.5 text-[8.5px] sm:text-[10px] font-medium">
-                    <Server className="w-3 h-3 text-[#00CFFF]" />
-                    <span>Active Nodes</span>
-                  </div>
-                  <span className="flex items-center gap-1 text-[7.5px] sm:text-[9px] text-[#00CFFF] font-medium">
-                    <span className="w-1 h-1 rounded-full bg-[#00CFFF]" />
-                    <span>{activeNodes > 0 ? 'Mining' : 'Ready'}</span>
-                  </span>
-                </div>
-                <div className="text-[11px] sm:text-sm md:text-base font-bold font-mono text-white tabular-nums truncate">
-                  {activeNodes}{' '}
-                  <span className="text-[8.5px] sm:text-[10px] text-[#98A2B3] font-normal">Nodes</span>
-                </div>
-              </div>
-
-              {/* Module 3: Current Rank */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateTab?.('network');
-                }}
-                className="p-2 sm:p-3 rounded-xl bg-[#050B14]/85 border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all cursor-pointer group"
-              >
-                <div className="flex items-center justify-between text-[#98A2B3] mb-0.5">
-                  <div className="flex items-center gap-1.5 text-[8.5px] sm:text-[10px] font-medium">
-                    <Trophy className="w-3 h-3 text-[#FFB020]" />
-                    <span>Current Rank</span>
-                  </div>
-                  <span className="flex items-center gap-1 text-[7.5px] sm:text-[9px] text-[#FFB020] font-medium">
-                    <span className="w-1 h-1 rounded-full bg-[#FFB020]" />
-                    <span>Tier</span>
-                  </span>
-                </div>
-                <div className="text-[10.5px] sm:text-xs md:text-sm font-bold text-white truncate" title={currentRankName}>
-                  {currentRankName}
-                </div>
-              </div>
-
-              {/* Module 4: Network Status */}
-              <div
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onNavigateTab?.('network');
-                }}
-                className="p-2 sm:p-3 rounded-xl bg-[#050B14]/85 border border-white/[0.08] hover:border-[#00CFFF]/40 transition-all cursor-pointer group"
-              >
-                <div className="flex items-center justify-between text-[#98A2B3] mb-0.5">
-                  <div className="flex items-center gap-1.5 text-[8.5px] sm:text-[10px] font-medium">
-                    <Users className="w-3 h-3 text-[#00CFFF]" />
-                    <span>Network</span>
-                  </div>
-                  <span className="flex items-center gap-1 text-[7.5px] sm:text-[9px] text-[#32D583] font-medium">
-                    <span className="w-1 h-1 rounded-full bg-[#32D583]" />
-                    <span>Mesh</span>
-                  </span>
-                </div>
-                <div className="text-[10.5px] sm:text-xs md:text-sm font-bold text-[#00CFFF] truncate">
-                  {networkStatus}
-                </div>
-              </div>
-            </div>
-
-            {/* BACK BOTTOM ROW: Return Button & Brand Slogan */}
-            <div className="relative z-10 flex items-center justify-between gap-2 pt-1 border-t border-white/[0.06]">
-              {/* Return Button */}
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleFlipToggle();
-                }}
-                className="flip-trigger group inline-flex items-center gap-1.5 px-3 sm:px-4 py-1.5 rounded-xl bg-gradient-to-r from-[#00CFFF]/15 to-[#0077FF]/15 hover:from-[#00CFFF]/25 hover:to-[#0077FF]/25 border border-[#00CFFF]/45 text-[#00CFFF] hover:text-white text-[10px] sm:text-xs font-semibold tracking-wide transition-all shadow-sm active:scale-95 cursor-pointer"
-                aria-label="Return to Overview"
+                onClick={handleFlipToggle}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-xl bg-white/[0.06] hover:bg-white/[0.12] border border-white/[0.14] text-white text-[11px] font-semibold transition-all cursor-pointer active:scale-95 shrink-0"
+                aria-label="Flip back to Balance Card"
               >
-                <ArrowLeft className="w-3 h-3 text-[#00CFFF] transition-transform duration-300 group-hover:-translate-x-0.5" />
-                <span>Return to Overview</span>
+                <ArrowLeft className="w-3.5 h-3.5 text-[#F5B800]" />
+                <span>Flip Back</span>
               </button>
+            </div>
 
-              {/* Brand Slogan */}
-              <div className="text-[8px] sm:text-[9.5px] font-mono tracking-[0.25em] text-[#98A2B3] uppercase">
-                BUILD • CONNECT • EVOLVE
+            {/* Leadership Rank Hero Strip */}
+            <div className="relative z-10 flex items-center gap-3.5 p-3.5 rounded-2xl bg-black/35 border border-[#F5B800]/25">
+              <RankCrestEmblem rank={currentRankLevel} size={50} />
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-[#98A2B3]">
+                  Current Leadership Rank
+                </div>
+                <div className="text-base sm:text-lg font-extrabold text-white truncate">
+                  #{currentRankLevel} {currentRankName}
+                </div>
+                <div className="text-[11px] text-[#F5B800] font-medium truncate">
+                  7-Stage Career &amp; Leadership Ladder
+                </div>
               </div>
+            </div>
+
+            {/* Unilevel Depth & Direct Partners Stats */}
+            <div className="relative z-10 grid grid-cols-2 gap-2.5 sm:gap-3">
+              <div
+                onClick={() => onNavigateTab?.('network')}
+                className="p-3 rounded-2xl bg-black/35 hover:bg-black/45 border border-white/[0.08] cursor-pointer transition-colors min-w-0"
+              >
+                <div className="text-[10px] font-mono uppercase tracking-wider text-[#98A2B3] truncate">
+                  Unlocked Unilevel Depth
+                </div>
+                <div className="mt-1 flex items-baseline gap-1 font-mono font-extrabold text-white tabular-nums">
+                  <span className="text-lg sm:text-xl text-[#00E5FF]">{clampedGenerations}</span>
+                  <span className="text-xs text-[#98A2B3]">/ 16 Generations</span>
+                </div>
+              </div>
+
+              <div
+                onClick={() => onNavigateTab?.('network')}
+                className="p-3 rounded-2xl bg-black/35 hover:bg-black/45 border border-white/[0.08] cursor-pointer transition-colors min-w-0"
+              >
+                <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-wider text-[#98A2B3]">
+                  <span className="truncate">Direct Partners</span>
+                  <Users className="w-3.5 h-3.5 text-[#00E676] shrink-0" />
+                </div>
+                <div className="mt-1 flex items-baseline gap-1.5 font-mono font-extrabold text-white tabular-nums">
+                  <span className="text-lg sm:text-xl text-[#00E676]">{directPartnersCount}</span>
+                  <span className="text-xs text-[#98A2B3]">Gen-1 Active</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 1-Tap Copy Partner Referral Link */}
+            <div className="relative z-10 flex items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleCopyReferralLink}
+                className="flex-1 min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#F5B800] to-[#FFD54F] hover:brightness-105 text-[#050807] font-extrabold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 shadow-[0_12px_28px_-12px_rgba(245,184,0,0.65)]"
+              >
+                {copiedReferral ? (
+                  <>
+                    <Check className="w-4 h-4 shrink-0" />
+                    <span>Partner Referral Link Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Share2 className="w-4 h-4 shrink-0" />
+                    <span className="truncate">Copy Partner Referral Link</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Pagination Indicators matching reference image dots underneath */}
-      <div className="flex items-center justify-center gap-2 pt-0.5">
+      {/* Subtle Face Indicator Dots */}
+      <div className="flex items-center justify-center gap-2">
         <button
           type="button"
           onClick={() => setIsFlipped(false)}
-          aria-label="Show Front Overview Card"
-          className={`transition-all duration-300 rounded-full cursor-pointer ${
+          aria-label="Show Balance Front Face"
+          className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
             !isFlipped
-              ? 'w-7 sm:w-8 h-1.5 bg-gradient-to-r from-[#00CFFF] to-[#0088FF] shadow-[0_0_8px_rgba(0,207,255,0.6)]'
-              : 'w-1.5 h-1.5 bg-white/20 hover:bg-white/40'
+              ? 'w-8 bg-gradient-to-r from-[#00E5FF] to-[#00E676]'
+              : 'w-2 bg-white/20 hover:bg-white/40'
           }`}
         />
         <button
           type="button"
           onClick={() => setIsFlipped(true)}
-          aria-label="Show Back Network Card"
-          className={`transition-all duration-300 rounded-full cursor-pointer ${
+          aria-label="Show Leadership & Referral Back Face"
+          className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
             isFlipped
-              ? 'w-7 sm:w-8 h-1.5 bg-gradient-to-r from-[#00CFFF] to-[#0088FF] shadow-[0_0_8px_rgba(0,207,255,0.6)]'
-              : 'w-1.5 h-1.5 bg-white/20 hover:bg-white/40'
+              ? 'w-8 bg-gradient-to-r from-[#F5B800] to-[#FFD54F]'
+              : 'w-2 bg-white/20 hover:bg-white/40'
           }`}
         />
       </div>
-    </div>
+    </section>
   );
 };

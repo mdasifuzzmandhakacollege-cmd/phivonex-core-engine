@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BellRing, ShieldAlert, CheckCircle2, RefreshCw, Sparkles, X, AlertTriangle } from 'lucide-react';
 import { requestPushPermissionAndToken, checkPushSupport } from '../../services/webPushService';
+import { isInstalledAppEnvironment } from '../../utils/platformEnvironment';
 
 interface NotificationPermissionModalProps {
   userPublicId?: string;
@@ -15,6 +16,11 @@ export const NotificationPermissionModal: React.FC<NotificationPermissionModalPr
   const checkStatus = async () => {
     if (typeof window === 'undefined' || !('Notification' in window)) {
       setPermission('unsupported');
+      setIsOpen(false);
+      return;
+    }
+
+    if (isInstalledAppEnvironment() || localStorage.getItem('phx_web_notif_dismissed_v1') === 'true') {
       setIsOpen(false);
       return;
     }
@@ -83,10 +89,12 @@ export const NotificationPermissionModal: React.FC<NotificationPermissionModalPr
     }
   };
 
-  // Close temporarily - will re-prompt on navigation / interval until allowed
+  // Close and set local storage dismissal flag
   const handleDismissTemporarily = () => {
     setIsOpen(false);
-    // Will re-trigger prompt on next focus or 15 seconds
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('phx_web_notif_dismissed_v1', 'true');
+    }
   };
 
   if (!isOpen || permission === 'granted' || permission === 'unsupported') {

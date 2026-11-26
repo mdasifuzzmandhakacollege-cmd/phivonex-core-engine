@@ -8,6 +8,7 @@ import {
   getNextDhakaMidnightTime,
   getPreviousDhakaBusinessDate,
 } from '../utils/timezone';
+import { ENABLE_BINARY_ENGINE } from '../../config/referralConfig';
 
 // ============================================================================
 // 1. Immutable Server-Side Matching Tiers Configuration & Dynamic Logic
@@ -252,8 +253,8 @@ export function calculateDynamicMatchingDecomposition(
     throw new Error('Available volume units cannot be negative');
   }
 
-  // 1. Check if matching is disabled or user not qualified
-  if (!config.matchingEnabled || (config.sponsorQualificationRequired && !sponsorQualified)) {
+  // 1. Check if matching is disabled or binary engine is deprecated or user not qualified
+  if (!ENABLE_BINARY_ENGINE || !config.matchingEnabled || (config.sponsorQualificationRequired && !sponsorQualified)) {
     return {
       availableLeft,
       availableRight,
@@ -422,6 +423,28 @@ export async function settleUserMatchingForDate(
   userId: string,
   businessDate: string
 ): Promise<MatchingSettlementItem> {
+  if (!ENABLE_BINARY_ENGINE) {
+    const nowIso = new Date().toISOString();
+    return {
+      id: 'deprecated-binary-engine',
+      publicSettlementId: 'PHX-MAT-DEPRECATED',
+      userId,
+      businessDate,
+      availableLeft: 0,
+      availableRight: 0,
+      consumedLeft: 0,
+      consumedRight: 0,
+      carryLeftBefore: 0,
+      carryRightBefore: 0,
+      carryLeftAfter: 0,
+      carryRightAfter: 0,
+      totalBonusUsd: 0,
+      status: 'COMPLETED',
+      settledAt: nowIso,
+      createdAt: nowIso,
+      components: [],
+    };
+  }
   const db = dbClient || (await getDb());
 
   // 1. Check existing settlement (Idempotency check)
@@ -739,8 +762,19 @@ export async function runDailyMatchingSettlementCycle(
   targetBusinessDate?: string
 ): Promise<CycleSettlementResult> {
   const startTime = Date.now();
-  const db = await getDb();
   const businessDate = targetBusinessDate || getPreviousDhakaBusinessDate();
+
+  if (!ENABLE_BINARY_ENGINE) {
+    return {
+      businessDate,
+      status: 'SKIPPED_ALREADY_COMPLETED',
+      usersSettled: 0,
+      totalBonusUsd: 0,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  const db = await getDb();
 
   // 1. Global run safety lock attempt
   const lockRes = await db.query<{ business_date: string }>(

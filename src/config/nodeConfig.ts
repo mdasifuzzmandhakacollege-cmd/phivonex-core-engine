@@ -5,10 +5,13 @@
 
 export const GENESIS_NODE_CAP = 10000;
 export const NODE_BASE_PRICE_USD = 1000;
+export const DEFAULT_DAILY_PHIVO_EMISSION = 15;
+export const LIFETIME_PHIVO_ALLOCATION_PER_NODE = 10000;
+export const DEFAULT_PHIVO_REFERENCE_PRICE_USD = 0.10;
 export const RESERVATION_EXPIRY_MINUTES = 15;
 
-export type NodeStatus = 'AVAILABLE' | 'RESERVED' | 'ACTIVE' | 'RETIRED';
-export const NODE_STATUSES: NodeStatus[] = ['AVAILABLE', 'RESERVED', 'ACTIVE', 'RETIRED'];
+export type NodeStatus = 'AVAILABLE' | 'RESERVED' | 'ACTIVE' | 'EMITTING' | 'MATURED' | 'RETIRED';
+export const NODE_STATUSES: NodeStatus[] = ['AVAILABLE', 'RESERVED', 'ACTIVE', 'EMITTING', 'MATURED', 'RETIRED'];
 
 export type NodeOrderStatus = 'PENDING' | 'SETTLING' | 'COMPLETED' | 'CANCELLED' | 'EXPIRED' | 'FAILED';
 export const NODE_ORDER_STATUSES: NodeOrderStatus[] = ['PENDING', 'SETTLING', 'COMPLETED', 'CANCELLED', 'EXPIRED', 'FAILED'];
@@ -20,13 +23,17 @@ export const PAYMENT_METHODS: PaymentMethod[] = ['SIMULATED_INSTANT', 'CRYPTO_US
  * Allowed lifecycle state transitions for Nodes:
  * AVAILABLE -> RESERVED
  * RESERVED  -> ACTIVE | AVAILABLE
- * ACTIVE    -> RETIRED
+ * ACTIVE    -> MATURED | RETIRED
+ * EMITTING  -> ACTIVE | MATURED | RETIRED
+ * MATURED   -> RETIRED
  * RETIRED   -> (none)
  */
 export const ALLOWED_STATE_TRANSITIONS: Record<NodeStatus, NodeStatus[]> = {
   AVAILABLE: ['RESERVED'],
   RESERVED: ['ACTIVE', 'AVAILABLE'],
-  ACTIVE: ['RETIRED'],
+  ACTIVE: ['MATURED', 'RETIRED'],
+  EMITTING: ['ACTIVE', 'MATURED', 'RETIRED'],
+  MATURED: ['RETIRED'],
   RETIRED: [],
 };
 

@@ -79,8 +79,8 @@ interface PaginationData {
 const CATEGORY_OPTIONS = [
   { id: 'ALL', label: 'All Categories' },
   { id: 'NODE_REWARD', label: 'Genesis Mining', icon: Server },
-  { id: 'REFERRAL_COMMISSION', label: 'Direct Referral', icon: Users },
-  { id: 'MATCHING_BONUS', label: 'Binary Matching', icon: GitFork },
+  { id: 'REFERRAL_COMMISSION', label: 'Partner Royalty', icon: Users },
+  { id: 'MATCHING_BONUS', label: '16-Gen Royalty', icon: GitFork },
   { id: 'PROMOTION_BONUS', label: 'Rank Promotion', icon: Award },
   { id: 'BLOCKCHAIN_DEPOSIT', label: 'USDT Deposit', icon: ArrowDownLeft },
   { id: 'ADMIN_ADJUSTMENT', label: 'Account Credit / Debit', icon: ShieldCheck },
@@ -237,9 +237,9 @@ export const TransactionsView: React.FC<TransactionsViewProps> = ({ user: _user,
       case 'NODE_REWARD':
         return { label: 'Genesis Mining', icon: Server, color: 'text-[#00CFFF]', bg: 'bg-[#00CFFF]/10' };
       case 'REFERRAL_COMMISSION':
-        return { label: 'Direct Referral', icon: Users, color: 'text-[#168BFF]', bg: 'bg-[#168BFF]/10' };
+        return { label: 'Partner Royalty', icon: Users, color: 'text-[#168BFF]', bg: 'bg-[#168BFF]/10' };
       case 'MATCHING_BONUS':
-        return { label: 'Binary Matching', icon: GitFork, color: 'text-[#875BF7]', bg: 'bg-[#875BF7]/10' };
+        return { label: '16-Gen Royalty', icon: GitFork, color: 'text-[#875BF7]', bg: 'bg-[#875BF7]/10' };
       case 'PROMOTION_BONUS':
         return { label: 'Rank Promotion', icon: Award, color: 'text-[#FDB022]', bg: 'bg-[#FDB022]/10' };
       case 'BLOCKCHAIN_DEPOSIT':

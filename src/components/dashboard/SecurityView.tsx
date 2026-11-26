@@ -11,15 +11,14 @@ import {
   RefreshCw,
   LogOut,
   Laptop,
-  Globe,
   Clock,
   Check,
   Eye,
   EyeOff,
   History,
-  ShieldAlert,
-  ArrowRight,
-  Send
+  ShieldCheck,
+  Send,
+  Fingerprint,
 } from 'lucide-react';
 import { UserProfile, useAuth } from '../../context/AuthContext';
 
@@ -46,7 +45,7 @@ interface SecurityActivityItem {
   createdAt: string;
 }
 
-export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab, onLogout }) => {
+export const SecurityView: React.FC<SecurityViewProps> = ({ user, onLogout }) => {
   const { resendVerification } = useAuth();
 
   // Password State
@@ -62,6 +61,18 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
   const [isSendingVerification, setIsSendingVerification] = useState(false);
   const [verificationFeedback, setVerificationFeedback] = useState<string | null>(null);
 
+  // Anti-Phishing Code State (per-user persisted security phrase)
+  const storageKey = `phx_antiphishing_${user.publicId || user.id || 'member'}`;
+  const [antiPhishingCode, setAntiPhishingCode] = useState<string>(() => {
+    try {
+      return localStorage.getItem(storageKey) || '';
+    } catch {
+      return '';
+    }
+  });
+  const [antiPhishingInput, setAntiPhishingInput] = useState<string>(antiPhishingCode);
+  const [antiPhishingSaved, setAntiPhishingSaved] = useState(false);
+
   // Sessions State
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
@@ -73,37 +84,31 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
   const [activities, setActivities] = useState<SecurityActivityItem[]>([]);
   const [activityLoading, setActivityLoading] = useState(true);
 
-  // Fetch active sessions
   const fetchSessions = useCallback(async () => {
     try {
       setSessionsLoading(true);
-      const res = await fetch('/api/auth/sessions', {
-        credentials: 'include',
-      });
+      const res = await fetch('/api/auth/sessions', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setSessions(data.sessions || []);
+        setSessions(Array.isArray(data.sessions) ? data.sessions : []);
       }
-    } catch (err) {
-      console.warn('Failed to fetch active sessions:', err);
+    } catch {
+      // keep existing
     } finally {
       setSessionsLoading(false);
     }
   }, []);
 
-  // Fetch security activity
   const fetchActivity = useCallback(async () => {
     try {
       setActivityLoading(true);
-      const res = await fetch('/api/users/me/security-activity', {
-        credentials: 'include',
-      });
+      const res = await fetch('/api/users/me/security-activity', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
-        setActivities(data.activity || []);
+        setActivities(Array.isArray(data.activity) ? data.activity : []);
       }
-    } catch (err) {
-      console.warn('Failed to fetch security activity:', err);
+    } catch {
+      // keep existing
     } finally {
       setActivityLoading(false);
     }
@@ -114,7 +119,23 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
     fetchActivity();
   }, [fetchSessions, fetchActivity]);
 
-  // Handle Password Change
+  const handleSaveAntiPhishing = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = antiPhishingInput.trim().slice(0, 24);
+    try {
+      if (cleaned) {
+        localStorage.setItem(storageKey, cleaned);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
+    } catch {
+      // ignore storage errors
+    }
+    setAntiPhishingCode(cleaned);
+    setAntiPhishingSaved(true);
+    setTimeout(() => setAntiPhishingSaved(false), 3000);
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setPassError(null);
@@ -136,7 +157,6 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
     }
 
     setIsChangingPass(true);
-
     try {
       const res = await fetch('/api/auth/change-password', {
         method: 'POST',
@@ -150,12 +170,11 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
       });
 
       const data = await res.json();
-
       if (!res.ok) {
         throw new Error(data.message || 'Failed to update password.');
       }
 
-      setPassSuccess(data.message || 'Password changed successfully. All other sessions terminated.');
+      setPassSuccess(data.message || 'Password updated successfully. All other sessions terminated.');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
@@ -163,28 +182,26 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
       fetchActivity();
       setTimeout(() => setPassSuccess(null), 5000);
     } catch (err: any) {
-      setPassError(err.message || 'An error occurred while changing password.');
+      setPassError(err?.message || 'An error occurred while changing password.');
     } finally {
       setIsChangingPass(false);
     }
   };
 
-  // Handle Resend Verification Email
   const handleResendVerification = async () => {
     setIsSendingVerification(true);
     setVerificationFeedback(null);
     try {
       const res = await resendVerification(user.email);
-      setVerificationFeedback(res.message || 'Verification link dispatched to your email.');
+      setVerificationFeedback(res.message || 'Verification link sent to your email.');
       fetchActivity();
     } catch (err: any) {
-      setVerificationFeedback(err.message || 'Failed to dispatch verification email.');
+      setVerificationFeedback(err?.message || 'Failed to send verification email.');
     } finally {
       setIsSendingVerification(false);
     }
   };
 
-  // Handle Revoke Single Session
   const handleRevokeSession = async (sessionId: string) => {
     setRevokingId(sessionId);
     setSessionFeedback(null);
@@ -194,25 +211,21 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
         credentials: 'include',
       });
       const data = await res.json();
-
       if (data.isCurrent) {
-        // User revoked their own current session
         await onLogout();
         return;
       }
-
-      setSessionFeedback('Session successfully revoked.');
+      setSessionFeedback('Session revoked successfully.');
       fetchSessions();
       fetchActivity();
       setTimeout(() => setSessionFeedback(null), 4000);
-    } catch (err) {
+    } catch {
       setSessionFeedback('Failed to revoke session. Please try again.');
     } finally {
       setRevokingId(null);
     }
   };
 
-  // Handle Revoke All Other Devices
   const handleRevokeAllOthers = async () => {
     setIsRevokingAllOthers(true);
     setSessionFeedback(null);
@@ -223,12 +236,12 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
       });
       const data = await res.json();
       if (res.ok) {
-        setSessionFeedback(data.message || 'All other active sessions have been terminated.');
+        setSessionFeedback(data.message || 'All other device sessions terminated.');
         fetchSessions();
         fetchActivity();
         setTimeout(() => setSessionFeedback(null), 4000);
       }
-    } catch (err) {
+    } catch {
       setSessionFeedback('Failed to terminate other sessions.');
     } finally {
       setIsRevokingAllOthers(false);
@@ -238,8 +251,7 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
   const formatTimestamp = (isoString?: string) => {
     if (!isoString) return 'Active';
     try {
-      const date = new Date(isoString);
-      return date.toLocaleString('en-US', {
+      return new Date(isoString).toLocaleString('en-US', {
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
@@ -251,70 +263,67 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
   };
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto animate-fadeIn">
-      {/* Header Banner */}
-      <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl relative overflow-hidden">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
+    <div className="space-y-6 max-w-5xl mx-auto animate-fadeIn pb-10 min-w-0 max-w-full overflow-x-hidden">
+      {/* 1. INSTITUTIONAL SECURITY HEADER */}
+      <div className="oneui-glass-card rounded-[24px] p-5 sm:p-7 relative overflow-hidden">
+        <div className="absolute top-0 right-0 -mt-14 -mr-14 w-72 h-72 bg-[#00E676]/[0.07] rounded-full blur-3xl pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="w-12 h-12 rounded-2xl bg-[#00E676]/12 border border-[#00E676]/30 flex items-center justify-center text-[#00E676] shrink-0">
               <Shield className="w-6 h-6" />
             </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
-                Security & Session Management
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+                Institutional Security Center
               </h1>
-              <p className="text-xs text-[#98A2B3] mt-0.5">
-                Cryptographic access controls, Argon2id key rotation, and real-time device sessions.
+              <p className="text-xs sm:text-sm text-slate-400 mt-0.5">
+                Multi-factor authorization, password rotation, anti-phishing controls, and active session governance.
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono text-[#32D583] bg-[#32D583]/10 px-3 py-1 rounded-full border border-[#32D583]/20 flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-[#32D583] animate-pulse" />
-              TLS 1.3 Active
-            </span>
-          </div>
+
+          <span className="text-[11px] font-mono font-bold text-[#00E676] bg-[#00E676]/12 px-3 py-1.5 rounded-full border border-[#00E676]/25 flex items-center gap-1.5 self-start sm:self-center shrink-0">
+            <span className="w-2 h-2 rounded-full bg-[#00E676] animate-pulse" />
+            Session Protected
+          </span>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        
-        {/* Left Column (2 Cols): Change Password + Active Sessions */}
-        <div className="lg:col-span-2 space-y-8">
-          
-          {/* SECTION 1: CHANGE PASSWORD */}
-          <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Left 2 Columns: Password Management + Anti-Phishing + Active Sessions */}
+        <div className="lg:col-span-2 space-y-5 min-w-0">
+          {/* CARD 1: PASSWORD MANAGEMENT */}
+          <div className="oneui-glass-card rounded-[24px] p-5 sm:p-6 space-y-5">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
               <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Key className="w-4 h-4 text-[#00CFFF]" />
-                  <span>Change Password</span>
+                <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                  <Key className="w-4 h-4 text-[#00E5FF]" />
+                  <span>Password Management</span>
                 </h2>
-                <p className="text-xs text-[#98A2B3] mt-0.5">
-                  Passwords are cryptographically salted and hashed with Argon2id (m=65536, t=3, p=1).
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Updating your password automatically signs out all other active devices.
                 </p>
               </div>
             </div>
 
             {passSuccess && (
-              <div className="p-4 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583] text-xs flex items-center gap-3 animate-fadeIn">
-                <CheckCircle2 className="w-5 h-5 shrink-0" />
+              <div className="p-3.5 rounded-2xl bg-[#00E676]/12 border border-[#00E676]/30 text-[#00E676] text-xs flex items-center gap-2.5">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>{passSuccess}</span>
               </div>
             )}
 
             {passError && (
-              <div className="p-4 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 text-[#F04438] text-xs flex items-center gap-3 animate-fadeIn">
-                <AlertCircle className="w-5 h-5 shrink-0" />
+              <div className="p-3.5 rounded-2xl bg-[#FF4D4F]/12 border border-[#FF4D4F]/30 text-[#FF8587] text-xs flex items-center gap-2.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-[#FF4D4F]" />
                 <span>{passError}</span>
               </div>
             )}
 
             <form onSubmit={handleChangePassword} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-[#98A2B3] mb-1.5">
-                  Current Password
-                </label>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5">Current Password</label>
                 <div className="relative">
                   <input
                     type={showPasswords ? 'text' : 'password'}
@@ -322,21 +331,21 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     required
                     placeholder="Enter current password"
-                    className="w-full px-4 py-3 rounded-xl bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] focus:ring-1 focus:ring-[#00CFFF] text-white text-sm outline-none transition-all pr-10"
+                    className="w-full px-4 py-3 rounded-2xl bg-[#050807]/85 border border-white/[0.1] focus:border-[#00E5FF] text-white text-sm outline-none transition-all pr-10"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPasswords(!showPasswords)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#98A2B3] hover:text-white p-1"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-1 cursor-pointer"
                   >
                     {showPasswords ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div>
-                  <label className="block text-xs font-semibold text-[#98A2B3] mb-1.5">
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">
                     New Password (Min 10 chars)
                   </label>
                   <input
@@ -346,14 +355,12 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                     required
                     minLength={10}
                     placeholder="Min 10 characters"
-                    className="w-full px-4 py-3 rounded-xl bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] focus:ring-1 focus:ring-[#00CFFF] text-white text-sm outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-2xl bg-[#050807]/85 border border-white/[0.1] focus:border-[#00E5FF] text-white text-sm outline-none transition-all"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-[#98A2B3] mb-1.5">
-                    Confirm New Password
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-400 mb-1.5">Confirm New Password</label>
                   <input
                     type={showPasswords ? 'text' : 'password'}
                     value={confirmPassword}
@@ -361,24 +368,21 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                     required
                     minLength={10}
                     placeholder="Re-enter new password"
-                    className="w-full px-4 py-3 rounded-xl bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] focus:ring-1 focus:ring-[#00CFFF] text-white text-sm outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-2xl bg-[#050807]/85 border border-white/[0.1] focus:border-[#00E5FF] text-white text-sm outline-none transition-all"
                   />
                 </div>
               </div>
 
-              <div className="pt-2 flex items-center justify-between">
-                <p className="text-[11px] text-[#98A2B3]">
-                  Updating your password will automatically terminate all other device sessions.
-                </p>
+              <div className="pt-1 flex justify-end">
                 <button
                   type="submit"
                   disabled={isChangingPass}
-                  className="px-6 py-2.5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 disabled:opacity-50 text-[#05070B] text-xs font-bold transition-all shadow-lg shadow-[#00CFFF]/10 flex items-center gap-2 cursor-pointer min-h-[44px]"
+                  className="px-5 py-2.5 rounded-2xl bg-[#00E5FF] hover:bg-[#00E5FF]/90 disabled:opacity-50 text-[#050807] text-xs font-bold transition-all shadow-lg shadow-[#00E5FF]/20 flex items-center gap-2 cursor-pointer min-h-[44px]"
                 >
                   {isChangingPass ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Hashing & Rotating...</span>
+                      <span>Updating...</span>
                     </>
                   ) : (
                     <>
@@ -391,17 +395,63 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
             </form>
           </div>
 
-          {/* SECTION 2: ACTIVE SESSIONS */}
-          <div className="p-6 sm:p-8 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-4">
+          {/* CARD 2: ANTI-PHISHING CODE */}
+          <div className="oneui-glass-card rounded-[24px] p-5 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
               <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Laptop className="w-4 h-4 text-[#00CFFF]" />
-                  <span>Active Device Sessions</span>
+                <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                  <Fingerprint className="w-4 h-4 text-[#F5B800]" />
+                  <span>Anti-Phishing Code</span>
                 </h2>
-                <p className="text-xs text-[#98A2B3] mt-0.5">
-                  Real-time view of verified browser and API client handshakes.
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Configure a personal verification phrase to authenticate official PHIVONEX security notices.
                 </p>
+              </div>
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold border shrink-0 ${
+                  antiPhishingCode
+                    ? 'bg-[#00E676]/12 text-[#00E676] border-[#00E676]/30'
+                    : 'bg-[#F5B800]/12 text-[#F5B800] border-[#F5B800]/30'
+                }`}
+              >
+                {antiPhishingCode ? 'Configured' : 'Not Set'}
+              </span>
+            </div>
+
+            <form onSubmit={handleSaveAntiPhishing} className="flex flex-col sm:flex-row gap-2.5">
+              <input
+                type="text"
+                maxLength={24}
+                value={antiPhishingInput}
+                onChange={(e) => setAntiPhishingInput(e.target.value)}
+                placeholder="e.g., SOVEREIGN-ALPHA-99"
+                className="flex-1 px-4 py-3 rounded-2xl bg-[#050807]/85 border border-white/[0.1] focus:border-[#F5B800] text-white font-mono text-xs outline-none"
+              />
+              <button
+                type="submit"
+                className="px-5 py-3 rounded-2xl bg-[#F5B800] hover:bg-[#F5B800]/90 text-[#050807] text-xs font-bold transition-all cursor-pointer min-h-[44px] shrink-0 active:scale-95"
+              >
+                {antiPhishingSaved ? 'Saved!' : 'Save Phrase'}
+              </button>
+            </form>
+
+            {antiPhishingCode && (
+              <div className="p-3 rounded-2xl bg-[#050807]/70 border border-white/[0.08] flex items-center justify-between text-xs font-mono">
+                <span className="text-slate-400">Active Security Phrase:</span>
+                <span className="text-[#F5B800] font-bold">{antiPhishingCode}</span>
+              </div>
+            )}
+          </div>
+
+          {/* CARD 3: ACTIVE SESSIONS */}
+          <div className="oneui-glass-card rounded-[24px] p-5 sm:p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.08] pb-3.5">
+              <div>
+                <h2 className="text-sm sm:text-base font-bold text-white flex items-center gap-2">
+                  <Laptop className="w-4 h-4 text-[#00E5FF]" />
+                  <span>Active Sessions</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">Devices currently signed in to your PHIVONEX workspace.</p>
               </div>
 
               <div className="flex items-center gap-2">
@@ -409,10 +459,10 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                   type="button"
                   onClick={fetchSessions}
                   disabled={sessionsLoading}
-                  className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center"
+                  className="p-2 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] text-slate-300 hover:text-white transition-colors cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center"
                   title="Refresh Sessions"
                 >
-                  <RefreshCw className={`w-4 h-4 ${sessionsLoading ? 'animate-spin text-[#00CFFF]' : ''}`} />
+                  <RefreshCw className={`w-4 h-4 ${sessionsLoading ? 'animate-spin text-[#00E5FF]' : ''}`} />
                 </button>
 
                 {sessions.length > 1 && (
@@ -420,33 +470,33 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                     type="button"
                     onClick={handleRevokeAllOthers}
                     disabled={isRevokingAllOthers}
-                    className="px-3 py-2 rounded-xl bg-[#F04438]/10 hover:bg-[#F04438]/20 border border-[#F04438]/30 text-[#F04438] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer min-h-[38px]"
+                    className="px-3 py-2 rounded-xl bg-[#FF4D4F]/12 hover:bg-[#FF4D4F]/20 border border-[#FF4D4F]/30 text-[#FF4D4F] text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer min-h-[38px]"
                   >
                     {isRevokingAllOthers ? (
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
                       <LogOut className="w-3.5 h-3.5" />
                     )}
-                    <span>Logout All Others</span>
+                    <span>Revoke Others</span>
                   </button>
                 )}
               </div>
             </div>
 
             {sessionFeedback && (
-              <div className="p-3.5 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 text-[#00CFFF] text-xs flex items-center gap-2.5 animate-fadeIn">
+              <div className="p-3 rounded-2xl bg-[#00E5FF]/12 border border-[#00E5FF]/30 text-[#00E5FF] text-xs flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>{sessionFeedback}</span>
               </div>
             )}
 
             {sessionsLoading ? (
-              <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-[#98A2B3]">
-                <Loader2 className="w-5 h-5 animate-spin text-[#00CFFF]" />
+              <div className="py-8 flex flex-col items-center justify-center gap-2 text-xs text-slate-400">
+                <Loader2 className="w-5 h-5 animate-spin text-[#00E5FF]" />
                 <span>Loading active sessions...</span>
               </div>
             ) : sessions.length === 0 ? (
-              <div className="p-6 rounded-xl bg-[#05070B] border border-white/[0.06] text-center text-xs text-[#98A2B3]">
+              <div className="p-6 rounded-2xl bg-[#050807]/70 border border-white/[0.07] text-center text-xs text-slate-400">
                 No active sessions found.
               </div>
             ) : (
@@ -454,61 +504,57 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
                 {sessions.map((s) => (
                   <div
                     key={s.id}
-                    className={`p-4 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                    className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
                       s.isCurrent
-                        ? 'bg-[#00CFFF]/[0.03] border-[#00CFFF]/30'
-                        : 'bg-[#05070B] border-white/[0.06] hover:border-white/[0.12]'
+                        ? 'bg-[#00E5FF]/[0.05] border-[#00E5FF]/30'
+                        : 'bg-[#050807]/75 border-white/[0.07]'
                     }`}
                   >
-                    <div className="flex items-start gap-3.5">
+                    <div className="flex items-start gap-3 min-w-0">
                       <div
                         className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
                           s.isCurrent
-                            ? 'bg-[#00CFFF]/10 text-[#00CFFF] border border-[#00CFFF]/30'
-                            : 'bg-white/[0.04] text-[#98A2B3] border border-white/[0.08]'
+                            ? 'bg-[#00E5FF]/15 text-[#00E5FF] border border-[#00E5FF]/30'
+                            : 'bg-white/[0.05] text-slate-400 border border-white/[0.08]'
                         }`}
                       >
                         <Laptop className="w-5 h-5" />
                       </div>
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-white">{s.device}</span>
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs sm:text-sm font-bold text-white truncate">{s.device}</span>
                           {s.isCurrent && (
-                            <span className="text-[10px] font-mono text-[#00CFFF] bg-[#00CFFF]/10 px-2 py-0.5 rounded-full border border-[#00CFFF]/20">
-                              Current Session
+                            <span className="text-[10px] font-mono text-[#00E5FF] bg-[#00E5FF]/12 px-2 py-0.5 rounded-full border border-[#00E5FF]/25">
+                              Current
                             </span>
                           )}
                         </div>
-                        <div className="flex items-center gap-3 text-[11px] text-[#98A2B3] font-mono">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 font-mono">
                           <span className="flex items-center gap-1">
-                            <Clock className="w-3 h-3 text-[#98A2B3]" />
-                            Last active: {formatTimestamp(s.lastUsedAt)}
+                            <Clock className="w-3 h-3" />
+                            {formatTimestamp(s.lastUsedAt)}
                           </span>
-                          <span>•</span>
-                          <span>Started: {formatTimestamp(s.createdAt)}</span>
                         </div>
                       </div>
                     </div>
 
-                    <div>
-                      <button
-                        type="button"
-                        onClick={() => handleRevokeSession(s.id)}
-                        disabled={revokingId === s.id}
-                        className={`w-full sm:w-auto px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] ${
-                          s.isCurrent
-                            ? 'bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] hover:text-white border border-white/[0.1]'
-                            : 'bg-[#F04438]/10 hover:bg-[#F04438]/20 text-[#F04438] border border-[#F04438]/20'
-                        }`}
-                      >
-                        {revokingId === s.id ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <LogOut className="w-3.5 h-3.5" />
-                        )}
-                        <span>{s.isCurrent ? 'Sign Out This Session' : 'Revoke Session'}</span>
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRevokeSession(s.id)}
+                      disabled={revokingId === s.id}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px] shrink-0 ${
+                        s.isCurrent
+                          ? 'bg-white/[0.06] hover:bg-white/[0.12] text-slate-300 hover:text-white border border-white/[0.1]'
+                          : 'bg-[#FF4D4F]/12 hover:bg-[#FF4D4F]/20 text-[#FF4D4F] border border-[#FF4D4F]/25'
+                      }`}
+                    >
+                      {revokingId === s.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <LogOut className="w-3.5 h-3.5" />
+                      )}
+                      <span>{s.isCurrent ? 'Sign Out' : 'Revoke'}</span>
+                    </button>
                   </div>
                 ))}
               </div>
@@ -516,154 +562,117 @@ export const SecurityView: React.FC<SecurityViewProps> = ({ user, onNavigateTab,
           </div>
         </div>
 
-        {/* Right Column (1 Col): Verification Status + Security Activity + 2FA Placeholder */}
-        <div className="space-y-8">
-          
-          {/* SECTION 3: ACCOUNT VERIFICATION STATUS */}
-          <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
+        {/* Right Column: 2FA & Verification + Security Event Log */}
+        <div className="space-y-5 min-w-0">
+          {/* CARD 4: TWO-FACTOR AUTHENTICATION (2FA) */}
+          <div className="oneui-glass-card rounded-[24px] p-5 sm:p-6 space-y-4">
             <div className="border-b border-white/[0.08] pb-3">
               <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-[#00CFFF]" />
-                <span>Verification Status</span>
+                <ShieldCheck className="w-4 h-4 text-[#00E676]" />
+                <span>Two-Factor Authentication (2FA)</span>
               </h3>
-              <p className="text-[11px] text-[#98A2B3] mt-0.5">
-                Authentication channels verified by cryptographic consensus.
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Verification channels securing logins and withdrawals.
               </p>
             </div>
 
-            {/* Email Verification Box */}
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-3">
-              <div className="flex items-center justify-between">
+            <div className="p-3.5 rounded-2xl bg-[#050807]/75 border border-white/[0.07] space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-[#98A2B3]" />
-                  <span className="text-xs font-semibold text-white">Email Address</span>
+                  <Mail className="w-4 h-4 text-[#00E5FF]" />
+                  <span className="text-xs font-bold text-white">Email OTP (2FA)</span>
                 </div>
                 {user.emailVerified ? (
-                  <span className="text-[10px] font-mono text-[#32D583] bg-[#32D583]/10 px-2 py-0.5 rounded border border-[#32D583]/20 flex items-center gap-1">
+                  <span className="text-[10px] font-mono text-[#00E676] bg-[#00E676]/12 px-2 py-0.5 rounded-full border border-[#00E676]/25 flex items-center gap-1">
                     <Check className="w-3 h-3" />
-                    Verified
+                    Active
                   </span>
                 ) : (
-                  <span className="text-[10px] font-mono text-[#F04438] bg-[#F04438]/10 px-2 py-0.5 rounded border border-[#F04438]/20 flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3" />
+                  <span className="text-[10px] font-mono text-[#FF4D4F] bg-[#FF4D4F]/12 px-2 py-0.5 rounded-full border border-[#FF4D4F]/25">
                     Unverified
                   </span>
                 )}
               </div>
-              <div className="text-[11px] text-[#98A2B3] truncate">{user.email}</div>
+              <div className="text-[11px] text-slate-400 truncate font-mono">{user.email}</div>
 
               {!user.emailVerified && (
-                <div className="pt-1">
+                <div>
                   <button
                     type="button"
                     onClick={handleResendVerification}
                     disabled={isSendingVerification}
-                    className="w-full py-2 px-3 rounded-lg bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 text-xs font-bold text-[#00CFFF] transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px]"
+                    className="w-full py-2 px-3 rounded-xl bg-[#00E5FF]/12 hover:bg-[#00E5FF]/20 border border-[#00E5FF]/30 text-xs font-bold text-[#00E5FF] transition-all flex items-center justify-center gap-1.5 cursor-pointer min-h-[38px]"
                   >
                     {isSendingVerification ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Sending Link...</span>
-                      </>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     ) : (
-                      <>
-                        <Send className="w-3.5 h-3.5" />
-                        <span>Resend Verification Email</span>
-                      </>
+                      <Send className="w-3.5 h-3.5" />
                     )}
+                    <span>Send Verification Email</span>
                   </button>
                   {verificationFeedback && (
-                    <p className="text-[10px] text-[#00CFFF] mt-2 text-center animate-fadeIn">
-                      {verificationFeedback}
-                    </p>
+                    <p className="text-[10px] text-[#00E5FF] mt-2 text-center">{verificationFeedback}</p>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Mobile Phone Verification Box */}
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
-              <div className="flex items-center justify-between">
+            <div className="p-3.5 rounded-2xl bg-[#050807]/75 border border-white/[0.07] space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <Smartphone className="w-4 h-4 text-[#98A2B3]" />
-                  <span className="text-xs font-semibold text-white">Mobile SMS</span>
+                  <Smartphone className="w-4 h-4 text-[#F5B800]" />
+                  <span className="text-xs font-bold text-white">Authenticator / Passkey</span>
                 </div>
-                <span className="text-[10px] font-mono text-[#98A2B3] bg-white/[0.04] px-2 py-0.5 rounded border border-white/[0.08]">
-                  Standard Tier
+                <span className="text-[10px] font-mono text-[#F5B800] bg-[#F5B800]/12 px-2 py-0.5 rounded-full border border-[#F5B800]/25">
+                  Phase 2
                 </span>
               </div>
-              <div className="text-[11px] text-[#98A2B3] font-mono">
-                {user.phone || 'No phone registered'}
-              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Hardware FIDO2 &amp; TOTP Authenticator support is scheduled for the next security tier upgrade.
+              </p>
             </div>
           </div>
 
-          {/* SECTION 4: RECENT SECURITY ACTIVITY */}
-          <div className="p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <History className="w-4 h-4 text-[#00CFFF]" />
-                  <span>Recent Security Events</span>
-                </h3>
-                <p className="text-[11px] text-[#98A2B3] mt-0.5">
-                  Privacy-safe audit log for operator account events.
-                </p>
-              </div>
+          {/* CARD 5: SECURITY EVENT LOG */}
+          <div className="oneui-glass-card rounded-[24px] p-5 sm:p-6 space-y-4">
+            <div className="border-b border-white/[0.08] pb-3">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <History className="w-4 h-4 text-[#00E5FF]" />
+                <span>Security Event Log</span>
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">Recent authentication and account events.</p>
             </div>
 
             {activityLoading ? (
-              <div className="py-6 flex flex-col items-center justify-center gap-2 text-xs text-[#98A2B3]">
-                <Loader2 className="w-4 h-4 animate-spin text-[#00CFFF]" />
-                <span>Loading activity log...</span>
+              <div className="py-6 flex flex-col items-center justify-center gap-2 text-xs text-slate-400">
+                <Loader2 className="w-4 h-4 animate-spin text-[#00E5FF]" />
+                <span>Loading event log...</span>
               </div>
             ) : activities.length === 0 ? (
-              <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] text-center text-[11px] text-[#98A2B3]">
+              <div className="p-4 rounded-2xl bg-[#050807]/70 border border-white/[0.07] text-center text-[11px] text-slate-400">
                 No security events recorded yet.
               </div>
             ) : (
-              <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+              <div className="space-y-2.5 max-h-[340px] overflow-y-auto pr-1">
                 {activities.map((act) => (
                   <div
                     key={act.id}
-                    className="p-3 rounded-xl bg-[#05070B] border border-white/[0.04] space-y-1 text-xs"
+                    className="p-3 rounded-2xl bg-[#050807]/75 border border-white/[0.06] space-y-1 text-xs"
                   >
-                    <div className="flex items-center justify-between">
+                    <div className="flex items-center justify-between gap-2">
                       <span className="font-semibold text-white">{act.description}</span>
-                      <span className="text-[10px] font-mono text-[#98A2B3] shrink-0 ml-2">
+                      <span className="text-[10px] font-mono text-slate-400 shrink-0">
                         {formatTimestamp(act.createdAt)}
                       </span>
                     </div>
-                    <div className="text-[10px] font-mono text-[#00CFFF] flex items-center gap-1.5">
-                      <span>Device:</span>
-                      <span className="text-[#98A2B3]">{act.device || 'Standard Client'}</span>
+                    <div className="text-[10px] font-mono text-[#00E5FF]">
+                      Device: <span className="text-slate-400">{act.device || 'Web Client'}</span>
                     </div>
                   </div>
                 ))}
               </div>
             )}
           </div>
-
-          {/* SECTION 5: TWO-FACTOR AUTHENTICATION (COMING SOON VISUAL RESERVE) */}
-          <div className="p-6 rounded-2xl bg-gradient-to-br from-[#07101D] to-[#0D1B2E] border border-dashed border-white/[0.12] space-y-3 relative overflow-hidden">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-white font-bold text-xs">
-                <ShieldAlert className="w-4 h-4 text-[#98A2B3]" />
-                <span>Two-Factor Authentication (2FA)</span>
-              </div>
-              <span className="text-[10px] font-mono uppercase bg-white/[0.06] text-[#98A2B3] border border-white/[0.1] px-2 py-0.5 rounded-full">
-                Coming Soon
-              </span>
-            </div>
-            <p className="text-[11px] text-[#98A2B3] leading-relaxed">
-              Hardware Security Key (FIDO2 / WebAuthn) and TOTP Authenticator integration are scheduled for activation in a subsequent protocol release.
-            </p>
-            <div className="pt-1 flex items-center gap-2 text-[10px] font-mono text-[#98A2B3]/70">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#98A2B3]/50" />
-              <span>Cryptographic standard: RFC 6238 / FIDO2</span>
-            </div>
-          </div>
-
         </div>
       </div>
     </div>

@@ -2,28 +2,20 @@ import React, { useState, useMemo } from 'react';
 import {
   Activity,
   Server,
-  Zap,
-  Coins,
-  Users,
-  GitFork,
-  ArrowDownLeft,
-  ArrowUpRight,
-  RotateCcw,
-  CheckCircle2,
+  TrendingUp,
   Clock,
   Sparkles,
   ChevronRight,
   Copy,
   Check,
-  Search,
-  Filter,
   Layers,
   Award,
   ShieldCheck,
   X,
-  ExternalLink,
+  RotateCcw,
+  ArrowDownLeft,
+  ArrowUpRight,
 } from 'lucide-react';
-import { PhivoCoinIcon, UsdtIcon } from '../brand/CryptoIcons';
 import { getTransactionUserDescription } from '../../utils/transactionDisplay';
 
 export interface ActivityEventItem {
@@ -31,16 +23,7 @@ export interface ActivityEventItem {
   publicTxnId: string;
   userId: string;
   entryType: 'CREDIT' | 'DEBIT' | 'REVERSAL';
-  sourceType:
-    | 'REFERRAL_COMMISSION'
-    | 'MATCHING_BONUS'
-    | 'PROMOTION_BONUS'
-    | 'NODE_REWARD'
-    | 'NODE_PURCHASE'
-    | 'BLOCKCHAIN_DEPOSIT'
-    | 'COIN_SWAP'
-    | 'WITHDRAWAL'
-    | string;
+  sourceType: string;
   sourceId: string;
   sourceRef: string;
   description: string;
@@ -52,11 +35,12 @@ export interface ActivityEventItem {
 
 export type ActivityCategoryFilter =
   | 'ALL'
-  | 'NODE_ACTIVATION'
-  | 'REWARDS_CLAIMED'
-  | 'REFERRAL'
-  | 'MATCHING'
-  | 'DEPOSIT_SWAP';
+  | 'TRADING_YIELD'
+  | 'VAULT_YIELD'
+  | 'NODE_MINING'
+  | 'UNILEVEL_ROYALTIES'
+  | 'RANK_MILESTONES'
+  | 'DEPOSITS_WITHDRAWALS';
 
 interface RecentActivityLogProps {
   transactions?: ActivityEventItem[];
@@ -65,6 +49,48 @@ interface RecentActivityLogProps {
   isRefreshing?: boolean;
 }
 
+const FILTER_PILLS: Array<{
+  id: ActivityCategoryFilter;
+  label: string;
+  activeClass: string;
+}> = [
+  {
+    id: 'ALL',
+    label: 'All',
+    activeClass: 'bg-[#00E5FF] text-[#050807] border-[#00E5FF]',
+  },
+  {
+    id: 'TRADING_YIELD',
+    label: 'Trading Yield',
+    activeClass: 'bg-[#00E5FF]/20 text-[#00E5FF] border-[#00E5FF]/50',
+  },
+  {
+    id: 'VAULT_YIELD',
+    label: 'Vault Yield',
+    activeClass: 'bg-[#F5B800]/20 text-[#F5B800] border-[#F5B800]/50',
+  },
+  {
+    id: 'NODE_MINING',
+    label: 'Node Mining',
+    activeClass: 'bg-[#00E676]/20 text-[#00E676] border-[#00E676]/50',
+  },
+  {
+    id: 'UNILEVEL_ROYALTIES',
+    label: '16-Gen Royalties',
+    activeClass: 'bg-[#00E5FF]/20 text-[#00E5FF] border-[#00E5FF]/50',
+  },
+  {
+    id: 'RANK_MILESTONES',
+    label: 'Rank Milestones',
+    activeClass: 'bg-[#F5B800]/20 text-[#F5B800] border-[#F5B800]/50',
+  },
+  {
+    id: 'DEPOSITS_WITHDRAWALS',
+    label: 'Deposits & Withdrawals',
+    activeClass: 'bg-white/15 text-white border-white/35',
+  },
+];
+
 export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
   transactions = [],
   onNavigateTab,
@@ -72,41 +98,33 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
   isRefreshing = false,
 }) => {
   const [activeCategory, setActiveCategory] = useState<ActivityCategoryFilter>('ALL');
-  const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedEvent, setSelectedEvent] = useState<ActivityEventItem | null>(null);
   const [copiedId, setCopiedId] = useState<boolean>(false);
 
-  // Classify event into rich display category
   const getEventCategory = (tx: ActivityEventItem): ActivityCategoryFilter => {
     const st = (tx.sourceType || '').toUpperCase();
-    if (st === 'NODE_PURCHASE') return 'NODE_ACTIVATION';
-    if (st === 'NODE_REWARD') return 'REWARDS_CLAIMED';
-    if (st === 'REFERRAL_COMMISSION') return 'REFERRAL';
-    if (st === 'MATCHING_BONUS' || st === 'PROMOTION_BONUS') return 'MATCHING';
-    if (st === 'BLOCKCHAIN_DEPOSIT' || st === 'COIN_SWAP' || st === 'WITHDRAWAL') return 'DEPOSIT_SWAP';
+    if (st.includes('TRADING_POOL') || st.includes('QUANTUM_ALPHA')) return 'TRADING_YIELD';
+    if (st.includes('CHRONO_VAULT')) return 'VAULT_YIELD';
+    if (st === 'NODE_REWARD' || st === 'NODE_PURCHASE' || st.includes('GENESIS_NODE')) return 'NODE_MINING';
+    if (st.includes('UNILEVEL_ROYALTY') || st === 'REFERRAL_COMMISSION') return 'UNILEVEL_ROYALTIES';
+    if (st.includes('RANK') || st === 'PROMOTION_BONUS' || st === 'LEADERSHIP_RANK_REWARD') return 'RANK_MILESTONES';
+    if (
+      st.includes('DEPOSIT') ||
+      st.includes('WITHDRAWAL') ||
+      st === 'COIN_SWAP' ||
+      st.includes('SWAP') ||
+      st.includes('REDEMPTION')
+    ) {
+      return 'DEPOSITS_WITHDRAWALS';
+    }
     return 'ALL';
   };
 
-  // Filtered Activity List
   const filteredEvents = useMemo(() => {
-    return transactions.filter((tx) => {
-      if (activeCategory !== 'ALL') {
-        const cat = getEventCategory(tx);
-        if (cat !== activeCategory) return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase().trim();
-        const desc = (tx.description || '').toLowerCase();
-        const ref = (tx.sourceRef || '').toLowerCase();
-        const txId = (tx.publicTxnId || '').toLowerCase();
-        const userDesc = getTransactionUserDescription(tx).toLowerCase();
-        return desc.includes(q) || ref.includes(q) || txId.includes(q) || userDesc.includes(q);
-      }
-      return true;
-    });
-  }, [transactions, activeCategory, searchQuery]);
+    if (activeCategory === 'ALL') return transactions;
+    return transactions.filter((tx) => getEventCategory(tx) === activeCategory);
+  }, [transactions, activeCategory]);
 
-  // Relative Time Helper (e.g., '2 mins ago', '1 hour ago', 'Just now')
   const getRelativeTime = (isoDateStr: string) => {
     if (!isoDateStr) return 'Recently';
     const date = new Date(isoDateStr);
@@ -128,11 +146,13 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
     });
   };
 
-  const formatCurrency = (val: number, minimumFractionDigits = 2) => {
-    return Number(val || 0).toLocaleString('en-US', {
-      minimumFractionDigits,
-      maximumFractionDigits: 2,
+  const formatAmount = (val: number, currency?: string) => {
+    const isPhivo = (currency || '').toUpperCase() === 'PHIVO';
+    const formatted = Number(val || 0).toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: isPhivo ? 4 : 2,
     });
+    return isPhivo ? `${formatted} PHIVO` : `$${formatted} ${currency || 'USDT'}`;
   };
 
   const handleCopyPublicId = (text: string) => {
@@ -141,109 +161,136 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
     setTimeout(() => setCopiedId(false), 2000);
   };
 
-  // Get visual badge & icon configs per event type
   const getEventBadgeConfig = (tx: ActivityEventItem) => {
     const st = (tx.sourceType || '').toUpperCase();
-    switch (st) {
-      case 'NODE_PURCHASE':
-        return {
-          label: 'Node Activation',
-          bgColor: 'bg-[#32D583]/10',
-          borderColor: 'border-[#32D583]/30',
-          textColor: 'text-[#32D583]',
-          icon: Server,
-        };
-      case 'NODE_REWARD':
-        return {
-          label: 'Mining Reward',
-          bgColor: 'bg-[#00CFFF]/10',
-          borderColor: 'border-[#00CFFF]/30',
-          textColor: 'text-[#00CFFF]',
-          icon: Sparkles,
-        };
-      case 'REFERRAL_COMMISSION':
-        return {
-          label: 'Direct Referral ($50)',
-          bgColor: 'bg-[#168BFF]/10',
-          borderColor: 'border-[#168BFF]/30',
-          textColor: 'text-[#168BFF]',
-          icon: Zap,
-        };
-      case 'MATCHING_BONUS':
-        return {
-          label: 'Binary Matching',
-          bgColor: 'bg-[#32D583]/10',
-          borderColor: 'border-[#32D583]/30',
-          textColor: 'text-[#32D583]',
-          icon: GitFork,
-        };
-      case 'PROMOTION_BONUS':
-        return {
-          label: 'Rank Milestone',
-          bgColor: 'bg-[#F59E0B]/10',
-          borderColor: 'border-[#F59E0B]/30',
-          textColor: 'text-[#F59E0B]',
-          icon: Award,
-        };
-      case 'BLOCKCHAIN_DEPOSIT':
-        return {
-          label: 'Deposit Credited',
-          bgColor: 'bg-[#32D583]/10',
-          borderColor: 'border-[#32D583]/30',
-          textColor: 'text-[#32D583]',
-          icon: ArrowDownLeft,
-        };
-      case 'COIN_SWAP':
-        return {
-          label: 'Coin Swap',
-          bgColor: 'bg-[#F59E0B]/10',
-          borderColor: 'border-[#F59E0B]/30',
-          textColor: 'text-[#F59E0B]',
-          icon: RotateCcw,
-        };
-      default:
-        return {
-          label: tx.entryType === 'CREDIT' ? 'Credit Received' : 'Transaction',
-          bgColor: 'bg-white/[0.04]',
-          borderColor: 'border-white/[0.08]',
-          textColor: 'text-white',
-          icon: Activity,
-        };
+    if (st.includes('TRADING_POOL') || st.includes('QUANTUM_ALPHA')) {
+      return {
+        label: 'Trading Yield',
+        bgColor: 'bg-[#00E5FF]/10',
+        borderColor: 'border-[#00E5FF]/30',
+        textColor: 'text-[#00E5FF]',
+        icon: TrendingUp,
+      };
     }
+    if (st.includes('CHRONO_VAULT')) {
+      return {
+        label: 'Vault Yield',
+        bgColor: 'bg-[#F5B800]/10',
+        borderColor: 'border-[#F5B800]/30',
+        textColor: 'text-[#F5B800]',
+        icon: Clock,
+      };
+    }
+    if (st === 'NODE_PURCHASE') {
+      return {
+        label: 'Node Activated',
+        bgColor: 'bg-[#00E676]/10',
+        borderColor: 'border-[#00E676]/30',
+        textColor: 'text-[#00E676]',
+        icon: Server,
+      };
+    }
+    if (st === 'NODE_REWARD' || st.includes('GENESIS_NODE')) {
+      return {
+        label: 'Node Mining',
+        bgColor: 'bg-[#00E676]/10',
+        borderColor: 'border-[#00E676]/30',
+        textColor: 'text-[#00E676]',
+        icon: Sparkles,
+      };
+    }
+    if (st.includes('UNILEVEL_ROYALTY') || st === 'REFERRAL_COMMISSION') {
+      return {
+        label: '16-Gen Royalty',
+        bgColor: 'bg-[#00E5FF]/10',
+        borderColor: 'border-[#00E5FF]/30',
+        textColor: 'text-[#00E5FF]',
+        icon: Layers,
+      };
+    }
+    if (st.includes('RANK') || st === 'PROMOTION_BONUS') {
+      return {
+        label: 'Rank Milestone',
+        bgColor: 'bg-[#F5B800]/10',
+        borderColor: 'border-[#F5B800]/30',
+        textColor: 'text-[#F5B800]',
+        icon: Award,
+      };
+    }
+    if (st.includes('DEPOSIT')) {
+      return {
+        label: 'Deposit',
+        bgColor: 'bg-[#00E676]/10',
+        borderColor: 'border-[#00E676]/30',
+        textColor: 'text-[#00E676]',
+        icon: ArrowDownLeft,
+      };
+    }
+    if (st.includes('WITHDRAWAL')) {
+      return {
+        label: 'Withdrawal',
+        bgColor: 'bg-white/[0.06]',
+        borderColor: 'border-white/[0.15]',
+        textColor: 'text-white',
+        icon: ArrowUpRight,
+      };
+    }
+    if (st.includes('SWAP')) {
+      return {
+        label: 'PHIVO Swap',
+        bgColor: 'bg-[#F5B800]/10',
+        borderColor: 'border-[#F5B800]/30',
+        textColor: 'text-[#F5B800]',
+        icon: RotateCcw,
+      };
+    }
+    return {
+      label: tx.entryType === 'CREDIT' ? 'Settlement Credit' : 'Settlement',
+      bgColor: 'bg-white/[0.04]',
+      borderColor: 'border-white/[0.1]',
+      textColor: 'text-white',
+      icon: Activity,
+    };
   };
 
   return (
-    <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-      {/* 1. Component Header with Live Protocol Pulse */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-4">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/25 flex items-center justify-center text-[#00CFFF]">
+    <section
+      aria-label="Real-Time Activity Log"
+      className="w-full max-w-full min-w-0 p-4 sm:p-6 rounded-[24px] oneui-glass-card space-y-4"
+    >
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.07] pb-3.5">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-9 h-9 rounded-2xl bg-[#00E5FF]/10 border border-[#00E5FF]/25 flex items-center justify-center text-[#00E5FF] shrink-0">
             <Activity className="w-4 h-4" />
           </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold text-white tracking-wide">Real-Time Recent Activity Log</h3>
-              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#32D583]/10 border border-[#32D583]/25 text-[#32D583]">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#32D583] animate-pulse" />
-                <span>LIVE SYNC</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-sm sm:text-base font-bold text-white tracking-tight">
+                Real-Time Activity Log
+              </h3>
+              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-[#00E676]/10 border border-[#00E676]/30 text-[#00E676]">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00E676] animate-pulse" />
+                <span>LIVE</span>
               </span>
             </div>
-            <p className="text-[11px] text-[#98A2B3] mt-0.5">
-              Live protocol telemetry for node activations, mining rewards, and direct referral commissions.
+            <p className="text-[11px] text-[#98A2B3] mt-0.5 truncate">
+              Trading pool yields, vault settlements, node mining, and 16-Gen royalties.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
           {onRefresh && (
             <button
               type="button"
               onClick={onRefresh}
               disabled={isRefreshing}
-              className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-all cursor-pointer"
-              title="Refresh Activity Log"
+              className="min-h-[38px] min-w-[38px] rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] text-[#98A2B3] hover:text-white flex items-center justify-center transition-all cursor-pointer active:scale-95"
+              title="Refresh activity log"
+              aria-label="Refresh activity log"
             >
-              <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#00CFFF]' : ''}`} />
+              <RotateCcw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#00E5FF]' : ''}`} />
             </button>
           )}
 
@@ -251,7 +298,7 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
             <button
               type="button"
               onClick={() => onNavigateTab('wallet')}
-              className="text-xs text-[#00CFFF] hover:text-white font-medium flex items-center gap-1 cursor-pointer transition-colors px-2.5 py-1.5 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/20"
+              className="min-h-[38px] text-xs text-[#00E5FF] hover:text-white font-semibold flex items-center gap-1 cursor-pointer transition-colors px-3 py-1.5 rounded-xl bg-[#00E5FF]/10 border border-[#00E5FF]/25"
             >
               <span>Full Ledger</span>
               <ChevronRight className="w-3.5 h-3.5" />
@@ -260,99 +307,44 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
         </div>
       </div>
 
-      {/* 2. Category Filter Bar */}
-      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none text-xs">
-        <button
-          type="button"
-          onClick={() => setActiveCategory('ALL')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer ${
-            activeCategory === 'ALL'
-              ? 'bg-[#00CFFF] text-[#05070B] font-bold shadow-md shadow-[#00CFFF]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          All Activity ({transactions.length})
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('NODE_ACTIVATION')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeCategory === 'NODE_ACTIVATION'
-              ? 'bg-[#32D583] text-black font-bold shadow-md shadow-[#32D583]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          <Server className="w-3.5 h-3.5" />
-          <span>Node Activations</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('REWARDS_CLAIMED')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeCategory === 'REWARDS_CLAIMED'
-              ? 'bg-[#00CFFF] text-black font-bold shadow-md shadow-[#00CFFF]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Mining Rewards</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('REFERRAL')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeCategory === 'REFERRAL'
-              ? 'bg-[#168BFF] text-white font-bold shadow-md shadow-[#168BFF]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          <Zap className="w-3.5 h-3.5" />
-          <span>Referral ($50)</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('MATCHING')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeCategory === 'MATCHING'
-              ? 'bg-[#32D583] text-black font-bold shadow-md shadow-[#32D583]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          <GitFork className="w-3.5 h-3.5" />
-          <span>Matching & Rank</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveCategory('DEPOSIT_SWAP')}
-          className={`px-3 py-1.5 rounded-xl font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
-            activeCategory === 'DEPOSIT_SWAP'
-              ? 'bg-[#F59E0B] text-black font-bold shadow-md shadow-[#F59E0B]/20'
-              : 'bg-white/[0.03] hover:bg-white/[0.06] border border-white/[0.06] text-[#98A2B3]'
-          }`}
-        >
-          <ArrowDownLeft className="w-3.5 h-3.5" />
-          <span>Deposits & Swaps</span>
-        </button>
+      {/* Category Filter Pills (Horizontal Scroll Safe on 360px) */}
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none -mx-1 px-1">
+        {FILTER_PILLS.map((pill) => {
+          const isSelected = activeCategory === pill.id;
+          return (
+            <button
+              key={pill.id}
+              type="button"
+              onClick={() => setActiveCategory(pill.id)}
+              className={`min-h-[36px] px-3 py-1.5 rounded-full border text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer shrink-0 active:scale-95 ${
+                isSelected
+                  ? pill.activeClass
+                  : 'bg-white/[0.04] hover:bg-white/[0.08] border-white/[0.08] text-[#98A2B3] hover:text-white'
+              }`}
+            >
+              {pill.label}
+            </button>
+          );
+        })}
       </div>
 
-      {/* 3. Event List Visualization */}
+      {/* Activity Feed */}
       {filteredEvents.length === 0 ? (
-        <div className="py-10 text-center space-y-2.5 rounded-xl bg-[#050B14]/60 border border-white/[0.04]">
-          <div className="w-10 h-10 rounded-full bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mx-auto text-[#98A2B3]">
-            <Clock className="w-5 h-5 text-[#00CFFF]" />
+        <div className="py-10 px-4 text-center space-y-2 rounded-2xl bg-black/30 border border-white/[0.06]">
+          <div className="w-10 h-10 rounded-full bg-white/[0.04] border border-white/[0.08] flex items-center justify-center mx-auto text-[#00E5FF]">
+            <Clock className="w-5 h-5" />
           </div>
-          <p className="text-xs font-semibold text-white">No activity logged for this filter category.</p>
-          <p className="text-[11px] text-[#98A2B3]">
-            {activeCategory === 'REFERRAL'
-              ? 'Sponsor new team members to trigger $50 direct referral spot commissions.'
-              : activeCategory === 'NODE_ACTIVATION'
-              ? 'Activate Genesis Nodes to begin daily PHIVO mining emission.'
-              : 'Protocol events will appear here in real-time as transactions settle.'}
+          <p className="text-xs font-semibold text-white">No settled activity in this category yet.</p>
+          <p className="text-[11px] text-[#98A2B3] max-w-sm mx-auto">
+            {activeCategory === 'TRADING_YIELD'
+              ? 'Allocate USDT into Quantum Alpha™ to receive automated Mon–Fri trading yields.'
+              : activeCategory === 'VAULT_YIELD'
+              ? 'Open a Chrono Vault™ fixed-term stake to track daily USDT vault settlements.'
+              : activeCategory === 'NODE_MINING'
+              ? 'Activate a Genesis Core™ validator node to emit daily PHIVO coins.'
+              : activeCategory === 'UNILEVEL_ROYALTIES'
+              ? 'Grow your 16-Generation Unilevel partner network to earn asset-matched royalties.'
+              : 'Settled deposits, yields, swaps, and withdrawals appear here in real time.'}
           </p>
         </div>
       ) : (
@@ -368,47 +360,44 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
               <div
                 key={tx.id}
                 onClick={() => setSelectedEvent(tx)}
-                className="p-3.5 rounded-xl bg-[#050B14]/80 hover:bg-[#081222] border border-white/[0.05] hover:border-[#00CFFF]/30 transition-all duration-150 flex items-center justify-between gap-3 cursor-pointer group"
+                className="p-3 sm:p-3.5 rounded-2xl bg-black/30 hover:bg-white/[0.05] border border-white/[0.06] hover:border-[#00E5FF]/30 transition-all duration-150 flex items-center justify-between gap-2.5 cursor-pointer group min-w-0"
               >
-                {/* Left: Event Icon + Title */}
-                <div className="flex items-center gap-3 min-w-0">
+                <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
                   <div
-                    className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${badge.bgColor} ${badge.borderColor} ${badge.textColor}`}
+                    className={`w-9 h-9 rounded-xl border flex items-center justify-center shrink-0 ${badge.bgColor} ${badge.borderColor} ${badge.textColor}`}
                   >
-                    <BadgeIcon className="w-4.5 h-4.5" />
+                    <BadgeIcon className="w-4 h-4" />
                   </div>
 
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-white group-hover:text-[#00CFFF] transition-colors truncate">
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-bold text-white group-hover:text-[#00E5FF] transition-colors truncate">
                         {userDesc}
                       </span>
                       <span
-                        className={`hidden sm:inline-flex px-2 py-0.5 rounded text-[10px] font-mono font-semibold border ${badge.bgColor} ${badge.borderColor} ${badge.textColor}`}
+                        className={`hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-mono font-semibold border shrink-0 ${badge.bgColor} ${badge.borderColor} ${badge.textColor}`}
                       >
                         {badge.label}
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2 text-[10px] text-[#98A2B3] font-mono">
-                      <span>{relTime}</span>
+                    <div className="flex items-center gap-1.5 text-[10px] text-[#98A2B3] font-mono min-w-0">
+                      <span className="shrink-0">{relTime}</span>
                       <span>•</span>
-                      <span className="truncate">{tx.sourceRef || tx.publicTxnId}</span>
+                      <span className="truncate">{tx.publicTxnId || tx.sourceRef}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Right: Amount & Status Badge */}
-                <div className="text-right shrink-0 space-y-0.5">
-                  <div className="text-xs sm:text-sm font-mono font-bold tabular-nums">
-                    <span className={isCredit ? 'text-[#32D583]' : 'text-white'}>
-                      {isCredit ? '+' : '-'}${formatCurrency(tx.amount)} {tx.currency || 'USD'}
+                <div className="text-right shrink-0 space-y-0.5 pl-1">
+                  <div className="text-xs sm:text-sm font-mono font-bold tabular-nums whitespace-nowrap">
+                    <span className={isCredit ? 'text-[#00E676]' : 'text-white'}>
+                      {isCredit ? '+' : '-'}
+                      {formatAmount(tx.amount, tx.currency)}
                     </span>
                   </div>
-
-                  <div className="flex items-center justify-end gap-1 text-[10px] font-mono text-[#32D583]">
-                    <CheckCircle2 className="w-3 h-3 text-[#32D583]" />
-                    <span>{tx.status || 'SETTLED'}</span>
+                  <div className="text-[10px] font-mono text-[#00E676]/90 uppercase">
+                    {tx.status || 'SETTLED'}
                   </div>
                 </div>
               </div>
@@ -417,23 +406,25 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
         </div>
       )}
 
-      {/* 4. Interactive Detail Modal / Drawer */}
+      {/* Event Detail Modal */}
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn">
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-fadeIn"
+          onClick={() => setSelectedEvent(null)}
+        >
           <div
-            className="w-full max-w-lg rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-6 space-y-5 relative"
+            className="w-full max-w-md rounded-[28px] bg-[#0B1210] border border-white/[0.14] shadow-2xl p-5 sm:p-6 space-y-4 relative"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-white/[0.08] pb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#00CFFF]/10 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF]">
-                  <Activity className="w-5 h-5" />
+            <div className="flex items-center justify-between border-b border-white/[0.08] pb-3.5">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-2xl bg-[#00E5FF]/10 border border-[#00E5FF]/30 flex items-center justify-center text-[#00E5FF] shrink-0">
+                  <Activity className="w-4 h-4" />
                 </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white">Protocol Event Telemetry</h4>
-                  <p className="text-[11px] text-[#98A2B3] font-mono">
-                    Ref: {selectedEvent.publicTxnId || selectedEvent.id}
+                <div className="min-w-0">
+                  <h4 className="text-sm font-bold text-white truncate">Settlement Receipt</h4>
+                  <p className="text-[11px] text-[#98A2B3] font-mono truncate">
+                    {selectedEvent.publicTxnId || selectedEvent.id}
                   </p>
                 </div>
               </div>
@@ -441,17 +432,17 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedEvent(null)}
-                className="w-8 h-8 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] flex items-center justify-center text-[#98A2B3] hover:text-white transition-colors cursor-pointer"
+                className="w-9 h-9 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.1] flex items-center justify-center text-[#98A2B3] hover:text-white cursor-pointer shrink-0"
+                aria-label="Close receipt"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Event Overview */}
-            <div className="p-4 rounded-xl bg-[#050B14] border border-white/[0.06] space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-[#98A2B3]">Event Description</span>
-                <span className="text-xs font-mono text-[#32D583] flex items-center gap-1">
+            <div className="p-4 rounded-2xl bg-black/40 border border-white/[0.07] space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-[#98A2B3]">Status</span>
+                <span className="font-mono text-[#00E676] flex items-center gap-1 font-semibold">
                   <ShieldCheck className="w-3.5 h-3.5" />
                   <span>Verified Settled</span>
                 </span>
@@ -459,54 +450,46 @@ export const RecentActivityLog: React.FC<RecentActivityLogProps> = ({
               <div className="text-sm font-bold text-white">
                 {getTransactionUserDescription(selectedEvent)}
               </div>
-              <div className="text-2xl font-mono font-extrabold text-[#32D583]">
-                ${formatCurrency(selectedEvent.amount)} {selectedEvent.currency || 'USD'}
+              <div className="text-2xl font-mono font-extrabold text-[#00E676] tabular-nums">
+                {selectedEvent.entryType === 'CREDIT' ? '+' : '-'}
+                {formatAmount(selectedEvent.amount, selectedEvent.currency)}
               </div>
             </div>
 
-            {/* Technical Detail Grid */}
-            <div className="space-y-2.5 text-xs font-mono">
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                <span className="text-[#98A2B3] font-sans">Public Transaction ID</span>
-                <div className="flex items-center gap-1.5 text-white font-bold">
-                  <span>{selectedEvent.publicTxnId}</span>
+            <div className="space-y-2 text-xs font-mono">
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-between gap-2">
+                <span className="text-[#98A2B3] font-sans">Reference ID</span>
+                <div className="flex items-center gap-1.5 text-white font-bold min-w-0">
+                  <span className="truncate">{selectedEvent.publicTxnId}</span>
                   <button
                     type="button"
                     onClick={() => handleCopyPublicId(selectedEvent.publicTxnId)}
-                    className="p-1 hover:text-[#00CFFF] transition-colors cursor-pointer"
+                    className="p-1 hover:text-[#00E5FF] cursor-pointer shrink-0"
+                    aria-label="Copy Reference ID"
                   >
-                    {copiedId ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedId ? <Check className="w-3.5 h-3.5 text-[#00E676]" /> : <Copy className="w-3.5 h-3.5" />}
                   </button>
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                <span className="text-[#98A2B3] font-sans">Source Reference</span>
-                <span className="text-[#00CFFF] font-bold">{selectedEvent.sourceRef || 'GENESIS_PROTOCOL'}</span>
-              </div>
-
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                <span className="text-[#98A2B3] font-sans">Category / Channel</span>
-                <span className="text-white font-bold uppercase">{selectedEvent.sourceType}</span>
-              </div>
-
-              <div className="p-3 rounded-lg bg-white/[0.02] border border-white/[0.04] flex items-center justify-between">
-                <span className="text-[#98A2B3] font-sans">Settled Timestamp</span>
-                <span className="text-white font-bold">{new Date(selectedEvent.createdAt).toLocaleString()}</span>
+              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-between gap-2">
+                <span className="text-[#98A2B3] font-sans">Settled Time</span>
+                <span className="text-white font-semibold">
+                  {new Date(selectedEvent.createdAt).toLocaleString()}
+                </span>
               </div>
             </div>
 
-            {/* Footer Action */}
             <button
               type="button"
               onClick={() => setSelectedEvent(null)}
-              className="w-full py-2.5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-black font-bold text-xs transition-colors cursor-pointer shadow-md shadow-[#00CFFF]/20"
+              className="w-full min-h-[44px] py-2.5 rounded-2xl bg-[#00E5FF] hover:bg-[#00E5FF]/90 text-[#050807] font-bold text-xs transition-colors cursor-pointer"
             >
-              Close Event Telemetry
+              Done
             </button>
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 };

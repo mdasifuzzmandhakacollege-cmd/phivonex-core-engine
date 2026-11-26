@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { DatabaseClient, getDb } from '../db/db';
 import {
   DIRECT_REFERRAL_COMMISSION_USD,
+  ENABLE_SPOT_COMMISSION,
   ReferralCommissionStatus,
   formatPublicCommissionId
 } from '../../config/referralConfig';
@@ -102,6 +103,12 @@ export async function processNodeActivationCommission(
 
   // If no sponsor registered or self-referral, no commission is generated
   if (!sponsorUserId || sponsorUserId === buyerUserId) {
+    return null;
+  }
+
+  // Task 01 Deprecation Guard: Preserve user_referrals sponsor linkage above,
+  // but disable flat spot commission generation ($0 spot commission going forward).
+  if (!ENABLE_SPOT_COMMISSION) {
     return null;
   }
 
@@ -311,6 +318,12 @@ export async function reconcileUnprocessedReferralCommissions(dbClient?: Databas
   reconciledCount: number;
   commissions: SafeReferralCommission[];
 }> {
+  if (!ENABLE_SPOT_COMMISSION) {
+    return {
+      reconciledCount: 0,
+      commissions: [],
+    };
+  }
   const db = dbClient || (await getDb());
   const activeNodesRes = await db.query<{
     id: string;

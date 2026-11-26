@@ -65,6 +65,11 @@ export async function getDb(): Promise<DatabaseClient> {
         (process.env.APP_ENV || '').toLowerCase() === 'production' ||
         (process.env.NODE_ENV || '').toLowerCase() === 'production';
       const databaseUrl = getEffectiveDatabaseUrl();
+
+      if (isProduction && (!databaseUrl || databaseUrl.includes('placeholder') || databaseUrl.includes('YOUR_'))) {
+        throw new Error('[DB Fatal Error] DATABASE_URL is strictly required in production mode. Refusing to start with volatile fallback.');
+      }
+
       let client: DatabaseClient | null = null;
 
       // 1. Try external PostgreSQL connection if DATABASE_URL is configured
@@ -643,7 +648,31 @@ async function initSchema(client: DatabaseClient) {
         status VARCHAR(20) NOT NULL DEFAULT 'SETTLED',
         created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
         CONSTRAINT chk_fle_entry_type CHECK (entry_type IN ('CREDIT', 'DEBIT', 'REVERSAL')),
-        CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER')),
+        CONSTRAINT chk_fle_source_type CHECK (source_type IN (
+          'REFERRAL_COMMISSION',
+          'MATCHING_BONUS',
+          'PROMOTION_BONUS',
+          'NODE_REWARD',
+          'WITHDRAWAL',
+          'BLOCKCHAIN_DEPOSIT',
+          'COIN_SWAP',
+          'NODE_PURCHASE',
+          'USDT_DEPOSIT',
+          'BNB_DEPOSIT',
+          'DEPOSIT_CREDIT',
+          'ADMIN_ADJUSTMENT',
+          'WALLET_TRANSFER',
+          'TRADING_POOL_DEPOSIT',
+          'TRADING_POOL_YIELD',
+          'TRADING_POOL_PRINCIPAL_RETURN',
+          'CHRONO_VAULT_STAKING',
+          'CHRONO_VAULT_YIELD',
+          'CHRONO_VAULT_MATURITY',
+          'UNILEVEL_ROYALTY',
+          'LEADERSHIP_RANK_REWARD',
+          'GLOBAL_TURNOVER_POOL',
+          'FOUNDERS_COUNCIL_DIVIDEND'
+        )),
         CONSTRAINT chk_fle_status CHECK (status IN ('SETTLED', 'REVERSED', 'PENDING')),
         CONSTRAINT chk_fle_amount CHECK (amount > 0),
         CONSTRAINT uq_fle_source_entry_type UNIQUE (source_type, source_id, entry_type)
@@ -773,13 +802,37 @@ async function initSchema(client: DatabaseClient) {
       // Column may already exist or table empty
     }
 
-    // Ensure KYC columns exist on users
+    // Ensure KYC and auth lifecycle columns exist on users
     try {
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(50) NOT NULL DEFAULT 'UNVERIFIED';`);
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_reject_reason TEXT NULL;`);
       await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS kyc_verified_at TIMESTAMP WITH TIME ZONE NULL;`);
+      await client.exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_reset_password BOOLEAN NOT NULL DEFAULT FALSE;`);
     } catch {
       // Columns may already exist
+    }
+
+    // Ensure transactional email delivery audit table exists (non-blocking receipt log)
+    try {
+      await client.exec(`
+        CREATE TABLE IF NOT EXISTS email_delivery_logs (
+          id UUID PRIMARY KEY,
+          user_id UUID NULL REFERENCES users(id) ON DELETE SET NULL,
+          recipient_email VARCHAR(255) NOT NULL,
+          event_type VARCHAR(100) NOT NULL,
+          subject VARCHAR(255) NOT NULL,
+          status VARCHAR(30) NOT NULL DEFAULT 'QUEUED_NO_SMTP',
+          metadata JSONB NULL,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT chk_edl_status CHECK (status IN ('SENT', 'QUEUED_NO_SMTP', 'FAILED'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_edl_user_id ON email_delivery_logs (user_id);
+        CREATE INDEX IF NOT EXISTS idx_edl_event_type ON email_delivery_logs (event_type);
+        CREATE INDEX IF NOT EXISTS idx_edl_recipient ON email_delivery_logs (LOWER(recipient_email));
+        CREATE INDEX IF NOT EXISTS idx_edl_created_at ON email_delivery_logs (created_at DESC);
+      `);
+    } catch {
+      // Table may already exist
     }
 
     // Ensure reward_epochs allows NULL reward_per_node when rate is not finalized
@@ -912,7 +965,7 @@ async function initSchema(client: DatabaseClient) {
     try {
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'COIN_SWAP', 'BLOCKCHAIN_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER', 'TRADING_POOL_DEPOSIT', 'TRADING_POOL_YIELD', 'TRADING_POOL_PRINCIPAL_RETURN', 'CHRONO_VAULT_STAKING', 'CHRONO_VAULT_YIELD', 'CHRONO_VAULT_MATURITY', 'UNILEVEL_ROYALTY', 'LEADERSHIP_RANK_REWARD', 'GLOBAL_TURNOVER_POOL', 'FOUNDERS_COUNCIL_DIVIDEND'));
       `);
     } catch {
       // Constraint update ignored if already applied or table structure matches
@@ -1082,7 +1135,7 @@ async function initSchema(client: DatabaseClient) {
       // Update financial_ledger_entries constraint to support BLOCKCHAIN_DEPOSIT & COIN_SWAP & NODE_PURCHASE
       await client.exec(`
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER', 'TRADING_POOL_DEPOSIT', 'TRADING_POOL_YIELD', 'TRADING_POOL_PRINCIPAL_RETURN', 'CHRONO_VAULT_STAKING', 'CHRONO_VAULT_YIELD', 'CHRONO_VAULT_MATURITY', 'UNILEVEL_ROYALTY', 'LEADERSHIP_RANK_REWARD', 'GLOBAL_TURNOVER_POOL', 'FOUNDERS_COUNCIL_DIVIDEND'));
       `);
     } catch (task171Err) {
       console.warn('[DB Migration] Task #17.1 BSC schema migration warning:', task171Err);
@@ -1186,7 +1239,7 @@ async function initSchema(client: DatabaseClient) {
 
         -- Update financial_ledger_entries constraint to support COIN_SWAP, ADMIN_ADJUSTMENT & WALLET_TRANSFER
         ALTER TABLE financial_ledger_entries DROP CONSTRAINT IF EXISTS chk_fle_source_type;
-        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER'));
+        ALTER TABLE financial_ledger_entries ADD CONSTRAINT chk_fle_source_type CHECK (source_type IN ('REFERRAL_COMMISSION', 'MATCHING_BONUS', 'PROMOTION_BONUS', 'NODE_REWARD', 'WITHDRAWAL', 'BLOCKCHAIN_DEPOSIT', 'COIN_SWAP', 'NODE_PURCHASE', 'USDT_DEPOSIT', 'BNB_DEPOSIT', 'DEPOSIT_CREDIT', 'ADMIN_ADJUSTMENT', 'WALLET_TRANSFER', 'TRADING_POOL_DEPOSIT', 'TRADING_POOL_YIELD', 'TRADING_POOL_PRINCIPAL_RETURN', 'CHRONO_VAULT_STAKING', 'CHRONO_VAULT_YIELD', 'CHRONO_VAULT_MATURITY', 'UNILEVEL_ROYALTY', 'LEADERSHIP_RANK_REWARD', 'GLOBAL_TURNOVER_POOL', 'FOUNDERS_COUNCIL_DIVIDEND'));
       `);
     } catch (task191Err) {
       console.warn('[DB Migration] Task #19.1 Swap Transactions schema migration warning:', task191Err);
@@ -1563,6 +1616,15 @@ async function initSchema(client: DatabaseClient) {
       await ensurePromotionTables(client);
     } catch (promoErr) {
       console.warn('[DB Migration] Sequential Promotion schema migration warning:', promoErr);
+    }
+
+    // TASK-02: 100% Unilevel (16-Generation ROI-on-ROI) & Multi-Product Ecosystem Schema
+    try {
+      const { ensureUnilevelMultiProductSchema } = await import('./migrations/unilevelMultiProductMigration');
+      await ensureUnilevelMultiProductSchema(client);
+    } catch (unilevelSchemaErr) {
+      console.error('[DB Migration] Task-02 Unilevel & Multi-Product schema migration error:', unilevelSchemaErr);
+      throw unilevelSchemaErr;
     }
 
     // 3. Backfill existing users with missing public_id, user_referrals, and binary_placements

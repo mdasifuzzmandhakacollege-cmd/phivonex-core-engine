@@ -79,7 +79,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const fetchUnreadCount = useCallback(async () => {
     if (!user) return;
     try {
-      const res = await fetch('/api/notifications/unread-count');
+      const res = await fetch('/api/notifications/unread-count', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setUnreadCount(data.unreadCount ?? 0);
@@ -103,13 +103,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         if (unreadOnly) params.append('unreadOnly', 'true');
         if (filterType !== 'ALL') params.append('type', filterType);
 
-        const res = await fetch(`/api/notifications?${params.toString()}`);
+        const res = await fetch(`/api/notifications?${params.toString()}`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          const freshList: AppNotification[] = data.notifications || [];
+          const freshList: AppNotification[] = Array.isArray(data.notifications) ? data.notifications : [];
 
-          // Audio awareness trigger:
-          // Check if new unread high-priority notifications arrived after initial load
           if (initialLoadCompletedRef.current && audioEnabled) {
             const hasNewHighPriority = freshList.some(
               (n) => !n.readAt && !knownNotificationIdsRef.current.has(n.id) && isHighPriorityNotification(n.type)
@@ -121,18 +119,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             initialLoadCompletedRef.current = true;
           }
 
-          // Register all current IDs into known set
           freshList.forEach((n) => knownNotificationIdsRef.current.add(n.id));
 
           setNotifications(freshList);
           setTotalCount(data.total || 0);
           setUnreadCount(data.unreadCount || 0);
         } else {
-          setError('Failed to fetch protocol alerts');
+          setError('Unable to load alerts right now.');
         }
-      } catch (err) {
-        console.warn('[NotificationContext] Error fetching notifications:', err);
-        setError('Network handshake failed. Retrying...');
+      } catch {
+        setError('Connection paused. Retrying automatically...');
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -158,14 +154,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   useEffect(() => {
     if (!user) return;
 
-    // 1. Polling interval (every 45 seconds when visible; SSE handles instant push)
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
         fetchUnreadCount();
       }
     }, 45000);
 
-    // 2. Window focus & visibility change trigger instant refresh
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
         fetchUnreadCount();
@@ -176,9 +170,8 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     window.addEventListener('focus', handleVisibilityOrFocus);
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 
-    // 3. Connect to authenticated user notification stream (SSE)
     try {
-      const es = new EventSource('/api/notifications/events');
+      const es = new EventSource('/api/notifications/events', { withCredentials: true });
       eventSourceRef.current = es;
 
       es.onmessage = (event) => {
@@ -200,7 +193,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
               }
             }
 
-            // Dispatch window events for real-time views synchronization
             if (typeof window !== 'undefined') {
               const eventType = (notif as any).type;
               if (eventType === 'USER_PROFILE_UPDATED' || eventType === 'USER_STATUS_UPDATED') {
@@ -218,13 +210,12 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       };
 
       es.onerror = () => {
-        // Fallback gracefully to background polling
         if (es.readyState === EventSource.CLOSED) {
           es.close();
         }
       };
-    } catch (e) {
-      console.warn('[NotificationContext] SSE connection unavailable:', e);
+    } catch {
+      // Fallback cleanly to background polling
     }
 
     return () => {
@@ -236,18 +227,17 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
         eventSourceRef.current = null;
       }
     };
-  }, [user, fetchUnreadCount, fetchNotifications]);
+  }, [user, fetchUnreadCount, fetchNotifications, audioEnabled]);
 
   // Action: Mark single notification as read
   const markAsRead = async (id: string): Promise<boolean> => {
-    // Optimistic update
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, readAt: new Date().toISOString() } : n))
     );
     setUnreadCount((prev) => Math.max(0, prev - 1));
 
     try {
-      const res = await fetch(`/api/notifications/${id}/read`, { method: 'PATCH' });
+      const res = await fetch(`/api/notifications/${id}/read`, { method: 'PATCH', credentials: 'include' });
       if (!res.ok) {
         fetchNotifications(true);
         return false;
@@ -262,12 +252,11 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Action: Mark all notifications as read
   const markAllAsRead = async (): Promise<boolean> => {
     const nowIso = new Date().toISOString();
-    // Optimistic update
     setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || nowIso })));
     setUnreadCount(0);
 
     try {
-      const res = await fetch('/api/notifications/read-all', { method: 'POST' });
+      const res = await fetch('/api/notifications/read-all', { method: 'POST', credentials: 'include' });
       if (!res.ok) {
         fetchNotifications(true);
         return false;
@@ -284,7 +273,6 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     const target = notifications.find((n) => n.id === id);
     if (!target) return false;
 
-    // Optimistic removal
     setNotifications((prev) => prev.filter((n) => n.id !== id));
     setTotalCount((prev) => Math.max(0, prev - 1));
     if (!target.readAt) {
@@ -292,7 +280,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     try {
-      const res = await fetch(`/api/notifications/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/notifications/${id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) {
         fetchNotifications(true);
         return false;
@@ -306,11 +294,10 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Action: Clear read notifications
   const clearReadNotifications = async (): Promise<number> => {
-    // Optimistic removal
     setNotifications((prev) => prev.filter((n) => !n.readAt));
 
     try {
-      const res = await fetch('/api/notifications?readOnly=true', { method: 'DELETE' });
+      const res = await fetch('/api/notifications?readOnly=true', { method: 'DELETE', credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         fetchNotifications(true);

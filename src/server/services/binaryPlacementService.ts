@@ -3,6 +3,7 @@ import { DatabaseClient, getDb } from '../db/db';
 import { formatSafeDisplayName } from '../utils/idGenerator';
 import { backfillNodeSalesVolumeForPlacedMember } from './binaryVolumeService';
 import { needAffiliateReconciliation, reconcileSpecificAffiliateAccounts } from './affiliateAutoReconcileService';
+import { ENABLE_BINARY_ENGINE } from '../../config/referralConfig';
 
 export type BinarySide = 'LEFT' | 'RIGHT';
 export type BinaryPlacementStatus = 'UNPLACED' | 'PLACED';
@@ -367,11 +368,13 @@ export async function placeMember(
     console.warn('[SecurityEvent] Could not log binary placement event:', secErr);
   }
 
-  // 9. Backfill
-  try {
-    await backfillNodeSalesVolumeForPlacedMember(db, member.id);
-  } catch (backfillErr) {
-    console.warn('[BinaryVolume] Error backfilling node sales volume for newly placed member:', backfillErr);
+  // 9. Backfill (Deprecated when ENABLE_BINARY_ENGINE = false)
+  if (ENABLE_BINARY_ENGINE) {
+    try {
+      await backfillNodeSalesVolumeForPlacedMember(db, member.id);
+    } catch (backfillErr) {
+      console.warn('[BinaryVolume] Error backfilling node sales volume for newly placed member:', backfillErr);
+    }
   }
 
   return {

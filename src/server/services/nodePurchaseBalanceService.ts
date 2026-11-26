@@ -4,6 +4,7 @@ import { generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { getNodeBasePrice, getBnbPriceUsd } from './economicService';
 import { createNodeReservation, settleNodeOrder, getUserOrders } from './nodeOrderService';
 import { getWalletSummary } from './walletLedgerService';
+import { assertFeatureSwitchEnabled } from './unilevelConfigService';
 
 export interface AssetBalanceInfo {
   available: number;
@@ -152,6 +153,11 @@ export async function processNodePurchaseWithAssetBalance(
 }> {
   return withUserLock(userId, async () => {
     const db = await getDb();
+    await assertFeatureSwitchEnabled(
+      'genesis_node_purchase_enabled',
+      'PHIVONEX GENESIS CORE™ Node Purchases',
+      db
+    );
     const selectedAsset: 'BNB' | 'USDT' = asset.toUpperCase() === 'BNB' ? 'BNB' : 'USDT';
     const cleanIdempotencyKey = idempotencyKey ? idempotencyKey.trim() : null;
 
@@ -470,6 +476,27 @@ export async function processNodePurchaseWithAssetBalance(
         purchaseResult.runPostCommit().catch((err) => {
           console.warn('[ProcessNodePurchase Post-Commit Warning]', err);
         });
+      }
+
+      if (!purchaseResult.isDuplicate) {
+        import('./emailService')
+          .then(({ sendTransactionEmail }) =>
+            sendTransactionEmail({
+              userId,
+              eventType: 'GENESIS_NODE_MINTED',
+              metadata: {
+                publicNodeId: purchaseResult.node?.publicNodeId || purchaseResult.order?.publicNodeId || 'GENESIS',
+                publicOrderId: purchaseResult.order?.publicOrderId || '',
+                amountDebited: purchaseResult.deductedAmount,
+                assetUsed: purchaseResult.assetUsed,
+                dailyEmission: '15 PHIVO / Day',
+                lifetimeCap: '10,000 PHIVO',
+              },
+            })
+          )
+          .catch((emailErr) => {
+            console.warn('[ProcessNodePurchase] Non-blocking mint email error:', emailErr);
+          });
       }
 
       return {

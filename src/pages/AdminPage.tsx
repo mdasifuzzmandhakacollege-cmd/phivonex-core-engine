@@ -62,6 +62,7 @@ import { ReconciliationReport } from '../components/admin/ReconciliationReport';
 import { AuditLogger, logAction, exportAuditLogsToCsv } from '../services/auditLogger';
 import { NodeGrowthAndVolumeChart } from '../components/admin/NodeGrowthAndVolumeChart';
 import { AffiliateTreeEditor } from '../components/admin/AffiliateTreeEditor';
+import { AdminEcosystemConsole } from '../components/admin/AdminEcosystemConsole';
 
 interface AdminPageProps {
   onNavigate: (route: string) => void;
@@ -75,6 +76,7 @@ export type AdminTab =
   | 'treasury'
   | 'reconciliation'
   | 'economics'
+  | 'ecosystem'
   | 'offers'
   | 'ranks'
   | 'users'
@@ -705,6 +707,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
     { id: 'treasury' as AdminTab, label: 'Treasury & Reserves', icon: Wallet },
     { id: 'reconciliation' as AdminTab, label: 'Financial Reconciliation', icon: ShieldCheck },
     { id: 'economics' as AdminTab, label: 'Economic Controls', icon: Sliders },
+    { id: 'ecosystem' as AdminTab, label: 'Ecosystem & Yields', icon: Sliders },
     { id: 'offers' as AdminTab, label: 'Promotions & Offers', icon: Gift },
     { id: 'ranks' as AdminTab, label: 'Leadership Ranks', icon: Trophy },
     { id: 'users' as AdminTab, label: 'Users', icon: Users },
@@ -1434,6 +1437,9 @@ export const AdminPage: React.FC<AdminPageProps> = ({ onNavigate, currentPath = 
 
           {/* TAB 2: ECONOMIC CONTROLS */}
           {activeTab === 'economics' && <EconomicControls />}
+
+          {/* TAB: ECOSYSTEM & YIELDS */}
+          {activeTab === 'ecosystem' && <AdminEcosystemConsole user={user} onNavigateTab={(tab) => handleSelectTab(tab as any)} />}
 
           {/* TAB: PROMOTIONAL OFFERS & BOGO */}
           {activeTab === 'offers' && (

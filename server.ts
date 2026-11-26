@@ -11,7 +11,7 @@ import commissionRouter from './src/server/routes/commissionRoutes';
 import networkRouter from './src/server/routes/networkRoutes';
 import matchingRouter from './src/server/routes/matchingRoutes';
 import { promotionRouter } from './src/server/routes/promotionRoutes';
-import { walletRouter } from './src/server/routes/walletRoutes';
+import { walletRouter, adminLedgerRouter } from './src/server/routes/walletRoutes';
 import { rewardRouter } from './src/server/routes/rewardRoutes';
 import { publicNetworkRouter } from './src/server/routes/publicNetworkRoutes';
 import { withdrawalRouter } from './src/server/routes/withdrawalRoutes';
@@ -24,11 +24,38 @@ import { emailWebhookRouter } from './src/server/routes/emailWebhookRoutes';
 import { diagnosticRouter } from './src/server/routes/diagnosticRoutes';
 import { supportRouter } from './src/server/routes/supportRoutes';
 import { kycRouter } from './src/server/routes/kycRoutes';
+import {
+  adminUnilevelConfigRouter,
+  publicUnilevelConfigRouter,
+  publicEcosystemPromosRouter,
+  adminEcosystemPromosRouter,
+} from './src/server/routes/unilevelConfigRoutes';
+import {
+  tradingPoolRouter,
+  adminTradingPoolRouter,
+} from './src/server/routes/tradingPoolRoutes';
+import {
+  chronoVaultRouter,
+  adminChronoVaultRouter,
+} from './src/server/routes/chronoVaultRoutes';
+import {
+  unilevelRoyaltyRouter,
+  adminUnilevelRoyaltyRouter,
+} from './src/server/routes/unilevelRoyaltyRoutes';
+import {
+  unilevelRankRouter,
+  adminUnilevelRankRouter,
+} from './src/server/routes/unilevelRankRoutes';
+import { healthRouter } from './src/server/routes/healthRoutes';
+import { legacyRouter } from './src/server/routes/legacyRoutes';
 import { getDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import { startWeeklyReportScheduler } from './src/server/services/emailReportingService';
 import { startDailyAuditScheduler } from './src/server/services/reconciliationService';
 import { executeDailyAutomaticRewardCheck } from './src/server/services/nodeRewardService';
+import { startTradingYieldScheduler } from './src/server/services/tradingYieldEpochService';
+import { startChronoVaultScheduler } from './src/server/services/chronoVaultEpochService';
+import { startUnilevelRoyaltyScheduler } from './src/server/services/roiGenerationService';
 import {
   securityHeadersMiddleware,
   csrfOriginProtection,
@@ -49,8 +76,8 @@ async function startServer() {
 
   const app = express();
   app.set('trust proxy', 1);
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   const isProd = process.env.NODE_ENV === 'production';
+  const PORT = Number(process.env.PORT) || (isProd ? 8080 : 3000);
 
   // 1. Security Headers (CSP, X-Content-Type-Options, Frame Protection)
   app.use(securityHeadersMiddleware);
@@ -91,6 +118,7 @@ async function startServer() {
   app.use('/api/referrals', referralRouter);
   app.use('/api/users', userRouter);
   app.use('/api/nodes', nodeRouter);
+  app.use('/api/genesis-nodes', nodeRouter);
   app.use('/api/node-orders', orderRouter);
   app.use('/api/referral-commissions', commissionRouter);
   app.use('/api/network', networkRouter);
@@ -100,32 +128,39 @@ async function startServer() {
   app.use('/api/wallets', walletRouter);
   app.use('/api/rewards', rewardRouter);
   app.use('/api/public/network', publicNetworkRouter);
+  app.use('/api/public/ecosystem-config', publicUnilevelConfigRouter);
+  app.use('/api/ecosystem/promos', publicEcosystemPromosRouter);
+  app.use('/api/admin/ecosystem-promos', adminEcosystemPromosRouter);
   app.use('/api/withdrawals', withdrawalRouter);
   app.use('/api/deposits', depositRouter);
   app.use('/api/swap', swapRouter);
   app.use('/api/notifications', notificationRouter);
   app.use('/api/admin/economics', economicRouter);
+  app.use('/api/admin/ecosystem-config', adminUnilevelConfigRouter);
+  app.use('/api/admin/unilevel-config', adminUnilevelConfigRouter);
+  app.use('/api/admin/trading-pool', adminTradingPoolRouter);
+  app.use('/api/trading-pool', tradingPoolRouter);
+  app.use('/api/admin/chrono-vaults', adminChronoVaultRouter);
+  app.use('/api/chrono-vaults', chronoVaultRouter);
+  app.use('/api/admin/unilevel/royalties', adminUnilevelRoyaltyRouter);
+  app.use('/api/unilevel/royalties', unilevelRoyaltyRouter);
+  app.use('/api/admin/unilevel/ranks', adminUnilevelRankRouter);
+  app.use('/api/unilevel/ranks', unilevelRankRouter);
+  app.use('/api/admin/ledger', adminLedgerRouter);
   app.use('/api/economic', publicEconomicRouter);
   app.use('/api/webhooks/email', emailWebhookRouter);
   app.use('/api/diagnostics', diagnosticRouter);
   app.use('/api/support', supportRouter);
   app.use('/api/kyc', kycRouter);
+  app.use('/api/legacy', legacyRouter);
+  app.use('/api/admin/legacy', legacyRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/health', healthRouter);
+  app.use('/api/health', healthRouter);
 
-  // Health checks
+  // Health checks (primary /api/health and /health served by healthRouter above)
   app.get('/healthz', (req, res) => {
     res.status(200).send('OK');
-  });
-
-  app.get('/api/health', async (req, res) => {
-    try {
-      const db = await getDb();
-      await db.query('SELECT 1');
-      res.status(200).json({ status: 'ok', database: 'connected', time: new Date().toISOString() });
-    } catch (err: any) {
-      console.error('[Health Check Error] PostgreSQL connection verification failed:', err);
-      res.status(503).json({ status: 'unhealthy', error: 'Database unavailable or unhealthy', time: new Date().toISOString() });
-    }
   });
 
   app.get('/api/health/db', (req, res, next) => {
@@ -183,45 +218,66 @@ async function startServer() {
   });
 
   // Initialize Database Schema and background schedulers asynchronously
-  getDb().then(async () => {
+  getDb().then(async (db) => {
     console.log('[Server] Database and referral migrations initialized.');
-    
-    // Seed and sync genealogy tree accounts to PostgreSQL, Firebase Auth & Firestore
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const { seedGenealogyNetworkTree } = await import('./src/server/services/genealogySeedService');
-        await seedGenealogyNetworkTree();
 
-        // Auto-reconcile direct referral commissions for all active node owners
-        const { reconcileUnprocessedReferralCommissions } = await import('./src/server/services/referralCommissionService');
-        await reconcileUnprocessedReferralCommissions();
+    const resetMarkerRes = await db
+      .query<{ config_value: string }>(
+        `SELECT config_value::text FROM unilevel_master_configs WHERE config_key = 'pre_launch_unilevel_reset_completed' LIMIT 1`
+      )
+      .catch(() => ({ rows: [] as Array<{ config_value: string }> }));
+    const isPreLaunchResetCompleted = Number(resetMarkerRes.rows[0]?.config_value || 0) >= 1;
 
-        // Auto-reconcile wallet ledgers for all users in the system
-        const { reconcileAllUserBalances } = await import('./src/server/services/walletLedgerService');
-        await reconcileAllUserBalances();
+    if (isPreLaunchResetCompleted) {
+      console.log('[Server] Pre-launch Unilevel reset marker detected — skipping legacy genealogy seed & legacy spot auto-reconciliation.');
+    } else {
+      // Seed and sync genealogy tree accounts to PostgreSQL, Firebase Auth & Firestore
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const { seedGenealogyNetworkTree } = await import('./src/server/services/genealogySeedService');
+          await seedGenealogyNetworkTree();
 
-        // Auto-reconcile specific affiliate accounts (Maya & Samrat)
-        const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
-        await reconcileSpecificAffiliateAccounts();
+          // Auto-reconcile direct referral commissions only if spot commission engine is enabled
+          const { ENABLE_SPOT_COMMISSION, ENABLE_BINARY_ENGINE } = await import('./src/config/referralConfig');
+          if (ENABLE_SPOT_COMMISSION) {
+            const { reconcileUnprocessedReferralCommissions } = await import('./src/server/services/referralCommissionService');
+            await reconcileUnprocessedReferralCommissions();
+          }
 
-        console.log('[Server] Genealogy seed & referral commission startup completed successfully.');
-        break;
-      } catch (seedErr: any) {
-        const msg = seedErr?.message || '';
-        const isConnErr = msg.includes('Connection terminated') || seedErr?.code === '57P01' || msg.includes('socket');
-        if (attempt < 3 && isConnErr) {
-          console.warn(`[Server] Startup genealogy seed attempt ${attempt} interrupted (${msg}). Retrying in 1s...`);
-          await new Promise((r) => setTimeout(r, 1000));
-        } else {
-          console.warn('[Server] Genealogy seed & referral commission startup notice:', seedErr);
+          // Auto-reconcile wallet ledgers for all users in the system
+          const { reconcileAllUserBalances } = await import('./src/server/services/walletLedgerService');
+          await reconcileAllUserBalances();
+
+          // Auto-reconcile specific affiliate accounts (Maya & Samrat)
+          const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
+          await reconcileSpecificAffiliateAccounts();
+
+          console.log('[Server] Genealogy seed & startup reconciliation completed successfully.');
+          void ENABLE_BINARY_ENGINE;
           break;
+        } catch (seedErr: any) {
+          const msg = seedErr?.message || '';
+          const isConnErr = msg.includes('Connection terminated') || seedErr?.code === '57P01' || msg.includes('socket');
+          if (attempt < 3 && isConnErr) {
+            console.warn(`[Server] Startup genealogy seed attempt ${attempt} interrupted (${msg}). Retrying in 1s...`);
+            await new Promise((r) => setTimeout(r, 1000));
+          } else {
+            console.warn('[Server] Genealogy seed & referral commission startup notice:', seedErr);
+            break;
+          }
         }
       }
     }
 
-    startMatchingScheduler();
+    const { ENABLE_BINARY_ENGINE: binaryEngineEnabled } = await import('./src/config/referralConfig');
+    if (binaryEngineEnabled) {
+      startMatchingScheduler();
+    }
     startWeeklyReportScheduler();
     startDailyAuditScheduler();
+    startTradingYieldScheduler();
+    startChronoVaultScheduler();
+    startUnilevelRoyaltyScheduler();
 
     // Run initial automatic daily reward catch-up immediately on startup, then every 60 seconds
     executeDailyAutomaticRewardCheck().catch((err) =>
@@ -237,9 +293,16 @@ async function startServer() {
     // Retry initialization in 3 seconds to recover if Cloud SQL socket took time to mount
     setTimeout(() => {
       getDb()
-        .then(async () => {
-          const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
-          await reconcileSpecificAffiliateAccounts();
+        .then(async (db) => {
+          const resetMarkerRes = await db
+            .query<{ config_value: string }>(
+              `SELECT config_value::text FROM unilevel_master_configs WHERE config_key = 'pre_launch_unilevel_reset_completed' LIMIT 1`
+            )
+            .catch(() => ({ rows: [] as Array<{ config_value: string }> }));
+          if (Number(resetMarkerRes.rows[0]?.config_value || 0) < 1) {
+            const { reconcileSpecificAffiliateAccounts } = await import('./src/server/services/affiliateAutoReconcileService');
+            await reconcileSpecificAffiliateAccounts();
+          }
         })
         .catch((retryErr) => console.warn('[Server] DB retry initialization notice:', retryErr?.message || retryErr));
     }, 3000);

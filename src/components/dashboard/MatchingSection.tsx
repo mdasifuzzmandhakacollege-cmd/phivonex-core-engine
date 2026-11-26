@@ -134,10 +134,10 @@ export const MatchingSection: React.FC<MatchingSectionProps> = ({
           </div>
           <div>
             <h2 className="text-base font-bold text-white tracking-wide">
-              Daily Binary Matching
+              Historical Settlement Archive
             </h2>
             <p className="text-xs text-[#98A2B3]">
-              Daily settlement consumes paired Left/Right node sales volume.
+              Archived historical cycle records preserved for legacy audit continuity.
             </p>
           </div>
         </div>

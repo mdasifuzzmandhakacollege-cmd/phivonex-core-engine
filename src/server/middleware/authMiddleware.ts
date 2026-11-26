@@ -223,3 +223,71 @@ export async function requireAdmin(req: AuthRequest, res: Response, next: NextFu
     });
   });
 }
+
+/**
+ * optionalAuth
+ * Resolves `req.user` if a valid session token is present; otherwise continues as an unauthenticated request.
+ */
+export async function optionalAuth(req: AuthRequest, _res: Response, next: NextFunction): Promise<void> {
+  const token =
+    req.cookies?.phx_session ||
+    (req.headers.authorization?.startsWith('Bearer ')
+      ? req.headers.authorization.split(' ')[1]
+      : null);
+
+  if (!token) {
+    return next();
+  }
+
+  try {
+    const db = await getDb();
+    const tokenHash = hashToken(token);
+    const sessionRes = await db.query(
+      `
+      SELECT
+        s.id AS session_id,
+        s.expires_at,
+        s.revoked_at,
+        u.id AS user_id,
+        u.public_id,
+        u.full_name,
+        u.email,
+        u.phone,
+        u.country,
+        u.status,
+        COALESCE(u.role, 'USER') AS role,
+        u.email_verified_at
+      FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.token_hash = $1
+      LIMIT 1
+      `,
+      [tokenHash]
+    );
+
+    if (sessionRes.rows.length > 0) {
+      const row = sessionRes.rows[0];
+      const isRevoked = !!row.revoked_at;
+      const isExpired = new Date(row.expires_at).getTime() <= Date.now();
+      if (!isRevoked && !isExpired && row.status === 'ACTIVE') {
+        req.user = {
+          id: row.user_id,
+          public_id: row.public_id,
+          fullName: row.full_name,
+          email: row.email,
+          phone: row.phone,
+          country: row.country,
+          status: row.status,
+          role: row.role || 'USER',
+          emailVerified: !!row.email_verified_at,
+          emailVerifiedAt: row.email_verified_at,
+        };
+      }
+    }
+  } catch {
+    // Ignore optional auth lookup errors
+  }
+
+  next();
+}
+

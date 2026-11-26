@@ -604,6 +604,53 @@ export async function runFinancialReconciliation(options?: {
           domainFound = chk.rows.length > 0;
           break;
         }
+        case 'TRADING_POOL_DEPOSIT':
+        case 'TRADING_POOL_PRINCIPAL_RETURN': {
+          const chk = await db.query(`SELECT id FROM user_trading_positions WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'TRADING_POOL_YIELD': {
+          const chk = await db.query(`SELECT id FROM trading_yield_payouts WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'CHRONO_VAULT_STAKING':
+        case 'CHRONO_VAULT_MATURITY': {
+          const chk = await db.query(`SELECT id FROM user_vault_positions WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'CHRONO_VAULT_YIELD': {
+          const chk = await db.query(`SELECT id FROM vault_yield_payouts WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'UNILEVEL_ROYALTY': {
+          const chk = await db.query(`SELECT id FROM unilevel_royalty_payouts WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'LEADERSHIP_RANK_REWARD': {
+          const chk = await db.query(`SELECT id FROM unilevel_rank_milestone_payouts WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'NODE_PURCHASE': {
+          const chk = await db.query(`SELECT id FROM node_orders WHERE id::text = $1`, [String(entry.source_id)]);
+          domainFound = chk.rows.length > 0;
+          break;
+        }
+        case 'WALLET_TRANSFER':
+        case 'ADMIN_ADJUSTMENT':
+        case 'USDT_DEPOSIT':
+        case 'BNB_DEPOSIT':
+        case 'DEPOSIT_CREDIT':
+        case 'GLOBAL_TURNOVER_POOL':
+        case 'FOUNDERS_COUNCIL_DIVIDEND': {
+          domainFound = true;
+          break;
+        }
         default:
           domainFound = false;
       }

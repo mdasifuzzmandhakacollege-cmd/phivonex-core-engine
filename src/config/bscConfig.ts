@@ -34,7 +34,7 @@ export const BSC_CONFIG = {
 
   // Primary JSON-RPC endpoint for BNB Smart Chain Mainnet
   get RPC_URL_PRIMARY(): string {
-    const raw = (process.env.BSC_RPC_URL_PRIMARY || '').trim();
+    const raw = (process.env.BSC_RPC_URL_PRIMARY || process.env.BSC_RPC_URL || '').trim();
     if (raw && !raw.endsWith('rpc.ankr.com/bsc') && !raw.endsWith('rpc.ankr.com/bsc/')) {
       return raw;
     }

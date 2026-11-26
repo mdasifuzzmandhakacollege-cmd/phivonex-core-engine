@@ -239,11 +239,11 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
           <div className="flex flex-wrap items-center gap-2.5 shrink-0 self-start md:self-auto">
             <button
               type="button"
-              onClick={() => onNavigateTab('node-health')}
+              onClick={() => onNavigateTab('products')}
               className="px-3.5 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-xs font-semibold text-white flex items-center gap-1.5 transition-all cursor-pointer min-h-[44px]"
             >
               <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
-              <span>Node Health</span>
+              <span>Ecosystem Telemetry</span>
             </button>
 
             <button
@@ -641,11 +641,11 @@ export const MyNodesView: React.FC<MyNodesViewProps> = ({ user: _user, onNavigat
                   <div className="pt-1">
                     <button
                       type="button"
-                      onClick={() => onNavigateTab('node-health')}
+                      onClick={() => onNavigateTab('products')}
                       className="w-full py-2 px-3 rounded-lg bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.06] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer min-h-[38px]"
                     >
                       <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
-                      <span>Node Health Details</span>
+                      <span>Ecosystem Telemetry Details</span>
                     </button>
                   </div>
                 </div>

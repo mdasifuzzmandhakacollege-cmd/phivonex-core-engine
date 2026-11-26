@@ -245,7 +245,7 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
               </span>
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#32D583]/10 border border-[#32D583]/25 text-[#32D583] text-[11px] font-semibold">
                 <Sparkles className="w-3 h-3" />
-                $50 per eligible activated node
+                Direct partnership reward program
               </span>
             </div>
 
@@ -362,7 +362,7 @@ export const DirectReferralsView: React.FC<DirectReferralsViewProps> = ({
                 Your Referral Credentials
               </h2>
               <p className="text-xs text-[#98A2B3]">
-                $50 direct referral reward per eligible activated node.
+                Share your partner credentials to build your 16-Generation asset-matched Unilevel network.
               </p>
             </div>
           </div>

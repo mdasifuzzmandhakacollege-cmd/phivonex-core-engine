@@ -122,7 +122,7 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
             <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-[#00CFFF]/10 border border-[#00CFFF]/25 text-[#00CFFF] text-[11px] font-semibold">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF]" />
-                Node Health Monitor
+                Ecosystem Monitor
               </span>
               {lastUpdated && (
                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-white/[0.04] border border-white/[0.08] text-[#98A2B3] text-[11px] font-mono">
@@ -133,7 +133,7 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">
-              Node Health
+              Ecosystem Telemetry
             </h1>
             <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
               Monitor the status and activity of your PHIVONEX Genesis Nodes.
@@ -360,7 +360,7 @@ export const NodeHealthView: React.FC<NodeHealthViewProps> = ({ onNavigateTab })
                     </span>
                   </div>
 
-                  {/* Node Health Properties */}
+                  {/* Ecosystem Properties */}
                   <div className="py-2 border-t border-b border-white/[0.04] space-y-1.5 text-xs font-mono">
                     <div className="flex items-center justify-between text-[11px]">
                       <span className="text-[#98A2B3]">Operational State:</span>

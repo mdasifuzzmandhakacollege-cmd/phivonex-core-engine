@@ -1,16 +1,9 @@
 import React from 'react';
 import {
-  Server,
-  Network,
-  Coins,
-  ArrowLeftRight,
   Clock,
-  Sparkles,
   ArrowRight,
   Layers,
-  Lock,
-  Radio,
-  HelpCircle
+  HelpCircle,
 } from 'lucide-react';
 import { DashboardTab } from './Sidebar';
 import { UserProfile } from '../../context/AuthContext';
@@ -23,79 +16,23 @@ interface PlaceholderViewProps {
 
 export const PlaceholderView: React.FC<PlaceholderViewProps> = ({
   tab,
-  user,
+  user: _user,
   onNavigateTab,
 }) => {
   const getTabDetails = () => {
     switch (tab) {
-      case 'nodes':
-        return {
-          title: 'My Node Infrastructure',
-          icon: Server,
-          phase: 'Phase 2 Protocol Activation',
-          status: 'Scheduled in Release Roadmap',
-          desc: 'Validator node deployment, hardware telemetry monitoring, and consensus staking will unlock following the Phase 2 Genesis activation.',
-          highlights: [
-            'Validator Node Tier Allocation',
-            'Hardware Telemetry & Proof-of-Work / Proof-of-Stake metrics',
-            'Real-Time Block Consensus Sync',
-            'Automated Node Uptime Verification',
-          ],
-        };
-      case 'network':
-        return {
-          title: 'Consensus Network Topology',
-          icon: Network,
-          phase: 'Phase 2 Topology Engine',
-          status: 'Scheduled in Release Roadmap',
-          desc: 'Global peer-to-peer network graphing, validator clustering, and cryptographic placement trees will be accessible in Phase 2.',
-          highlights: [
-            'Dynamic Dual-Leg Network Mapping',
-            'Direct & Indirect Referral Tree Traversal',
-            'Global Geographic Node Density',
-            'Consensus Cluster Health Checks',
-          ],
-        };
       case 'support':
         return {
           title: 'PHIVONEX Protocol Support Center',
           icon: HelpCircle,
           phase: 'Live Support & Knowledge Desk',
           status: '24/7 Operations Desk',
-          desc: 'Get direct technical assistance with node validator deployment, wallet withdrawals, binary structure positioning, and smart account security.',
+          desc: 'Get direct technical assistance with node validator deployment, wallet withdrawals, unilevel structure positioning, and smart account security.',
           highlights: [
             'Direct Operator Support Desk: support@phivonex.com',
             'Official Community Channel: @phivonex_official',
             'Security & Incident Response Desk',
             'Automated Protocol Diagnostics & Status',
-          ],
-        };
-      case 'rewards':
-        return {
-          title: 'Rewards & Mining Ledger',
-          icon: Coins,
-          phase: 'Phase 3 Ledger Activation',
-          status: 'Scheduled in Release Roadmap',
-          desc: 'Automated block rewards, daily mining distributions, and cryptographic ledger claim mechanisms will deploy in Phase 3.',
-          highlights: [
-            'Daily Mining Yield Calculations',
-            'Epoch-Based Ledger Distributions',
-            'Matching Bonus Accounting',
-            'Cryptographic Claim Verification',
-          ],
-        };
-      case 'transactions':
-        return {
-          title: 'Ledger Transactions & Activity',
-          icon: ArrowLeftRight,
-          phase: 'Phase 3 Protocol Ledger',
-          status: 'Scheduled in Release Roadmap',
-          desc: 'On-chain immutable transactions, transfer history, and multi-signature settlement logs will activate with the protocol ledger.',
-          highlights: [
-            'Immutable Transaction Hashes & Merkle Roots',
-            'Internal Settlement Verification',
-            'Exportable Audit Receipts',
-            'Smart Contract Interaction History',
           ],
         };
       default:
@@ -120,7 +57,6 @@ export const PlaceholderView: React.FC<PlaceholderViewProps> = ({
   return (
     <div className="space-y-6 max-w-4xl mx-auto animate-fadeIn">
       <div className="p-6 sm:p-10 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-2xl relative overflow-hidden text-center sm:text-left">
-        {/* Background glow */}
         <div className="absolute top-0 right-0 w-96 h-96 bg-[#00CFFF]/5 rounded-full blur-3xl pointer-events-none" />
 
         <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 relative z-10">

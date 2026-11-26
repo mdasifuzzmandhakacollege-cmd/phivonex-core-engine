@@ -41,8 +41,11 @@ export function createRateLimiter(options: RateLimitOptions) {
     const userId = (req as any).user?.id;
     let key = `${keyPrefix}:${userId || clientIp}`;
 
-    if (includeIdentifier && req.body && req.body.identifier) {
-      key += `:${String(req.body.identifier).toLowerCase().trim()}`;
+    if (includeIdentifier && req.body) {
+      const rawId = req.body.identifier || req.body.email;
+      if (rawId) {
+        key += `:${String(rawId).toLowerCase().trim()}`;
+      }
     }
 
     const now = Date.now();
@@ -113,6 +116,14 @@ export const passwordResetLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000,
   max: 20,
   keyPrefix: 'pwd_reset',
+  includeIdentifier: true,
+});
+
+// 4b. AI Concierge Support Limiter
+export const aiConciergeLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyPrefix: 'ai_concierge',
 });
 
 // 5. Coin Swap Operation Limiter

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
+import { isInstalledAppEnvironment } from '../utils/platformEnvironment';
 import { Download, X, Share, Smartphone, CheckCircle, Sparkles } from 'lucide-react';
 
 export const PWAInstallPrompt: React.FC = () => {
@@ -7,21 +8,31 @@ export const PWAInstallPrompt: React.FC = () => {
   const [dismissed, setDismissed] = useState(false);
   const [showIOSGuide, setShowIOSGuide] = useState(false);
 
-  // Check if previously dismissed in this session
+  // Check if already installed via platform environment or snoozed / dismissed
   useEffect(() => {
-    const isDismissed = sessionStorage.getItem('phivonex_pwa_prompt_dismissed') === 'true';
-    if (isDismissed) {
+    if (typeof window === 'undefined') return;
+    if (isInstalledAppEnvironment()) {
+      setDismissed(true);
+      return;
+    }
+    const sessionDismissed = sessionStorage.getItem('phivonex_pwa_prompt_dismissed') === 'true';
+    const snoozedUntil = Number(localStorage.getItem('phx_app_modal_snoozed_until') || '0');
+    if (sessionDismissed || Date.now() < snoozedUntil) {
       setDismissed(true);
     }
   }, []);
 
   const handleDismiss = () => {
     setDismissed(true);
-    sessionStorage.setItem('phivonex_pwa_prompt_dismissed', 'true');
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('phivonex_pwa_prompt_dismissed', 'true');
+      // 3-minute snooze cooldown
+      localStorage.setItem('phx_app_modal_snoozed_until', String(Date.now() + 3 * 60 * 1000));
+    }
   };
 
-  // Hide if already running as installed app
-  if (isInstalled) {
+  // Hide if already running as installed app or platform environment
+  if (isInstalled || isInstalledAppEnvironment()) {
     return null;
   }
 

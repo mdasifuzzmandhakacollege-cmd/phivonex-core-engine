@@ -586,10 +586,10 @@ export const RewardsView: React.FC<RewardsViewProps> = ({ user: _user, onNavigat
 
           <div className="pt-2">
             <button
-              onClick={() => onNavigateTab('node-health')}
+              onClick={() => onNavigateTab('products')}
               className="w-full py-2.5 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-white border border-white/[0.08] text-xs font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer min-h-[44px]"
             >
-              <span>View Node Health Telemetry</span>
+              <span>View Ecosystem Telemetry</span>
               <ChevronRight className="w-3.5 h-3.5 text-[#98A2B3]" />
             </button>
           </div>

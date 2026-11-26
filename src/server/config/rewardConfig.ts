@@ -14,6 +14,9 @@
 // Reward currency standard
 export const REWARD_CURRENCY = 'PHIVO';
 
+// Canonical default daily reward per Genesis Node (15 PHIVO/day)
+export const CANONICAL_DEFAULT_REWARD_PER_NODE = 15;
+
 // Minimum allowable reward per node (when configured)
 export const MIN_REWARD_PER_NODE = 0.01;
 
@@ -21,8 +24,8 @@ export const MIN_REWARD_PER_NODE = 0.01;
 export const MAX_REWARD_PER_NODE = 1000.00;
 
 /**
- * Returns the explicitly configured reward rate per node from server environment or admin parameters.
- * Returns null if not configured. Never assumes or invents any default amount.
+ * Returns the explicitly configured reward rate per node from server environment or admin parameters,
+ * falling back to the canonical PHIVONEX GENESIS CORE™ rate of 15 PHIVO/day.
  */
 export function getConfiguredRewardPerNode(override?: number): number | null {
   // 1. If explicit administrative override is passed by authoritative server caller:
@@ -49,6 +52,6 @@ export function getConfiguredRewardPerNode(override?: number): number | null {
     }
   }
 
-  // 3. No default reward amount exists in production
-  return null;
+  // 3. Canonical default daily reward rate for PHIVONEX GENESIS CORE™ (15 PHIVO/day)
+  return CANONICAL_DEFAULT_REWARD_PER_NODE;
 }

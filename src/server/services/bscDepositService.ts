@@ -7,6 +7,7 @@ import { postLedgerCredit } from './walletLedgerService';
 import { notifyUsdtDepositConfirmed } from './notificationService';
 import { bscRpcManager } from '../providers/bscRpcProvider';
 import { ethers } from 'ethers';
+import { isFeatureSwitchEnabled } from './unilevelConfigService';
 
 export type BlockchainDepositStatus =
   | 'DETECTED'
@@ -123,6 +124,15 @@ export async function processBlockchainDepositEvent(params: {
   blockNumber: number;
   currentBlockNumber: number;
 }): Promise<BlockchainDepositRecord | null> {
+  // Master Governance Switch Check: BEP-20 Deposits Enabled
+  const depositsEnabled = await isFeatureSwitchEnabled('bep20_deposits_enabled');
+  if (!depositsEnabled) {
+    console.warn(
+      `[BscDepositService] Paused by protocol governance (bep20_deposits_enabled = FALSE). Deferring deposit event tx=${params.txHash}.`
+    );
+    return null;
+  }
+
   const chainId = params.chainId || BSC_CONFIG.CHAIN_ID;
   const expectedChainId = BSC_CONFIG.CHAIN_ID;
 
@@ -325,7 +335,7 @@ export async function processBlockchainDepositEvent(params: {
         console.warn('[Notification] Error triggering deposit confirmed notification:', notifErr);
       }
 
-      // Send DEPOSIT_CONFIRM email and trigger potential automation rules
+      // Send DEPOSIT_CONFIRM email, log transactional receipt, and trigger potential automation rules
       try {
         const userRes = await db.query<{ email: string; full_name: string; public_id: string }>(
           `SELECT email, full_name, public_id FROM users WHERE id = $1`,
@@ -333,7 +343,21 @@ export async function processBlockchainDepositEvent(params: {
         );
         if (userRes.rowCount > 0) {
           const user = userRes.rows[0];
-          const { queueEventEmail, triggerAutomationRule } = await import('./emailService');
+          const { queueEventEmail, triggerAutomationRule, sendTransactionEmail } = await import('./emailService');
+
+          await sendTransactionEmail({
+            userId,
+            recipientEmail: user.email,
+            recipientName: user.full_name,
+            eventType: 'DEPOSIT_CONFIRMED',
+            metadata: {
+              publicDepositId: depositRow.public_deposit_id || depId,
+              amount: depAmount,
+              asset: depositRow.asset || 'USDT',
+              network: 'BNB Smart Chain (BEP-20)',
+              txHash: cleanTxHash,
+            },
+          });
 
           await queueEventEmail(user.email, 'DEPOSIT_CONFIRM', {
             displayName: user.full_name,

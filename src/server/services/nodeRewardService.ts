@@ -3,10 +3,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateEpochPublicId, generateRewardPublicId } from '../utils/idGenerator';
 import { getConfiguredRewardPerNode, REWARD_CURRENCY } from '../config/rewardConfig';
 import { postLedgerCredit, postLedgerReversal } from './walletLedgerService';
-import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch, getEconomicConfigByKey } from './economicService';
+import { isNodeRewardsEnabled, getNodeRewardRatePerEpoch, getEconomicConfigByKey, getInternalCoinPrice } from './economicService';
 import { notifyPhivoReward } from './notificationService';
 import { getUtcBusinessDate } from '../utils/timezone';
 import { broadcastSystemConfigChange } from './systemConfigBroadcaster';
+import { enqueueUnilevelYieldEvent, calculateTokenRoiUsdExact } from './unilevelYieldEventService';
+import { parseAmountToScaledBigInt, formatScaledBigInt } from './tradingPoolService';
+import { processPendingUnilevelYieldEvents } from './roiGenerationService';
+import { isFeatureSwitchEnabled } from './unilevelConfigService';
 
 // Process-level mutex serializing automatic and manual reward epoch distributions
 let rewardSettlementLock: Promise<void> = Promise.resolve();
@@ -244,13 +248,16 @@ export async function closeAndSettleEpoch(
     };
   }
 
-  // 2. Check master switch: Rewards Enabled
-  const rewardsEnabled = await isNodeRewardsEnabled();
-  if (!rewardsEnabled) {
+  // 2. Check master governance & economic switch: Genesis Node Daily PHIVO Emission
+  const [rewardsEnabled, emissionSwitchEnabled] = await Promise.all([
+    isNodeRewardsEnabled(),
+    isFeatureSwitchEnabled('genesis_node_emission_enabled', db),
+  ]);
+  if (!rewardsEnabled || !emissionSwitchEnabled) {
     return {
       success: false,
-      error: 'NODE_REWARDS_DISABLED',
-      message: 'Node mining reward distributions are currently disabled by administration.',
+      error: 'MODULE_PAUSED',
+      message: 'Module Temporarily Paused by Protocol Governance — Genesis Core™ daily PHIVO emissions are currently paused by administration.',
       epochId,
       publicEpochId,
       epochNumber,
@@ -341,8 +348,8 @@ export async function closeAndSettleEpoch(
     WHERE (status = 'ACTIVE' OR status = 'EMITTING') 
       AND owner_user_id IS NOT NULL 
       AND (activated_at IS NULL OR activated_at <= $2)
-      AND (distributed_phivo IS NULL OR distributed_phivo < COALESCE(lifetime_phivo_allocation, 10000.00))
-      AND (remaining_phivo IS NULL OR remaining_phivo > 0)
+      AND COALESCE(distributed_phivo, 0) < COALESCE(lifetime_phivo_allocation, 10000.00)
+      AND (nodes.last_reward_date IS NULL OR nodes.last_reward_date < $4::date)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
       AND (
         $3::boolean = false
@@ -367,96 +374,235 @@ export async function closeAndSettleEpoch(
     [options?.targetNodeId || null, epochEndAt, dedupeByBusinessDate, businessDate, excludeLumpSumRange]
   );
 
+  // Resolve active PHIVO reference price in USDT (default $0.10 USDT)
+  const coinPriceConfig = await getInternalCoinPrice();
+  const currentPhivoUsdPrice =
+    coinPriceConfig && Number(coinPriceConfig.priceUsdt) > 0
+      ? Number(coinPriceConfig.priceUsdt)
+      : 0.10;
+
   const eligibleNodes = activeNodesRes.rows;
   let rewardsCreated = 0;
   let totalDistributed = 0;
+  let totalUsdEquivalentScaled = 0n;
 
   for (const node of eligibleNodes) {
     const configuredDailyReward = effectiveRate;
-    const lifetimeCap = Number(node.lifetime_phivo_allocation || 10000);
 
-    // Calculate authoritative distributed total from node_rewards so DB totals stay synchronized
-    const sumRes = await db.query<{ total: string | number }>(
-      `SELECT COALESCE(SUM(amount), 0) AS total FROM node_rewards WHERE node_id = $1 AND status != 'REVERSED'`,
-      [node.id]
-    );
-    const currentDist = Math.max(Number(node.distributed_phivo || 0), Number(sumRes.rows[0]?.total || 0));
-    const remainingPhivo = Math.max(0, lifetimeCap - currentDist);
-
-    const actualEmission = Math.min(configuredDailyReward, Math.max(0, remainingPhivo));
-
-    if (actualEmission <= 0) {
-      // Node has already distributed full allocation: mark MATURED
-      await db.query(
-        `UPDATE nodes SET status = 'MATURED', distributed_phivo = $1, remaining_phivo = 0, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
-        [currentDist, node.id]
+    const txResult = await db.transaction(async (trx) => {
+      // Lock the node row for atomic emission calculation and lifetime cap enforcement
+      const lockedNodeRes = await trx.query<{
+        id: string;
+        public_node_id: string;
+        node_number: number;
+        owner_user_id: string;
+        status: string;
+        lifetime_phivo_allocation: string | number;
+        distributed_phivo: string | number;
+        remaining_phivo: string | number;
+      }>(
+        `
+        SELECT
+          id,
+          public_node_id,
+          node_number,
+          owner_user_id,
+          status,
+          COALESCE(lifetime_phivo_allocation, 10000.00000000) AS lifetime_phivo_allocation,
+          COALESCE(distributed_phivo, 0.00000000) AS distributed_phivo,
+          COALESCE(remaining_phivo, 10000.00000000) AS remaining_phivo
+        FROM nodes
+        WHERE id = $1
+        FOR UPDATE
+        `,
+        [node.id]
       );
+
+      if (lockedNodeRes.rowCount === 0) {
+        return { outcome: 'SKIPPED' as const };
+      }
+
+      const lockedNode = lockedNodeRes.rows[0];
+      if (lockedNode.status !== 'ACTIVE' && lockedNode.status !== 'EMITTING') {
+        return { outcome: 'SKIPPED' as const };
+      }
+
+      const lifetimeCapScaled = parseAmountToScaledBigInt(
+        lockedNode.lifetime_phivo_allocation || 10000
+      );
+
+      // Authoritative distributed total from node_rewards + nodes.distributed_phivo
+      const sumRes = await trx.query<{ total: string }>(
+        `SELECT ROUND(COALESCE(SUM(amount), 0), 8)::text AS total FROM node_rewards WHERE node_id = $1 AND status != 'REVERSED'`,
+        [lockedNode.id]
+      );
+
+      const distColScaled = parseAmountToScaledBigInt(lockedNode.distributed_phivo || 0);
+      const sumRewardsScaled = parseAmountToScaledBigInt(sumRes.rows[0]?.total || 0);
+      const currentDistScaled =
+        distColScaled >= sumRewardsScaled ? distColScaled : sumRewardsScaled;
+      const remainingScaled =
+        lifetimeCapScaled > currentDistScaled ? lifetimeCapScaled - currentDistScaled : 0n;
+
+      const configuredDailyScaled = parseAmountToScaledBigInt(configuredDailyReward);
+      const actualEmissionScaled =
+        configuredDailyScaled <= remainingScaled ? configuredDailyScaled : remainingScaled;
+
+      if (actualEmissionScaled <= 0n) {
+        // Node has already distributed full 10,000 PHIVO allocation: transition to MATURED
+        await trx.query(
+          `
+          UPDATE nodes
+          SET
+            status = 'MATURED',
+            distributed_phivo = $1::numeric(20,8),
+            remaining_phivo = 0.00000000,
+            maturity_timestamp = COALESCE(maturity_timestamp, CURRENT_TIMESTAMP),
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          `,
+          [formatScaledBigInt(currentDistScaled), lockedNode.id]
+        );
+        return { outcome: 'ALREADY_MATURED' as const };
+      }
+
+      const actualEmissionStr = formatScaledBigInt(actualEmissionScaled);
+      const rewardId = uuidv4();
+      const publicRewardId = generateRewardPublicId();
+
+      // Idempotent insertion protected by UNIQUE(node_id, epoch_id)
+      const insRes = await trx.query<any>(
+        `
+        INSERT INTO node_rewards (
+          id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
+          reward_rate_used, economic_config_version, business_date, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::numeric(20,8), $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
+        ON CONFLICT (node_id, epoch_id) DO NOTHING
+        RETURNING *
+        `,
+        [
+          rewardId,
+          publicRewardId,
+          epochId,
+          lockedNode.id,
+          lockedNode.owner_user_id,
+          actualEmissionStr,
+          epoch.currency || REWARD_CURRENCY,
+          settleTime,
+          configuredDailyReward,
+          configVersion,
+          businessDate,
+        ]
+      );
+
+      if (insRes.rows.length > 0) {
+        const createdRewardId = insRes.rows[0].id as string;
+        const createdPublicRewardId = insRes.rows[0].public_reward_id as string;
+        const createdAmountNum = Number(insRes.rows[0].amount);
+
+        const newDistScaled = currentDistScaled + actualEmissionScaled;
+        const newRemScaled =
+          lifetimeCapScaled > newDistScaled ? lifetimeCapScaled - newDistScaled : 0n;
+        const newStatus =
+          newRemScaled <= 0n || newDistScaled >= lifetimeCapScaled ? 'MATURED' : 'ACTIVE';
+
+        await trx.query(
+          `
+          UPDATE nodes
+          SET
+            distributed_phivo = $1::numeric(20,8),
+            remaining_phivo = $2::numeric(20,8),
+            accrued_phivo = COALESCE(accrued_phivo, 0) + $5::numeric(20,8),
+            last_reward_date = CASE
+              WHEN last_reward_date IS NULL OR last_reward_date < $6::date THEN $6::date
+              ELSE last_reward_date
+            END,
+            status = $3::varchar,
+            maturity_timestamp = CASE
+              WHEN $3::varchar = 'MATURED' THEN COALESCE(maturity_timestamp, CURRENT_TIMESTAMP)
+              ELSE maturity_timestamp
+            END,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $4
+          `,
+          [
+            formatScaledBigInt(newDistScaled),
+            formatScaledBigInt(newRemScaled),
+            newStatus,
+            lockedNode.id,
+            actualEmissionStr,
+            businessDate,
+          ]
+        );
+
+        // Convert emitted PHIVO into USD equivalent and enqueue Unified Unilevel Yield Event (Task 06 -> Task 07 outbox)
+        const roiCalc = calculateTokenRoiUsdExact(actualEmissionStr, currentPhivoUsdPrice);
+        await enqueueUnilevelYieldEvent(trx, {
+          sourceProductType: 'GENESIS_NODE',
+          sourceYieldId: createdRewardId,
+          sourceUserId: lockedNode.owner_user_id,
+          epochDate: businessDate,
+          sourceRoiUsd: roiCalc.roiUsdStr,
+          rawTokenAmount: roiCalc.rawTokenAmountStr,
+          tokenReferencePriceUsd: roiCalc.tokenReferencePriceUsdStr,
+        });
+
+        return {
+          outcome: 'CREATED' as const,
+          actualRewardId: createdRewardId,
+          actualPublicRewardId: createdPublicRewardId,
+          actualAmount: createdAmountNum,
+          usdEquivalentScaled: roiCalc.roiUsdScaled,
+        };
+      } else {
+        const existing = await trx.query<any>(
+          `SELECT id, public_reward_id, ROUND(amount, 8)::text AS amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
+          [lockedNode.id, epochId]
+        );
+        if (existing.rows.length === 0) {
+          return { outcome: 'SKIPPED' as const };
+        }
+        const exId = existing.rows[0].id as string;
+        const exPubId = existing.rows[0].public_reward_id as string;
+        const exAmountStr = existing.rows[0].amount as string;
+
+        const roiCalc = calculateTokenRoiUsdExact(exAmountStr, currentPhivoUsdPrice);
+        await enqueueUnilevelYieldEvent(trx, {
+          sourceProductType: 'GENESIS_NODE',
+          sourceYieldId: exId,
+          sourceUserId: lockedNode.owner_user_id,
+          epochDate: businessDate,
+          sourceRoiUsd: roiCalc.roiUsdStr,
+          rawTokenAmount: roiCalc.rawTokenAmountStr,
+          tokenReferencePriceUsd: roiCalc.tokenReferencePriceUsdStr,
+        });
+
+        return {
+          outcome: 'EXISTING' as const,
+          actualRewardId: exId,
+          actualPublicRewardId: exPubId,
+          actualAmount: Number(exAmountStr),
+          usdEquivalentScaled: 0n,
+        };
+      }
+    });
+
+    if (
+      txResult.outcome === 'SKIPPED' ||
+      txResult.outcome === 'ALREADY_MATURED'
+    ) {
       continue;
     }
 
-    const rewardId = uuidv4();
-    const publicRewardId = generateRewardPublicId();
+    const actualRewardId = txResult.actualRewardId;
+    const actualPublicRewardId = txResult.actualPublicRewardId;
+    const actualAmount = txResult.actualAmount;
 
-    // Idempotent insertion protected by UNIQUE(node_id, epoch_id)
-    const insRes = await db.query<any>(
-      `
-      INSERT INTO node_rewards (
-        id, public_reward_id, epoch_id, node_id, owner_user_id, amount, currency, status, accrued_at,
-        reward_rate_used, economic_config_version, business_date, created_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACCRUED', $8, $9, $10, $11, CURRENT_TIMESTAMP)
-      ON CONFLICT (node_id, epoch_id) DO NOTHING
-      RETURNING *
-      `,
-      [
-        rewardId,
-        publicRewardId,
-        epochId,
-        node.id,
-        node.owner_user_id,
-        actualEmission,
-        epoch.currency || REWARD_CURRENCY,
-        settleTime,
-        configuredDailyReward,
-        configVersion,
-        businessDate,
-      ]
-    );
-
-    let actualRewardId: string;
-    let actualPublicRewardId: string;
-    let actualAmount: number;
-
-    if (insRes.rows.length > 0) {
-      actualRewardId = insRes.rows[0].id;
-      actualPublicRewardId = insRes.rows[0].public_reward_id;
-      actualAmount = Number(insRes.rows[0].amount);
+    if (txResult.outcome === 'CREATED') {
       rewardsCreated++;
       totalDistributed += actualAmount;
-
-      // Update node distribution accounting while keeping status as 'ACTIVE' until MATURED
-      const newDist = currentDist + actualAmount;
-      const newRem = Math.max(0, lifetimeCap - newDist);
-      const newStatus = newRem <= 0 || newDist >= lifetimeCap ? 'MATURED' : 'ACTIVE';
-
-      await db.query(
-        `
-        UPDATE nodes
-        SET distributed_phivo = $1, remaining_phivo = $2, status = $3, updated_at = CURRENT_TIMESTAMP
-        WHERE id = $4
-        `,
-        [newDist, newRem, newStatus, node.id]
-      );
-    } else {
-      // Already existed: fetch existing
-      const existing = await db.query<any>(
-        `SELECT id, public_reward_id, amount FROM node_rewards WHERE node_id = $1 AND epoch_id = $2`,
-        [node.id, epochId]
-      );
-      if (existing.rows.length === 0) continue;
-      actualRewardId = existing.rows[0].id;
-      actualPublicRewardId = existing.rows[0].public_reward_id;
-      actualAmount = Number(existing.rows[0].amount);
+      totalUsdEquivalentScaled += txResult.usdEquivalentScaled;
     }
 
     // 5. Post credit to financial ledger for node reward
@@ -506,6 +652,53 @@ export async function closeAndSettleEpoch(
         }
       }).catch(() => {});
     }
+  }
+
+  // Record / update ecosystem_yield_settlement_cycles for GENESIS_NODE on businessDate
+  try {
+    const cycleAggRes = await db.query<{
+      positions_count: string | number;
+      total_yield_usd: string;
+    }>(
+      `
+      SELECT
+        COUNT(*)::int AS positions_count,
+        ROUND(COALESCE(SUM(source_roi_usd), 0), 8)::text AS total_yield_usd
+      FROM unilevel_yield_events
+      WHERE source_product_type = 'GENESIS_NODE'
+        AND epoch_date = $1::date
+      `,
+      [businessDate]
+    );
+    const positionsCount = Number(cycleAggRes.rows[0]?.positions_count || rewardsCreated);
+    const totalYieldUsd =
+      cycleAggRes.rows[0]?.total_yield_usd || formatScaledBigInt(totalUsdEquivalentScaled);
+
+    await db.query(
+      `
+      INSERT INTO ecosystem_yield_settlement_cycles (
+        epoch_date, engine_type, status, positions_processed,
+        total_yield_distributed, total_royalty_distributed, started_at, completed_at, created_at
+      )
+      VALUES ($1::date, 'GENESIS_NODE', 'COMPLETED', $2, $3::numeric(20,8), 0.00000000, NOW(), NOW(), NOW())
+      ON CONFLICT (epoch_date, engine_type) DO UPDATE SET
+        status = 'COMPLETED',
+        positions_processed = EXCLUDED.positions_processed,
+        total_yield_distributed = EXCLUDED.total_yield_distributed,
+        completed_at = NOW(),
+        error_message = NULL
+      `,
+      [businessDate, positionsCount, totalYieldUsd]
+    );
+  } catch (cycleErr) {
+    console.warn('[NodeReward] Notice recording ecosystem_yield_settlement_cycles:', cycleErr);
+  }
+
+  // Trigger 16-Generation Unilevel ROI-on-ROI payout processing for newly enqueued GENESIS_NODE yield events
+  try {
+    await processPendingUnilevelYieldEvents(200);
+  } catch (unilevelErr) {
+    console.warn('[NodeReward] Notice processing pending Unilevel yield events:', unilevelErr);
   }
 
   return {
@@ -589,26 +782,47 @@ export async function claimUserRewards(userId: string): Promise<{
 }> {
   const db = await getDb();
 
-  const now = new Date();
-  const updRes = await db.query<any>(
-    `
-    UPDATE node_rewards
-    SET status = 'CLAIMED', claimed_at = $1
-    WHERE owner_user_id = $2 AND status = 'ACCRUED'
-    RETURNING id, amount
-    `,
-    [now, userId]
-  );
+  return db.transaction(async (trx) => {
+    const now = new Date();
+    const updRes = await trx.query<{ id: string; node_id: string; amount: string | number }>(
+      `
+      UPDATE node_rewards
+      SET status = 'CLAIMED', claimed_at = $1
+      WHERE owner_user_id = $2 AND status = 'ACCRUED'
+      RETURNING id, node_id, amount
+      `,
+      [now, userId]
+    );
 
-  let totalAmount = 0;
-  for (const row of updRes.rows) {
-    totalAmount += Number(row.amount);
-  }
+    let totalAmount = 0;
+    const claimedByNode = new Map<string, number>();
+    for (const row of updRes.rows) {
+      const amt = Number(row.amount || 0);
+      totalAmount += amt;
+      if (row.node_id) {
+        claimedByNode.set(row.node_id, (claimedByNode.get(row.node_id) || 0) + amt);
+      }
+    }
 
-  return {
-    claimedCount: updRes.rows.length,
-    totalClaimedAmount: totalAmount,
-  };
+    for (const [nodeId, claimedAmt] of claimedByNode.entries()) {
+      await trx.query(
+        `
+        UPDATE nodes
+        SET
+          accrued_phivo = GREATEST(0.00000000, COALESCE(accrued_phivo, 0.00000000) - $1::numeric(20,8)),
+          claimed_phivo = COALESCE(claimed_phivo, 0.00000000) + $1::numeric(20,8),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $2
+        `,
+        [claimedAmt.toFixed(8), nodeId]
+      );
+    }
+
+    return {
+      claimedCount: updRes.rows.length,
+      totalClaimedAmount: Number(totalAmount.toFixed(8)),
+    };
+  });
 }
 
 /**
@@ -1265,8 +1479,11 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
         return; // Manual mode is active; skip automated run
       }
 
-      const rewardsEnabled = await isNodeRewardsEnabled();
-      if (!rewardsEnabled) {
+      const [rewardsEnabled, emissionSwitchEnabled] = await Promise.all([
+        isNodeRewardsEnabled(),
+        isFeatureSwitchEnabled('genesis_node_emission_enabled'),
+      ]);
+      if (!rewardsEnabled || !emissionSwitchEnabled) {
         return; // Master engine switch paused
       }
 
@@ -1291,21 +1508,30 @@ export async function executeDailyAutomaticRewardCheck(): Promise<void> {
         `
       );
 
-      // Determine missed UTC dates range across the automated daily window (starting >= 2026-11-06)
+      // Determine missed UTC dates range across the automated daily window
+      // After atomic pre-launch backfill (through 2026-11-26 UTC), advance floor to 2026-11-27 so 2026-11-26 is never double-paid.
+      const preLaunchResetRes = await db
+        .query<{ config_value: string }>(
+          `SELECT config_value::text FROM unilevel_master_configs WHERE config_key = 'pre_launch_unilevel_reset_completed' LIMIT 1`
+        )
+        .catch(() => ({ rows: [] as Array<{ config_value: string }> }));
+      const isPostPreLaunchBackfill = Number(preLaunchResetRes.rows[0]?.config_value || 0) >= 1;
+
       const earliestNodeRes = await db.query<{ earliest_date: string | null }>(
         `SELECT MIN((COALESCE(activated_at, created_at) AT TIME ZONE 'UTC')::date)::text AS earliest_date FROM nodes WHERE status IN ('ACTIVE', 'EMITTING') AND owner_user_id IS NOT NULL`
       );
 
       const earliestNodeDate = earliestNodeRes.rows[0]?.earliest_date?.slice(0, 10) || todayDate;
-      const dailyCadenceFloor = '2026-11-06';
+      const dailyCadenceFloor = isPostPreLaunchBackfill ? '2026-11-27' : '2026-11-06';
       const minAllowedLookback = new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
       let rangeStartDate = earliestNodeDate > dailyCadenceFloor ? earliestNodeDate : dailyCadenceFloor;
-      if (rangeStartDate < minAllowedLookback) {
+      if (!isPostPreLaunchBackfill && rangeStartDate < minAllowedLookback) {
         rangeStartDate = minAllowedLookback;
       }
 
-      const candidateDates = buildUtcDateRange(rangeStartDate, todayDate);
+      const candidateDates =
+        rangeStartDate > todayDate ? [] : buildUtcDateRange(rangeStartDate, todayDate);
       let latestSettledResult: EpochSettlementResult | null = null;
 
       for (const dateStr of candidateDates) {

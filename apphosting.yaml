@@ -1,47 +1,108 @@
+# Firebase App Hosting configuration for phivonex-core-engine
+# Documentation: https://firebase.google.com/docs/app-hosting/configure
+
 runConfig:
+  cpu: 1
+  memoryMiB: 1024
   minInstances: 1
   maxInstances: 10
   concurrency: 80
-  cpu: 1
-  memoryMiB: 1024
 
 env:
+  # ==========================================================================
+  # PUBLIC APPLICATION & BLOCKCHAIN CONFIGURATION
+  # ==========================================================================
   - variable: NODE_ENV
     value: "production"
     availability:
       - BUILD
       - RUNTIME
+
   - variable: APP_ENV
     value: "production"
     availability:
       - BUILD
       - RUNTIME
+
+  - variable: APP_URL
+    value: "https://phivonex.online"
+    availability:
+      - BUILD
+      - RUNTIME
+
+  - variable: RESEND_FROM_EMAIL
+    value: "support@phivonex.online"
+    availability:
+      - RUNTIME
+
+  - variable: TREASURY_WALLET_ADDRESS
+    value: "0x39F47C356d45eA49826a76C252794c4C83572D76"
+    availability:
+      - RUNTIME
+
   - variable: BSC_CHAIN_ID
     value: "56"
     availability:
       - BUILD
       - RUNTIME
+
+  - variable: BSC_RPC_URL
+    value: "https://bsc-dataseed.binance.org"
+    availability:
+      - RUNTIME
+
   - variable: BSC_RPC_URL_PRIMARY
     value: "https://bsc-dataseed.binance.org"
     availability:
-      - BUILD
       - RUNTIME
+
   - variable: BSC_RPC_URL_SECONDARY
     value: "https://bsc-dataseed1.defibit.io"
     availability:
-      - BUILD
       - RUNTIME
+
+  - variable: DEPOSIT_CONFIRMATIONS
+    value: "3"
+    availability:
+      - RUNTIME
+
   - variable: USDT_CONTRACT_ADDRESS
     value: "0x55d398326f99059ff775485246999027b3197955"
     availability:
       - BUILD
       - RUNTIME
-  - variable: DEPOSIT_CONFIRMATIONS
-    value: "3"
-    availability:
-      - BUILD
-      - RUNTIME
-  # Uncomment once you create the secret 'DATABASE_URL' in Google Cloud Secret Manager
-  # - variable: DATABASE_URL
-  #   secret: DATABASE_URL
 
+  # ==========================================================================
+  # SENSITIVE SECRETS (Cloud Secret Manager references — RUNTIME only)
+  # Ensure each secret exists and App Hosting backend service account has
+  # roles/secretmanager.secretAccessor before rolling out.
+  # ==========================================================================
+  - variable: DATABASE_URL
+    secret: DATABASE_URL
+    availability:
+      - RUNTIME
+
+  - variable: JWT_SECRET
+    secret: JWT_SECRET
+    availability:
+      - RUNTIME
+
+  - variable: GEMINI_API_KEY
+    secret: GEMINI_API_KEY
+    availability:
+      - RUNTIME
+
+  - variable: RESEND_API_KEY
+    secret: RESEND_API_KEY
+    availability:
+      - RUNTIME
+
+  - variable: PAYOUT_PRIVATE_KEY
+    secret: PAYOUT_PRIVATE_KEY
+    availability:
+      - RUNTIME
+
+  - variable: CRON_SECRET
+    secret: CRON_SECRET
+    availability:
+      - RUNTIME

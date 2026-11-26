@@ -1962,16 +1962,27 @@ export async function adminActivateNodeForUser(params: {
     ]
   );
 
-  // Propagate binary sales volume & process direct sponsor referral commission automatically
+  // Propagate binary sales volume & process direct sponsor referral commission (Deprecated under Task 01 feature flags)
   try {
-    const { propagateNodeSalesVolume } = await import('./binaryVolumeService');
-    await propagateNodeSalesVolume(db, node.id, targetUser.id);
-  } catch (_volErr) {}
-
-  try {
+    const { ENABLE_BINARY_ENGINE, ENABLE_SPOT_COMMISSION } = await import('../../config/referralConfig');
+    if (ENABLE_BINARY_ENGINE) {
+      const { propagateNodeSalesVolume } = await import('./binaryVolumeService');
+      await propagateNodeSalesVolume(db, node.id, targetUser.id);
+    }
+    // Always call processNodeActivationCommission so any pending sponsor linkage in user_referrals is resolved;
+    // when ENABLE_SPOT_COMMISSION = false it returns null with $0 spot commission.
     const { processNodeActivationCommission } = await import('./referralCommissionService');
     await processNodeActivationCommission(db, orderId, node.id, targetUser.id);
-  } catch (_commErr) {}
+    void ENABLE_SPOT_COMMISSION;
+  } catch (_depErr) {}
+
+  // TASK-08: Trigger 7-Stage Unilevel Career & Leadership Rank evaluation for targetUser + uplines post-activation
+  try {
+    const { evaluateAndPromoteUserAndAncestors } = await import('./unilevelRankService');
+    await evaluateAndPromoteUserAndAncestors(targetUser.id);
+  } catch (rankErr) {
+    console.warn('[AdminService] Notice evaluating Unilevel ranks post-node-activation:', rankErr);
+  }
 
   await logAdminAction({
     adminUserId: params.adminUserId,

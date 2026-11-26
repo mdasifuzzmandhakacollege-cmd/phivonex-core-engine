@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { generateDepositPublicId, generateLedgerTransactionPublicId } from '../utils/idGenerator';
 import { postLedgerCredit } from '../services/walletLedgerService';
 import { notifyUsdtDepositConfirmed } from '../services/notificationService';
+import { isFeatureSwitchEnabled } from '../services/unilevelConfigService';
 
 class DepositTransactionError extends Error {
   constructor(public code: string, public statusCode: number, message: string) {
@@ -128,6 +129,16 @@ depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthReques
   }
 
   try {
+    const depositsEnabled = await isFeatureSwitchEnabled('bep20_deposits_enabled');
+    if (!depositsEnabled) {
+      res.status(403).json({
+        success: false,
+        error: 'MODULE_PAUSED',
+        message: 'Module Temporarily Paused by Protocol Governance — BEP-20 deposits are currently paused by administration.',
+      });
+      return;
+    }
+
     const userId = req.user!.id;
     const { amount, txHash, fromAddress, confirmations, blockNumber, currentBlockNumber, asset } = req.body;
     const targetAsset = (asset || 'BNB').toUpperCase() === 'USDT' ? 'USDT' : 'BNB';
@@ -171,6 +182,16 @@ depositRouter.post('/simulate-test-deposit', requireAuth, async (req: AuthReques
  */
 depositRouter.post('/submit-txhash', requireAuth, depositLimiter, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const depositsEnabled = await isFeatureSwitchEnabled('bep20_deposits_enabled');
+    if (!depositsEnabled) {
+      res.status(403).json({
+        success: false,
+        error: 'MODULE_PAUSED',
+        message: 'Module Temporarily Paused by Protocol Governance — BEP-20 deposits are currently paused by administration.',
+      });
+      return;
+    }
+
     const userId = req.user!.id;
     const { txHash, asset } = req.body;
 

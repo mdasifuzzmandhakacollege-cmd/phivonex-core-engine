@@ -4,6 +4,7 @@ import { generateSwapPublicId } from '../utils/idGenerator';
 import { getEconomicConfigByKey, isCoinSwapEnabled } from './economicService';
 import { postLedgerCredit } from './walletLedgerService';
 import { notifyPhivoSwapCompleted } from './notificationService';
+import { isFeatureSwitchEnabled } from './unilevelConfigService';
 
 export interface CoinSwapTransactionRecord {
   id: string;
@@ -110,12 +111,15 @@ export async function getUserCoinBalance(userId: string): Promise<UserCoinBalanc
   );
   const totalSoldCoins = Number(soldRes.rows[0]?.total || 0);
 
-  // 4. Admin PHIVO credits & debits from financial_ledger_entries (ADMIN_ADJUSTMENT only)
+  // 4. Ledger PHIVO credits & debits (Admin adjustments, Unilevel PHIVO royalties, and P2P PHIVO transfers)
   const adminPhivoRes = await db.query<{ entry_type: string; total: string | number }>(
     `
     SELECT entry_type, COALESCE(SUM(amount), 0) AS total
     FROM financial_ledger_entries
-    WHERE user_id = $1 AND currency = 'PHIVO' AND status = 'SETTLED' AND source_type = 'ADMIN_ADJUSTMENT'
+    WHERE user_id = $1
+      AND currency = 'PHIVO'
+      AND status = 'SETTLED'
+      AND source_type IN ('ADMIN_ADJUSTMENT', 'UNILEVEL_ROYALTY', 'P2P_TRANSFER_SENT', 'P2P_TRANSFER_RECEIVED')
     GROUP BY entry_type
     `,
     [userId]
@@ -149,8 +153,11 @@ export async function getSwapQuote(coinAmount: number): Promise<SwapQuoteRespons
     throw new Error('INVALID_COIN_AMOUNT: Coin amount must be greater than zero.');
   }
 
-  const coinConfig = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
-  const globalSwapActive = await isCoinSwapEnabled();
+  const [coinConfig, globalSwapActive, masterSwapSwitchEnabled] = await Promise.all([
+    getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT'),
+    isCoinSwapEnabled(),
+    isFeatureSwitchEnabled('phivo_instant_swap_enabled'),
+  ]);
 
   if (!coinConfig || coinConfig.status !== 'ACTIVE') {
     throw new Error('SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.');
@@ -162,7 +169,7 @@ export async function getSwapQuote(coinAmount: number): Promise<SwapQuoteRespons
     throw new Error('SWAP_RATE_NOT_CONFIGURED: Invalid coin conversion rate configured.');
   }
 
-  const swapEnabled = globalSwapActive && val.swapEnabled !== false;
+  const swapEnabled = masterSwapSwitchEnabled && globalSwapActive && val.swapEnabled !== false;
   const usdtAmount = Number((coinAmount * rateUsdt).toFixed(4));
   const rateVersion = coinConfig.version;
   const effectiveFrom = val.effectiveFrom || coinConfig.effectiveFrom;
@@ -244,9 +251,21 @@ export async function executeCoinToUsdtSwap(params: {
       }
     }
 
-    // 2. Fetch authoritative active rate
-    const coinConfig = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
-    const globalSwapActive = await isCoinSwapEnabled();
+    // 2. Fetch authoritative active rate & check Master Feature Switch
+    const [coinConfig, globalSwapActive, masterSwapSwitchEnabled] = await Promise.all([
+      getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT'),
+      isCoinSwapEnabled(),
+      isFeatureSwitchEnabled('phivo_instant_swap_enabled', db),
+    ]);
+
+    if (!masterSwapSwitchEnabled) {
+      const err: any = new Error(
+        'MODULE_PAUSED: Module Temporarily Paused by Protocol Governance — PHIVO Instant Swap is currently disabled by administration.'
+      );
+      err.code = 'MODULE_PAUSED';
+      err.statusCode = 403;
+      throw err;
+    }
 
     if (!coinConfig || coinConfig.status !== 'ACTIVE') {
       const err: any = new Error('SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.');
@@ -262,10 +281,11 @@ export async function executeCoinToUsdtSwap(params: {
       throw err;
     }
 
-    const isEnabled = globalSwapActive && val.swapEnabled !== false;
+    const isEnabled = masterSwapSwitchEnabled && globalSwapActive && val.swapEnabled !== false;
     if (!isEnabled) {
-      const err: any = new Error('SWAP_DISABLED: Internal coin swapping is currently disabled by administration.');
-      err.code = 'SWAP_DISABLED';
+      const err: any = new Error('MODULE_PAUSED: Module Temporarily Paused by Protocol Governance — PHIVO Instant Swap is currently disabled by administration.');
+      err.code = 'MODULE_PAUSED';
+      err.statusCode = 403;
       throw err;
     }
 
@@ -504,9 +524,21 @@ export async function executeUsdtToCoinSwap(params: {
   return runWithUserLock(userId, async () => {
     const db = await getDb();
 
-    // 1. Fetch authoritative active rate
-    const coinConfig = await getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT');
-    const globalSwapActive = await isCoinSwapEnabled();
+    // 1. Fetch authoritative active rate & check Master Feature Switch
+    const [coinConfig, globalSwapActive, masterSwapSwitchEnabled] = await Promise.all([
+      getEconomicConfigByKey('INTERNAL_COIN_PRICE_USDT'),
+      isCoinSwapEnabled(),
+      isFeatureSwitchEnabled('phivo_instant_swap_enabled', db),
+    ]);
+
+    if (!masterSwapSwitchEnabled) {
+      const err: any = new Error(
+        'MODULE_PAUSED: Module Temporarily Paused by Protocol Governance — PHIVO Instant Swap is currently disabled by administration.'
+      );
+      err.code = 'MODULE_PAUSED';
+      err.statusCode = 403;
+      throw err;
+    }
 
     if (!coinConfig || coinConfig.status !== 'ACTIVE') {
       const err: any = new Error('SWAP_RATE_NOT_CONFIGURED: Internal coin conversion rate is not configured.');
@@ -522,10 +554,11 @@ export async function executeUsdtToCoinSwap(params: {
       throw err;
     }
 
-    const isEnabled = globalSwapActive && val.swapEnabled !== false;
+    const isEnabled = masterSwapSwitchEnabled && globalSwapActive && val.swapEnabled !== false;
     if (!isEnabled) {
-      const err: any = new Error('SWAP_DISABLED: Internal coin swapping is currently disabled by administration.');
-      err.code = 'SWAP_DISABLED';
+      const err: any = new Error('MODULE_PAUSED: Module Temporarily Paused by Protocol Governance — PHIVO Instant Swap is currently disabled by administration.');
+      err.code = 'MODULE_PAUSED';
+      err.statusCode = 403;
       throw err;
     }
 

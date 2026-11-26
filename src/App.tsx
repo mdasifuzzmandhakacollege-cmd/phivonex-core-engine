@@ -16,7 +16,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { NetworkPublicPage } from './pages/NetworkPublicPage';
 import { AdminPage } from './pages/AdminPage';
-import { PublicLandingPage } from './pages/PublicLandingPage';
+import { LandingPage } from './pages/LandingPage';
 
 // Modals
 import { LegalModal } from './components/modals/LegalModal';
@@ -165,7 +165,7 @@ function AppContent() {
   // DEFAULT ROUTE: Public Landing Page
   return (
     <>
-      <PublicLandingPage onNavigate={navigate} user={user} />
+      <LandingPage onNavigate={navigate} user={user} />
       <PWAInstallPrompt />
     </>
   );

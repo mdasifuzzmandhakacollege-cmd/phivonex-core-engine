@@ -198,6 +198,7 @@ export const LegalModal: React.FC<LegalModalProps> = ({ title, onClose }) => {
           </div>
         );
 
+      case 'AML & Compliance':
       case 'AML & Sanctions Compliance':
         return (
           <div className="space-y-4 text-xs font-sans text-[#98A2B3] leading-relaxed">

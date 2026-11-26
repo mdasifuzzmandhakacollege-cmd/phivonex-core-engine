@@ -27,9 +27,9 @@ export class ResendEmailProvider implements EmailProvider {
   async sendEmail(to: string, subject: string, html: string): Promise<{ providerMessageId?: string; error?: string }> {
     try {
       const defaultDomain = process.env.RESEND_DOMAIN || process.env.CUSTOM_DOMAIN || 'phivonex.online';
-      const fromAddress = process.env.EMAIL_FROM_ADDRESS || `support@${defaultDomain}`;
+      const fromAddress = process.env.RESEND_FROM_EMAIL || process.env.EMAIL_FROM_ADDRESS || `support@${defaultDomain}`;
       const fromName = process.env.EMAIL_FROM_NAME || 'PHIVONEX';
-      let from = `${fromName} <${fromAddress}>`;
+      const from = fromAddress.includes('<') ? fromAddress : `${fromName} <${fromAddress}>`;
 
       let response = await fetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -904,3 +904,466 @@ export async function sendWithdrawalOtpEmail(
   }
   return !result.error;
 }
+
+export async function sendP2pTransferOtpEmail(
+  toEmail: string,
+  code: string,
+  details: {
+    amount: string;
+    asset: 'USDT' | 'PHIVO';
+    recipientDisplay: string;
+    recipientCode: string;
+  }
+): Promise<boolean> {
+  const provider = getEmailProvider();
+  const safeAsset = escapeEmailHtml(details.asset);
+  const safeAmount = escapeEmailHtml(details.amount);
+  const safeRecipient = escapeEmailHtml(details.recipientDisplay);
+  const safeRecipientCode = escapeEmailHtml(details.recipientCode);
+  const safeCode = escapeEmailHtml(code);
+
+  const subject = `PHIVONEX Security Verification: P2P ${details.asset} Transfer Authorization`;
+  const html = `
+    <div style="background-color: #050807; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc; padding: 36px 14px; margin: 0; width: 100%;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 600px; margin: 0 auto; background-color: #0E1513; border: 1px solid rgba(245, 184, 0, 0.28); border-radius: 18px; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0B1210 0%, #050807 100%); padding: 28px; border-bottom: 1px solid rgba(245, 184, 0, 0.22); text-align: center;">
+            <div style="font-size: 26px; font-weight: 900; letter-spacing: 5px; color: #F5B800; font-family: 'JetBrains Mono', monospace;">PHIVONEX</div>
+            <div style="font-size: 10px; font-weight: 700; letter-spacing: 2.2px; color: #00E5FF; margin-top: 6px; text-transform: uppercase;">P2P INTERNAL TRANSFER AUTHORIZATION</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 28px; text-align: center;">
+            <h1 style="font-size: 21px; font-weight: 800; color: #ffffff; margin: 0 0 12px 0;">Authorize Your P2P Transfer</h1>
+            <p style="font-size: 13px; color: #cbd5e1; line-height: 1.6; max-width: 460px; margin: 0 auto 22px auto;">
+              Enter the 6-digit security verification code below to confirm your instant member-to-member transfer.
+            </p>
+            <div style="background: #050807; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px 20px; margin-bottom: 24px; text-align: left;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="font-size: 12px;">
+                <tr>
+                  <td style="padding: 7px 0; color: #94a3b8;">Transfer Amount</td>
+                  <td style="padding: 7px 0; color: #F5B800; font-weight: 700; text-align: right; font-family: monospace;">${safeAmount} ${safeAsset}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 7px 0; color: #94a3b8;">Recipient</td>
+                  <td style="padding: 7px 0; color: #f8fafc; font-weight: 700; text-align: right;">${safeRecipient} (${safeRecipientCode})</td>
+                </tr>
+                <tr>
+                  <td style="padding: 7px 0; color: #94a3b8;">Code Expiration</td>
+                  <td style="padding: 7px 0; color: #00E5FF; font-weight: 700; text-align: right;">10 Minutes</td>
+                </tr>
+              </table>
+            </div>
+            <div style="background: rgba(0, 229, 255, 0.08); border: 1px solid rgba(0, 229, 255, 0.35); border-radius: 14px; padding: 16px 32px; display: inline-block; font-size: 34px; font-weight: 900; letter-spacing: 8px; color: #00E5FF; font-family: 'JetBrains Mono', monospace; margin-bottom: 22px;">
+              ${safeCode}
+            </div>
+            <p style="font-size: 11px; color: #64748b; line-height: 1.6; max-width: 460px; margin: 0 auto;">
+              Never share this one-time code with anyone. If you did not initiate this P2P transfer, change your password immediately and contact PHIVONEX Support.
+            </p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+  const result = await provider.sendEmail(toEmail, subject, html);
+  if (result.error) {
+    console.warn(`[EmailService] Failed to send P2P OTP email to ${toEmail}:`, result.error);
+  } else {
+    console.log(`[EmailService] P2P transfer OTP email sent to ${toEmail}`);
+  }
+  return !result.error;
+}
+
+export type TransactionalEmailEventType =
+  | 'QUANTUM_ALPHA_ALLOCATED'
+  | 'QUANTUM_ALPHA_REDEEMED'
+  | 'GENESIS_NODE_MINTED'
+  | 'CHRONO_VAULT_SUBSCRIBED'
+  | 'DEPOSIT_CONFIRMED'
+  | 'WITHDRAWAL_SUBMITTED'
+  | 'WITHDRAWAL_SETTLED'
+  | 'P2P_TRANSFER_SENT'
+  | 'P2P_TRANSFER_RECEIVED';
+
+export type EmailDeliveryLogStatus = 'SENT' | 'QUEUED_NO_SMTP' | 'FAILED';
+
+export interface SendTransactionEmailParams {
+  userId?: string | null;
+  recipientEmail?: string;
+  recipientName?: string;
+  eventType: TransactionalEmailEventType;
+  metadata?: Record<string, any>;
+}
+
+export interface SendTransactionEmailResult {
+  logged: boolean;
+  logId?: string;
+  status: EmailDeliveryLogStatus;
+  subject?: string;
+  recipientEmail?: string;
+}
+
+function escapeEmailHtml(value: unknown): string {
+  const str = value === null || value === undefined ? '' : String(value);
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function formatReceiptSpec(
+  eventType: TransactionalEmailEventType,
+  meta: Record<string, any>,
+  recipientName: string
+): {
+  subject: string;
+  badge: string;
+  badgeColor: string;
+  headline: string;
+  intro: string;
+  rows: Array<{ label: string; value: string; accent?: string }>;
+} {
+  const safeName = recipientName || 'Valued Member';
+
+  switch (eventType) {
+    case 'QUANTUM_ALPHA_ALLOCATED': {
+      const amount = meta.amountUsd ? `$${Number(meta.amountUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : 'Allocated';
+      return {
+        subject: `PHIVONEX Receipt: Quantum Alpha™ Allocation Confirmed (${amount})`,
+        badge: 'QUANTUM ALPHA™ ALLOCATION',
+        badgeColor: '#00E5FF',
+        headline: 'Capital Successfully Allocated',
+        intro: `Dear ${safeName}, your capital allocation into PHIVONEX QUANTUM ALPHA™ has been settled on the institutional ledger.`,
+        rows: [
+          { label: 'Allocated Principal', value: amount, accent: '#00E676' },
+          { label: 'Strategy Tier', value: String(meta.tierName || meta.tierCode || 'Quantum Alpha™'), accent: '#F5B800' },
+          { label: 'Yield Schedule', value: String(meta.yieldSchedule || 'Monday–Friday (5 Trading Days/Week)') },
+          { label: '7-Day Lock Expiry', value: meta.unlockEligibleAt ? new Date(meta.unlockEligibleAt).toUTCString() : '7 Days Post-Activation', accent: '#00E5FF' },
+          { label: 'Ledger Reference', value: String(meta.publicTxnId || 'Settled') },
+        ],
+      };
+    }
+
+    case 'QUANTUM_ALPHA_REDEEMED': {
+      const gross = meta.grossPrincipalUsd ? `$${Number(meta.grossPrincipalUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '—';
+      const feeUsd = meta.settlementFeeUsd ? `$${Number(meta.settlementFeeUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '—';
+      const net = meta.netPayoutUsd ? `$${Number(meta.netPayoutUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : '—';
+      const feePct = meta.settlementFeePct ? `${Number(meta.settlementFeePct).toFixed(2)}%` : '15.00%';
+      return {
+        subject: `PHIVONEX Receipt: Quantum Alpha™ Principal Redeemed (${net})`,
+        badge: 'PRINCIPAL REDEMPTION SETTLED',
+        badgeColor: '#00E676',
+        headline: 'Principal Redemption Completed',
+        intro: `Dear ${safeName}, your post-cycle Quantum Alpha™ principal redemption has been processed and credited to your Main USDT Wallet.`,
+        rows: [
+          { label: 'Gross Principal', value: gross },
+          { label: `Settlement Fee (${feePct})`, value: `-${feeUsd}`, accent: '#F5B800' },
+          { label: 'Net Credited Payout', value: net, accent: '#00E676' },
+          { label: 'Strategy Tier', value: String(meta.tierName || 'Quantum Alpha™') },
+          { label: 'Ledger Reference', value: String(meta.publicTxnId || 'Settled'), accent: '#00E5FF' },
+        ],
+      };
+    }
+
+    case 'GENESIS_NODE_MINTED': {
+      const debited = meta.amountDebited !== undefined
+        ? `${Number(meta.amountDebited).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} ${meta.assetUsed || 'USDT'}`
+        : '$1,000.00 USDT';
+      return {
+        subject: `PHIVONEX Receipt: Genesis Core™ Node Activated (${meta.publicNodeId || 'GENESIS'})`,
+        badge: 'GENESIS CORE™ VALIDATOR MINTED',
+        badgeColor: '#F5B800',
+        headline: 'Genesis Validator Node Activated',
+        intro: `Dear ${safeName}, your PHIVONEX GENESIS CORE™ validator node is now live and enrolled in daily PHIVO token emission epochs.`,
+        rows: [
+          { label: 'Validator Node ID', value: String(meta.publicNodeId || 'Activated'), accent: '#F5B800' },
+          { label: 'Activation Settlement', value: debited },
+          { label: 'Daily Emission Rate', value: String(meta.dailyEmission || '15 PHIVO / Day'), accent: '#00E676' },
+          { label: 'Lifetime Emission Cap', value: String(meta.lifetimeCap || '10,000 PHIVO') },
+          { label: 'Order Reference', value: String(meta.publicOrderId || 'Settled'), accent: '#00E5FF' },
+        ],
+      };
+    }
+
+    case 'CHRONO_VAULT_SUBSCRIBED': {
+      const principal = meta.principalUsd ? `$${Number(meta.principalUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT` : 'Subscribed';
+      return {
+        subject: `PHIVONEX Receipt: Chrono Vaults™ Plan Activated (${principal})`,
+        badge: 'CHRONO VAULTS™ STAKING',
+        badgeColor: '#F5B800',
+        headline: 'Fixed-Term Vault Position Active',
+        intro: `Dear ${safeName}, your PHIVONEX CHRONO VAULTS™ fixed-term staking subscription is active and accruing daily USDT yield.`,
+        rows: [
+          { label: 'Vault Plan', value: String(meta.planName || meta.planCode || 'Chrono Vault'), accent: '#F5B800' },
+          { label: 'Locked Principal', value: principal, accent: '#00E676' },
+          { label: 'Daily Yield Rate', value: meta.dailyRatePct ? `${Number(meta.dailyRatePct).toFixed(2)}% / Day` : 'Fixed Schedule', accent: '#00E5FF' },
+          { label: 'Lock Duration', value: meta.durationDays ? `${meta.durationDays} Days (Principal Returned at Maturity)` : 'Fixed Term' },
+          { label: 'Maturity Date', value: meta.maturityAt ? new Date(meta.maturityAt).toUTCString() : 'Scheduled' },
+          { label: 'Ledger Reference', value: String(meta.publicTxnId || 'Settled') },
+        ],
+      };
+    }
+
+    case 'DEPOSIT_CONFIRMED': {
+      const amount = meta.amount !== undefined
+        ? `${Number(meta.amount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 6 })} ${meta.asset || 'USDT'}`
+        : 'Confirmed';
+      return {
+        subject: `PHIVONEX Receipt: On-Chain Deposit Credited (${amount})`,
+        badge: 'BEP-20 DEPOSIT CONFIRMED',
+        badgeColor: '#00E676',
+        headline: 'On-Chain Deposit Credited',
+        intro: `Dear ${safeName}, your blockchain deposit has reached finality and has been credited to your PHIVONEX wallet balance.`,
+        rows: [
+          { label: 'Credited Amount', value: amount, accent: '#00E676' },
+          { label: 'Settlement Network', value: String(meta.network || 'BNB Smart Chain (BEP-20)'), accent: '#F5B800' },
+          { label: 'Transaction Hash', value: String(meta.txHash || 'Verified'), accent: '#00E5FF' },
+          { label: 'Deposit Reference', value: String(meta.publicDepositId || 'Settled') },
+        ],
+      };
+    }
+
+    case 'WITHDRAWAL_SUBMITTED': {
+      const amount = meta.amountUsd !== undefined
+        ? `$${Number(meta.amountUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
+        : 'Submitted';
+      return {
+        subject: `PHIVONEX Receipt: Withdrawal Request Submitted (${amount})`,
+        badge: 'WITHDRAWAL SUBMITTED',
+        badgeColor: '#F5B800',
+        headline: 'Withdrawal Request Logged',
+        intro: `Dear ${safeName}, your withdrawal request has been verified and queued for treasury disbursement.`,
+        rows: [
+          { label: 'Withdrawal Amount', value: amount, accent: '#F5B800' },
+          { label: 'Destination Address', value: String(meta.destinationReference || 'Configured Wallet'), accent: '#00E5FF' },
+          { label: 'Settlement Network', value: String(meta.network || 'BNB Smart Chain (BEP-20)') },
+          { label: 'Withdrawal ID', value: String(meta.publicWithdrawalId || 'Queued') },
+        ],
+      };
+    }
+
+    case 'WITHDRAWAL_SETTLED': {
+      const amount = meta.amountUsd !== undefined
+        ? `$${Number(meta.amountUsd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT`
+        : 'Settled';
+      return {
+        subject: `PHIVONEX Receipt: Withdrawal Settled On-Chain (${amount})`,
+        badge: 'WITHDRAWAL SETTLED',
+        badgeColor: '#00E676',
+        headline: 'On-Chain Disbursement Completed',
+        intro: `Dear ${safeName}, your PHIVONEX withdrawal has been executed and confirmed on-chain.`,
+        rows: [
+          { label: 'Disbursed Amount', value: amount, accent: '#00E676' },
+          { label: 'Destination Address', value: String(meta.destinationReference || 'Configured Wallet') },
+          { label: 'Settlement Network', value: String(meta.network || 'BNB Smart Chain (BEP-20)') },
+          { label: 'On-Chain TX Hash', value: String(meta.txHash || 'Confirmed'), accent: '#00E5FF' },
+          { label: 'Withdrawal ID', value: String(meta.publicWithdrawalId || 'Completed') },
+        ],
+      };
+    }
+
+    case 'P2P_TRANSFER_SENT': {
+      const asset = String(meta.assetType || 'USDT');
+      const gross = meta.grossAmount !== undefined
+        ? `${Number(meta.grossAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} ${asset}`
+        : `Sent ${asset}`;
+      const net = meta.netAmount !== undefined
+        ? `${Number(meta.netAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} ${asset}`
+        : gross;
+      const fee = meta.feeAmount !== undefined && Number(meta.feeAmount) > 0
+        ? `${Number(meta.feeAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} ${asset}`
+        : `0.00 ${asset}`;
+      return {
+        subject: `PHIVONEX Receipt: P2P Transfer Sent (${gross})`,
+        badge: 'P2P TRANSFER SENT',
+        badgeColor: '#F5B800',
+        headline: 'Instant P2P Transfer Dispatched',
+        intro: `Dear ${safeName}, your member-to-member ${asset} balance transfer has been settled instantaneously.`,
+        rows: [
+          { label: 'Debited Amount', value: gross, accent: '#F5B800' },
+          { label: 'Settlement Fee', value: fee },
+          { label: 'Recipient Net Credit', value: net, accent: '#00E676' },
+          { label: 'Recipient', value: `${String(meta.recipientName || 'PHIVONEX Member')} (${String(meta.recipientCode || 'Verified')})`, accent: '#00E5FF' },
+          { label: 'Transfer Reference', value: String(meta.transferRef || 'Settled') },
+          ...(meta.note ? [{ label: 'Memo', value: String(meta.note) }] : []),
+        ],
+      };
+    }
+
+    case 'P2P_TRANSFER_RECEIVED': {
+      const asset = String(meta.assetType || 'USDT');
+      const net = meta.netAmount !== undefined
+        ? `${Number(meta.netAmount).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 8 })} ${asset}`
+        : `Received ${asset}`;
+      return {
+        subject: `PHIVONEX Receipt: P2P Transfer Received (${net})`,
+        badge: 'P2P TRANSFER RECEIVED',
+        badgeColor: '#00E676',
+        headline: 'Instant P2P Transfer Credited',
+        intro: `Dear ${safeName}, you have received an instant member-to-member ${asset} balance transfer into your PHIVONEX wallet.`,
+        rows: [
+          { label: 'Credited Amount', value: net, accent: '#00E676' },
+          { label: 'Sender', value: `${String(meta.senderName || 'PHIVONEX Member')} (${String(meta.senderCode || 'Verified')})`, accent: '#00E5FF' },
+          { label: 'Transfer Reference', value: String(meta.transferRef || 'Settled'), accent: '#F5B800' },
+          ...(meta.note ? [{ label: 'Memo', value: String(meta.note) }] : []),
+        ],
+      };
+    }
+  }
+}
+
+function buildTransactionalReceiptHtml(spec: ReturnType<typeof formatReceiptSpec>): string {
+  const rowsHtml = spec.rows
+    .map(
+      (row) => `
+      <tr>
+        <td style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); color: #94a3b8; font-size: 12px; font-weight: 500;">${escapeEmailHtml(row.label)}</td>
+        <td style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.06); color: ${row.accent || '#f8fafc'}; font-size: 12px; font-weight: 700; text-align: right; font-family: 'JetBrains Mono', ui-monospace, monospace; word-break: break-all;">${escapeEmailHtml(row.value)}</td>
+      </tr>`
+    )
+    .join('');
+
+  return `
+    <div style="background-color: #050807; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #f8fafc; padding: 36px 14px; margin: 0; width: 100%;">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width: 620px; margin: 0 auto; background-color: #0E1513; border: 1px solid rgba(245, 184, 0, 0.24); border-radius: 18px; overflow: hidden; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);">
+        <tr>
+          <td style="background: linear-gradient(135deg, #0B1210 0%, #050807 100%); padding: 30px 28px; border-bottom: 1px solid rgba(245, 184, 0, 0.22); text-align: center;">
+            <div style="font-size: 26px; font-weight: 900; letter-spacing: 5px; color: #F5B800; font-family: 'JetBrains Mono', monospace;">PHIVONEX</div>
+            <div style="font-size: 10px; font-weight: 700; letter-spacing: 2.4px; color: #00E5FF; margin-top: 6px; text-transform: uppercase;">INSTITUTIONAL TREASURY &amp; SETTLEMENT RECEIPT</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 32px 28px;">
+            <div style="text-align: center; margin-bottom: 18px;">
+              <span style="display: inline-block; padding: 6px 14px; background: rgba(245, 184, 0, 0.10); border: 1px solid ${spec.badgeColor}; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: ${spec.badgeColor}; font-family: monospace; text-transform: uppercase;">
+                ${escapeEmailHtml(spec.badge)}
+              </span>
+            </div>
+            <h1 style="font-size: 22px; font-weight: 800; color: #ffffff; margin: 0 0 12px 0; text-align: center; line-height: 1.3;">${escapeEmailHtml(spec.headline)}</h1>
+            <p style="font-size: 13px; color: #cbd5e1; line-height: 1.65; text-align: center; max-width: 500px; margin: 0 auto 24px auto;">
+              ${escapeEmailHtml(spec.intro)}
+            </p>
+            <div style="background: #050807; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 14px; padding: 14px 20px; margin-bottom: 24px;">
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+                ${rowsHtml}
+              </table>
+            </div>
+            <p style="font-size: 11px; color: #64748b; line-height: 1.6; margin: 0; text-align: center;">
+              This automated confirmation reflects an immutable ledger settlement on your PHIVONEX account. If you did not authorize this transaction, contact PHIVONEX Support immediately.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="background-color: #070B0A; padding: 18px 28px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px; color: #64748b; text-align: center;">
+            <p style="margin: 0 0 4px 0; font-family: monospace; color: #94a3b8;">PHIVONEX Financial Settlement Infrastructure • Automated Receipt</p>
+            <p style="margin: 0;">&copy; ${new Date().getUTCFullYear()} PHIVONEX. All rights reserved.</p>
+          </td>
+        </tr>
+      </table>
+    </div>
+  `;
+}
+
+/**
+ * Non-blocking transactional receipt email dispatcher.
+ * Always persists an auditable row in PostgreSQL `email_delivery_logs` with status
+ * `'SENT' | 'QUEUED_NO_SMTP' | 'FAILED'` and NEVER throws or rolls back caller ACID commits.
+ */
+export async function sendTransactionEmail(
+  params: SendTransactionEmailParams
+): Promise<SendTransactionEmailResult> {
+  try {
+    const db = await getDb();
+    let recipientEmail = (params.recipientEmail || '').trim().toLowerCase();
+    let recipientName = (params.recipientName || '').trim();
+    const userId = params.userId || null;
+
+    if ((!recipientEmail || !recipientName) && userId) {
+      const userRes = await db.query<{ email: string; full_name: string | null }>(
+        `SELECT LOWER(TRIM(email)) AS email, full_name FROM users WHERE id = $1 LIMIT 1`,
+        [userId]
+      );
+      if (userRes.rows.length > 0) {
+        if (!recipientEmail) recipientEmail = userRes.rows[0].email;
+        if (!recipientName) recipientName = userRes.rows[0].full_name || 'Valued Member';
+      }
+    }
+
+    if (!recipientEmail) {
+      console.warn(`[TransactionalEmail] Skipping ${params.eventType}: no recipient email resolved for userId=${userId}`);
+      return { logged: false, status: 'FAILED' };
+    }
+
+    const metadata = params.metadata || {};
+    const spec = formatReceiptSpec(params.eventType, metadata, recipientName);
+    const html = buildTransactionalReceiptHtml(spec);
+
+    const isTestEnv =
+      process.env.NODE_ENV === 'test' ||
+      process.env.VITEST === 'true' ||
+      process.env.APP_ENV === 'test';
+    const apiKey = (process.env.RESEND_API_KEY || '').trim();
+    const hasLiveProvider = !isTestEnv && apiKey.length > 0 && !apiKey.includes('your_resend_api_key');
+
+    let status: EmailDeliveryLogStatus = 'QUEUED_NO_SMTP';
+    let providerMessageId: string | null = null;
+    let providerError: string | null = null;
+
+    if (hasLiveProvider) {
+      const provider = new ResendEmailProvider(apiKey);
+      const dispatchRes = await provider.sendEmail(recipientEmail, spec.subject, html);
+      if (dispatchRes.error) {
+        status = 'FAILED';
+        providerError = dispatchRes.error;
+        console.warn(`[TransactionalEmail] Dispatch FAILED for ${params.eventType} to ${recipientEmail}:`, dispatchRes.error);
+      } else {
+        status = 'SENT';
+        providerMessageId = dispatchRes.providerMessageId || null;
+      }
+    } else {
+      status = 'QUEUED_NO_SMTP';
+      console.log(`[TransactionalEmail] Queued (no live SMTP/Resend key) ${params.eventType} -> ${recipientEmail}: "${spec.subject}"`);
+    }
+
+    const logId = uuidv4();
+    const storedMetadata = {
+      ...metadata,
+      provider: hasLiveProvider ? 'RESEND' : 'NONE',
+      providerMessageId,
+      providerError,
+      dispatchedAt: new Date().toISOString(),
+    };
+
+    await db.query(
+      `
+      INSERT INTO email_delivery_logs (
+        id, user_id, recipient_email, event_type, subject, status, metadata, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, CURRENT_TIMESTAMP)
+      `,
+      [
+        logId,
+        userId,
+        recipientEmail,
+        params.eventType,
+        spec.subject,
+        status,
+        JSON.stringify(storedMetadata),
+      ]
+    );
+
+    return {
+      logged: true,
+      logId,
+      status,
+      subject: spec.subject,
+      recipientEmail,
+    };
+  } catch (err) {
+    console.warn(`[TransactionalEmail] Non-blocking dispatch error for ${params.eventType}:`, err);
+    return { logged: false, status: 'FAILED' };
+  }
+}
+

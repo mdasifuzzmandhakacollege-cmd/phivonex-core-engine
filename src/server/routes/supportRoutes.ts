@@ -1,5 +1,7 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireAdmin, AuthRequest } from '../middleware/authMiddleware';
+import { aiConciergeLimiter } from '../middleware/rateLimiter';
+import { generateSupportConciergeReply } from '../services/aiConciergeService';
 import {
   createSupportTicket,
   getUserSupportTickets,
@@ -13,6 +15,48 @@ import {
 } from '../services/supportService';
 
 const router = Router();
+
+/**
+ * Shared handler for POST /api/support/ai-concierge and POST /api/support/chat
+ */
+async function handleAiConciergeRequest(req: AuthRequest, res: Response) {
+  try {
+    const rawMessage = typeof req.body?.message === 'string'
+      ? req.body.message
+      : typeof req.body?.prompt === 'string'
+      ? req.body.prompt
+      : '';
+
+    const message = rawMessage.trim();
+    if (!message) {
+      return res.status(400).json({ error: 'A non-empty message is required.' });
+    }
+    if (message.length > 2000) {
+      return res.status(400).json({ error: 'Message exceeds maximum length of 2,000 characters.' });
+    }
+
+    const conversationHistory = Array.isArray(req.body?.conversationHistory)
+      ? req.body.conversationHistory.slice(-6)
+      : [];
+
+    const reply = await generateSupportConciergeReply({
+      message,
+      conversationHistory,
+      memberName: req.user?.fullName || req.user?.email || 'Member',
+    });
+
+    return res.status(200).json({
+      success: true,
+      response: reply,
+    });
+  } catch (err: any) {
+    console.error('[SupportRoutes] AI Concierge error:', err);
+    return res.status(500).json({ error: 'Concierge service is temporarily unavailable.' });
+  }
+}
+
+router.post('/ai-concierge', requireAuth, aiConciergeLimiter, handleAiConciergeRequest);
+router.post('/chat', requireAuth, aiConciergeLimiter, handleAiConciergeRequest);
 
 /**
  * POST /api/support/tickets

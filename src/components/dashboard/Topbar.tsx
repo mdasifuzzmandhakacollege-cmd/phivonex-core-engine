@@ -7,24 +7,11 @@ import {
   ChevronDown,
   ExternalLink,
   Shield,
-  ShieldAlert,
-  Bell,
-  CheckCheck,
-  Check,
-  Clock,
-  ArrowRight,
-  Volume2,
-  VolumeX,
-  Wallet,
   Activity,
-  Sun,
-  Moon,
 } from 'lucide-react';
-import { PhivonexSymbol } from '../brand/PhivonexSymbol';
+import { PhivonexLogo } from '../brand/PhivonexLogo';
 import { UserProfile } from '../../context/AuthContext';
-import { useNotifications } from '../../context/NotificationContext';
 import { useSystemConfig } from '../../context/SystemConfigContext';
-import { useTheme } from '../../context/ThemeContext';
 import { DashboardTab } from './Sidebar';
 import { BinanceKYCModal } from '../modals/BinanceKYCModal';
 
@@ -39,81 +26,15 @@ interface TopbarProps {
 
 export const Topbar: React.FC<TopbarProps> = ({
   user,
-  activeTab,
   onOpenMobileMenu,
   onSelectTab,
   onLogout,
   onNavigate,
 }) => {
   const { isConnected } = useSystemConfig();
-  const { theme, toggleTheme } = useTheme();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
-  const [availableBalance, setAvailableBalance] = useState<number | null>(null);
-
-  // Poll available wallet balance for real-time header display
-  useEffect(() => {
-    let isMounted = true;
-    const fetchBalance = async () => {
-      try {
-        const res = await fetch('/api/wallet/me', { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted) {
-            setAvailableBalance(typeof data.availableBalance === 'number' ? data.availableBalance : 0);
-          }
-        }
-      } catch {
-        // silent fallback
-      }
-    };
-    fetchBalance();
-    const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
-        fetchBalance();
-      }
-    }, 45000);
-    window.addEventListener('phivonex:balance-or-tx-updated', fetchBalance);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-      window.removeEventListener('phivonex:balance-or-tx-updated', fetchBalance);
-    };
-  }, []);
-
-  const {
-    unreadCount,
-    notifications,
-    loading: loadingNotifs,
-    audioEnabled,
-    toggleAudio,
-    markAsRead,
-    markAllAsRead,
-    refreshNotifications,
-  } = useNotifications();
-
   const userMenuRef = useRef<HTMLDivElement>(null);
-  const notifMenuRef = useRef<HTMLDivElement>(null);
-
-  const handleToggleNotif = () => {
-    if (!isNotifOpen) {
-      refreshNotifications();
-      setIsUserMenuOpen(false);
-    }
-    setIsNotifOpen(!isNotifOpen);
-  };
-
-  const handleMarkAsRead = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
-    await markAsRead(id);
-  };
-
-  const handleMarkAllRead = async () => {
-    await markAllAsRead();
-  };
-
-  const recentNotifications = notifications.slice(0, 5);
 
   const isAdmin = Boolean(
     user && (
@@ -125,23 +46,29 @@ export const Topbar: React.FC<TopbarProps> = ({
     )
   );
 
-  // Close menus on outside click
+  // Close profile menu on outside click or Escape key
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent) => {
       if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
         setIsUserMenuOpen(false);
       }
-      if (notifMenuRef.current && !notifMenuRef.current.contains(e.target as Node)) {
-        setIsNotifOpen(false);
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsUserMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
   }, []);
 
   const getInitials = (name?: string) => {
-    if (!name) return 'OP';
-    const parts = name.trim().split(' ');
+    if (!name) return 'PHX';
+    const parts = name.trim().split(/\s+/).filter(Boolean);
     if (parts.length >= 2) {
       return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
     }
@@ -149,358 +76,180 @@ export const Topbar: React.FC<TopbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-20 h-16 bg-[#07101D]/90 backdrop-blur-md border-b border-white/[0.08] px-3 sm:px-6 lg:px-8 flex items-center justify-between">
-      {/* Left: Mobile Menu Trigger + PHIVONEX Logo & Title */}
-      <div className="flex items-center gap-2.5 sm:gap-3">
-        {/* Mobile Hamburger Button */}
+    <header className="sticky top-0 z-20 h-16 w-full max-w-full bg-[#050807]/82 backdrop-blur-2xl border-b border-white/[0.08] px-3 sm:px-6 lg:px-8 flex items-center justify-between gap-2">
+      {/* Left: Sleek Glass Hamburger Menu Button + Existing PhivonexLogo (Untouched) */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <button
+          type="button"
           onClick={onOpenMobileMenu}
-          className="lg:hidden p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-colors cursor-pointer min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95"
+          className="lg:hidden min-h-[44px] min-w-[44px] rounded-2xl bg-[rgba(14,21,19,0.78)] hover:bg-white/[0.08] border border-white/[0.12] text-[#D0D5DD] hover:text-white transition-all cursor-pointer flex items-center justify-center active:scale-95 shrink-0 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]"
           aria-label="Open navigation menu"
         >
           <Menu className="w-5 h-5" />
         </button>
 
-        {/* Brand Logo & Title */}
-        <div
+        <button
+          type="button"
           onClick={() => onSelectTab('overview')}
-          className="flex items-center gap-2.5 cursor-pointer select-none group"
-          title="PHIVONEX Dashboard"
+          className="flex items-center min-w-0 cursor-pointer select-none focus:outline-none focus-visible:ring-2 focus-visible:ring-[#00E5FF] rounded-xl py-1"
+          title="PHIVONEX Dashboard Overview"
         >
-          <div className="transition-transform duration-200 group-hover:scale-105">
-            <PhivonexSymbol size={28} />
-          </div>
-          <span className="font-extrabold text-sm sm:text-base tracking-wider text-white">
-            PHIVONEX
-          </span>
-        </div>
+          <PhivonexLogo size="sm" />
+        </button>
       </div>
 
-      {/* Right: Available Balance + Notifications + Profile Avatar / Dropdown Trigger */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        {/* Available Balance Pill Button */}
-        <button
-          onClick={() => onSelectTab('wallet')}
-          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 border border-[#00CFFF]/30 transition-all cursor-pointer min-h-[42px] shadow-sm hover:shadow-[#00CFFF]/20 shrink-0 active:scale-95"
-          title="View Wallet & Ledger"
-          aria-label="Wallet Available Balance"
+      {/* Right: Compact Live Mainnet Emerald Indicator + User Avatar Pill */}
+      <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+        {/* Compact Live Mainnet Indicator */}
+        <div
+          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-[#00E676]/[0.08] border border-[#00E676]/25 text-[#00E676] text-[10px] sm:text-[11px] font-mono font-semibold tracking-wide shrink-0"
+          title={isConnected ? 'Mainnet protocol connection synchronized' : 'Reconnecting to mainnet'}
         >
-          <Wallet className="w-3.5 h-3.5 text-[#00CFFF] shrink-0" />
-          <span className="font-mono font-bold text-white text-xs sm:text-sm tabular-nums">
-            ${availableBalance !== null ? availableBalance.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '0.00'}
+          <span className="relative flex h-2 w-2 shrink-0">
+            <span
+              className={`absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                isConnected ? 'bg-[#00E676] animate-ping' : 'bg-[#F5B800]'
+              }`}
+            />
+            <span
+              className={`relative inline-flex rounded-full h-2 w-2 ${
+                isConnected ? 'bg-[#00E676]' : 'bg-[#F5B800]'
+              }`}
+            />
           </span>
-        </button>
-
-        {/* Theme Toggle Button */}
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="p-2.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] text-[#98A2B3] hover:text-white transition-all cursor-pointer min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95 shadow-sm"
-          title={theme === 'dark' ? 'Switch to High-Contrast Light Mode' : 'Switch to Dark Mode'}
-          aria-label="Toggle Theme Mode"
-        >
-          {theme === 'dark' ? (
-            <Sun className="w-4 h-4 text-amber-400" />
-          ) : (
-            <Moon className="w-4 h-4 text-[#00CFFF]" />
-          )}
-        </button>
-
-        {/* Notification Bell Trigger */}
-        <div className="relative" ref={notifMenuRef}>
-          <button
-            onClick={handleToggleNotif}
-            className={`p-2.5 rounded-xl border transition-all cursor-pointer relative min-h-[42px] min-w-[42px] flex items-center justify-center active:scale-95 ${
-              isNotifOpen
-                ? 'bg-white/[0.08] border-[#00CFFF]/40 text-white'
-                : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] text-[#98A2B3] hover:text-white'
-            }`}
-            aria-label="Notifications"
-            aria-expanded={isNotifOpen}
-          >
-            <Bell className="w-4 h-4" />
-            {unreadCount > 0 && (
-              <span className="absolute top-1.5 right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#F04438] text-white text-[10px] font-mono font-bold flex items-center justify-center shadow-lg shadow-[#F04438]/40 animate-pulse">
-                {unreadCount > 99 ? '99+' : unreadCount}
-              </span>
-            )}
-          </button>
-
-          {/* Notifications Dropdown Preview */}
-          {isNotifOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-3 z-50 animate-fadeIn">
-              <div className="flex items-center justify-between pb-2.5 mb-2 border-b border-white/[0.08] px-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-white tracking-tight">Notifications</span>
-                  {unreadCount > 0 && (
-                    <span className="px-1.5 py-0.5 rounded-full bg-[#00CFFF]/20 border border-[#00CFFF]/40 text-[#00CFFF] text-[10px] font-mono font-bold">
-                      {unreadCount} new
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  {/* Audio alert toggle */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleAudio();
-                    }}
-                    className={`p-1 rounded-md text-xs transition-colors cursor-pointer flex items-center gap-1 ${
-                      audioEnabled
-                        ? 'text-[#00CFFF] bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20'
-                        : 'text-[#98A2B3] hover:text-white bg-white/[0.04] hover:bg-white/[0.08]'
-                    }`}
-                    title={audioEnabled ? 'Audio alerts: Active (Click to Mute)' : 'Audio alerts: Muted (Click to Enable)'}
-                    aria-label="Toggle audio alerts"
-                  >
-                    {audioEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
-                  </button>
-
-                  {unreadCount > 0 && (
-                    <button
-                      onClick={handleMarkAllRead}
-                      className="text-[11px] text-[#00CFFF] hover:text-[#00CFFF]/80 font-medium flex items-center gap-1 cursor-pointer transition-colors"
-                    >
-                      <CheckCheck className="w-3.5 h-3.5" />
-                      <span>Mark all read</span>
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Notification preview list */}
-              <div className="max-h-[300px] overflow-y-auto space-y-1.5 pr-1 scrollbar-none">
-                {loadingNotifs ? (
-                  <div className="py-8 text-center text-xs text-[#98A2B3] font-mono flex items-center justify-center gap-2">
-                    <div className="w-3.5 h-3.5 border-2 border-[#00CFFF] border-t-transparent rounded-full animate-spin" />
-                    <span>Loading alerts...</span>
-                  </div>
-                ) : recentNotifications.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-[#98A2B3]">
-                    No notifications yet.
-                  </div>
-                ) : (
-                  recentNotifications.map((notif) => {
-                    const isUnread = !notif.readAt;
-                    return (
-                      <div
-                        key={notif.id}
-                        onClick={() => {
-                          onSelectTab('notifications');
-                          setIsNotifOpen(false);
-                        }}
-                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                          isUnread
-                            ? 'bg-[#0B1527] border-[#00CFFF]/30 hover:border-[#00CFFF]/50'
-                            : 'bg-white/[0.02] border-white/[0.04] hover:bg-white/[0.05]'
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            {isUnread && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#00CFFF] flex-shrink-0" />
-                            )}
-                            <h5 className={`text-xs font-semibold truncate ${isUnread ? 'text-white' : 'text-[#D0D5DD]'}`}>
-                              {notif.title}
-                            </h5>
-                          </div>
-                          {isUnread && (
-                            <button
-                              onClick={(e) => handleMarkAsRead(notif.id, e)}
-                              className="text-[10px] text-[#00CFFF] hover:text-white px-1.5 py-0.5 rounded bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 transition-colors flex-shrink-0"
-                              title="Mark read"
-                            >
-                              <Check className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-[#98A2B3] line-clamp-2 mt-0.5">
-                          {notif.message}
-                        </p>
-                        <div className="flex items-center gap-1 text-[10px] text-[#98A2B3] font-mono mt-1">
-                          <Clock className="w-2.5 h-2.5 opacity-60" />
-                          <span>{new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-
-              {/* View all footer */}
-              <div className="pt-2 mt-2 border-t border-white/[0.08]">
-                <button
-                  onClick={() => {
-                    onSelectTab('notifications');
-                    setIsNotifOpen(false);
-                  }}
-                  className="w-full py-2 px-3 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-xs font-medium text-white flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <span>View All in Notification Center</span>
-                  <ArrowRight className="w-3.5 h-3.5 text-[#00CFFF]" />
-                </button>
-              </div>
-            </div>
-          )}
+          <span className="hidden xs:inline whitespace-nowrap">Live Mainnet</span>
+          <span className="xs:hidden whitespace-nowrap">Live</span>
         </div>
 
-        {/* Binance-grade KYC Verification Badge & Modal Trigger */}
-        <button
-          type="button"
-          onClick={() => setIsKycModalOpen(true)}
-          className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer min-h-[42px] active:scale-95 ${
-            user?.kycStatus === 'VERIFIED'
-              ? 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-              : user?.kycStatus === 'PENDING'
-              ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30 animate-pulse'
-              : user?.kycStatus === 'REJECTED'
-              ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
-              : 'bg-gradient-to-r from-amber-500/15 to-yellow-500/15 hover:from-amber-500/25 hover:to-yellow-500/25 text-amber-300 border-amber-500/40 shadow-sm'
-          }`}
-          title="Binance-grade Identity Verification (KYC)"
-        >
-          {user?.kycStatus === 'VERIFIED' ? (
-            <>
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>Verified Level 1</span>
-            </>
-          ) : user?.kycStatus === 'PENDING' ? (
-            <>
-              <Clock className="w-4 h-4 text-amber-400" />
-              <span>KYC Under Review</span>
-            </>
-          ) : user?.kycStatus === 'REJECTED' ? (
-            <>
-              <ShieldAlert className="w-4 h-4 text-rose-400" />
-              <span>KYC Attention</span>
-            </>
-          ) : (
-            <>
-              <ShieldCheck className="w-4 h-4 text-amber-400" />
-              <span>Verify KYC</span>
-            </>
-          )}
-        </button>
-
-        {/* User Avatar / Dropdown Trigger */}
+        {/* User Avatar Pill with Metallic Gold/Cyan Rank Ring */}
         <div className="relative" ref={userMenuRef}>
           <button
-            onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-            className="flex items-center gap-2 p-1 sm:px-2.5 sm:py-1.5 rounded-xl bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] transition-all cursor-pointer min-h-[42px] active:scale-95"
+            type="button"
+            onClick={() => setIsUserMenuOpen((prev) => !prev)}
+            className="flex items-center gap-1.5 sm:gap-2 pl-1.5 pr-2.5 py-1 rounded-full bg-[rgba(14,21,19,0.82)] hover:bg-white/[0.08] border border-white/[0.12] transition-all cursor-pointer min-h-[44px] active:scale-95 shadow-[inset_0_1px_0_rgba(255,255,255,0.12)]"
             aria-expanded={isUserMenuOpen}
             aria-haspopup="true"
-            aria-label="User account menu"
+            aria-label="Open member profile and security menu"
           >
-            {/* Operator Avatar Circle */}
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00CFFF]/25 to-[#168BFF]/25 border border-[#00CFFF]/40 flex items-center justify-center text-xs font-mono font-bold text-[#00CFFF] shrink-0">
-              {getInitials(user?.fullName)}
+            {/* Metallic Rank Ring Avatar */}
+            <div className="p-[1.5px] rounded-full bg-gradient-to-tr from-[#F5B800] via-[#00E5FF] to-[#00E676] shrink-0">
+              <div className="w-8 h-8 rounded-full bg-[#050807] flex items-center justify-center text-[11px] font-mono font-bold text-white tracking-tight">
+                {getInitials(user?.fullName)}
+              </div>
             </div>
 
-            <ChevronDown className={`w-3.5 h-3.5 text-[#98A2B3] transition-transform duration-200 ${isUserMenuOpen ? 'rotate-180' : ''}`} />
+            <div className="hidden sm:flex flex-col items-start min-w-0 max-w-[110px]">
+              <span className="text-[11px] font-bold text-white truncate w-full leading-tight">
+                {user?.fullName?.split(' ')[0] || 'Member'}
+              </span>
+              <span className="text-[9px] font-mono text-[#00E5FF] truncate w-full leading-tight">
+                {user?.publicId || 'PHX-MEMBER'}
+              </span>
+            </div>
+
+            <ChevronDown
+              className={`w-3.5 h-3.5 text-[#98A2B3] transition-transform duration-200 ${
+                isUserMenuOpen ? 'rotate-180 text-white' : ''
+              }`}
+            />
           </button>
 
-          {/* User Menu Dropdown Box */}
+          {/* One UI 9.5 Glass Dropdown Menu */}
           {isUserMenuOpen && (
-            <div className="absolute right-0 mt-2 w-64 sm:w-72 rounded-2xl bg-[#07101D] border border-white/[0.12] shadow-2xl p-2.5 z-50 animate-fadeIn">
-              {/* Profile Header Box */}
-              <div className="p-3 rounded-xl bg-white/[0.03] border border-white/[0.06] mb-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-white truncate block">
-                    {user?.fullName || 'Operator'}
+            <div className="absolute right-0 mt-2.5 w-[min(calc(100vw-1.5rem),18rem)] rounded-[24px] bg-[#0B1210]/95 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_60px_-15px_rgba(0,0,0,0.9)] p-2.5 z-50 animate-fadeIn">
+              {/* Profile Identity Header */}
+              <div className="p-3.5 rounded-2xl bg-white/[0.03] border border-white/[0.07] mb-2 space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-white truncate">
+                    {user?.fullName || 'Member Account'}
                   </span>
-                  <span className="text-[10px] font-mono text-[#32D583] bg-[#32D583]/10 px-2 py-0.5 rounded border border-[#32D583]/20">
+                  <span className="text-[10px] font-mono font-bold text-[#00E676] bg-[#00E676]/10 px-2 py-0.5 rounded-full border border-[#00E676]/25 shrink-0">
                     {user?.status || 'ACTIVE'}
                   </span>
                 </div>
-                <div className="text-[11px] font-mono text-[#00CFFF]">
-                  {user?.publicId || 'PHX-OPERATOR'}
+                <div className="text-[11px] font-mono text-[#00E5FF] truncate">
+                  {user?.publicId || 'PHX-MEMBER'}
                 </div>
                 <div className="text-[10px] text-[#98A2B3] truncate">
                   {user?.email || ''}
                 </div>
-
-                {/* Relocated Security & Protocol Badges */}
-                <div className="flex items-center justify-between text-[10px] font-mono text-[#32D583] bg-[#32D583]/10 px-2 py-1 rounded-lg border border-[#32D583]/20 pt-1">
-                  <div className="flex items-center gap-1">
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#32D583]" />
-                    <span>TLS 1.3 Verified</span>
-                  </div>
-                  <div className="flex items-center gap-1 text-[#00CFFF]">
-                    <span className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'bg-[#00CFFF] animate-pulse' : 'bg-[#F04438]'}`} />
-                    <span>{isConnected ? 'Protocol Live' : 'Ledger Offline'}</span>
-                  </div>
-                </div>
               </div>
 
-              {/* Navigation Options */}
-              <div className="space-y-0.5">
+              {/* Navigation Actions */}
+              <div className="space-y-1">
                 {isAdmin && (
                   <button
+                    type="button"
                     onClick={() => {
                       onNavigate('/admin');
                       setIsUserMenuOpen(false);
                     }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#F04438] bg-[#F04438]/10 hover:bg-[#F04438]/20 border border-[#F04438]/20 transition-colors cursor-pointer min-h-[40px] font-bold mb-1"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs text-[#F5B800] bg-[#F5B800]/10 hover:bg-[#F5B800]/20 border border-[#F5B800]/30 transition-colors cursor-pointer min-h-[44px] font-bold mb-1"
                   >
-                    <Shield className="w-4 h-4 text-[#F04438]" />
-                    <span>Admin Control Plane</span>
+                    <Shield className="w-4 h-4 text-[#F5B800] shrink-0" />
+                    <span className="truncate">Admin Control Plane</span>
                   </button>
                 )}
 
                 <button
+                  type="button"
                   onClick={() => {
                     onSelectTab('profile');
                     setIsUserMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#D0D5DD] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[44px]"
                 >
-                  <User className="w-4 h-4 text-[#00CFFF]" />
+                  <User className="w-4 h-4 text-[#00E5FF] shrink-0" />
                   <span>Account Profile</span>
                 </button>
 
-                {/* KYC Identity Verification Menu Item */}
                 <button
+                  type="button"
                   onClick={() => {
                     setIsUserMenuOpen(false);
                     setIsKycModalOpen(true);
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs text-[#D0D5DD] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[44px]"
                 >
-                  <div className="flex items-center gap-2.5">
-                    <ShieldCheck className="w-4 h-4 text-amber-400" />
-                    <span>Identity Verification (KYC)</span>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ShieldCheck className="w-4 h-4 text-[#F5B800] shrink-0" />
+                    <span className="truncate">Identity Verification (KYC)</span>
                   </div>
-                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
-                    user?.kycStatus === 'VERIFIED'
-                      ? 'bg-emerald-500/20 text-emerald-300'
-                      : user?.kycStatus === 'PENDING'
-                      ? 'bg-amber-500/20 text-amber-300'
-                      : 'bg-white/[0.06] text-slate-300'
-                  }`}>
+                  <span
+                    className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold shrink-0 ${
+                      user?.kycStatus === 'VERIFIED'
+                        ? 'bg-[#00E676]/15 text-[#00E676]'
+                        : user?.kycStatus === 'PENDING'
+                        ? 'bg-[#F5B800]/15 text-[#F5B800]'
+                        : 'bg-white/[0.07] text-[#D0D5DD]'
+                    }`}
+                  >
                     {user?.kycStatus || 'Unverified'}
                   </span>
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => {
                     onSelectTab('security');
                     setIsUserMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#D0D5DD] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[44px]"
                 >
-                  <ShieldCheck className="w-4 h-4 text-[#168BFF]" />
+                  <ShieldCheck className="w-4 h-4 text-[#00E676] shrink-0" />
                   <span>Security &amp; Sessions</span>
                 </button>
 
                 <button
+                  type="button"
                   onClick={() => {
                     onNavigate('/');
                     setIsUserMenuOpen(false);
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-[#98A2B3] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[40px]"
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs text-[#D0D5DD] hover:text-white hover:bg-white/[0.06] transition-colors cursor-pointer min-h-[44px]"
                 >
                   <div className="flex items-center gap-2.5">
-                    <Activity className="w-4 h-4 text-[#32D583]" />
+                    <Activity className="w-4 h-4 text-[#00E5FF] shrink-0" />
                     <span>Public Portal</span>
                   </div>
                   <ExternalLink className="w-3.5 h-3.5 text-[#98A2B3]" />
@@ -508,15 +257,15 @@ export const Topbar: React.FC<TopbarProps> = ({
 
                 <div className="my-1.5 border-t border-white/[0.08]" />
 
-                {/* Logout Button */}
                 <button
+                  type="button"
                   onClick={async () => {
                     setIsUserMenuOpen(false);
                     await onLogout();
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#F04438] hover:bg-[#F04438]/10 transition-colors cursor-pointer min-h-[40px] font-medium"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-[#F04438] hover:bg-[#F04438]/10 transition-colors cursor-pointer min-h-[44px] font-semibold"
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-4 h-4 shrink-0" />
                   <span>Sign Out</span>
                 </button>
               </div>
@@ -525,7 +274,7 @@ export const Topbar: React.FC<TopbarProps> = ({
         </div>
       </div>
 
-      {/* Binance-Grade KYC Modal */}
+      {/* Identity Verification Modal */}
       <BinanceKYCModal
         isOpen={isKycModalOpen}
         onClose={() => setIsKycModalOpen(false)}

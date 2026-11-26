@@ -1,5 +1,6 @@
 import { getNextUtc0600Time, getPreviousUtcBusinessDate } from '../utils/timezone';
 import { runDailyMatchingSettlementCycle } from './binaryMatchingService';
+import { ENABLE_BINARY_ENGINE } from '../../config/referralConfig';
 
 let schedulerTimer: NodeJS.Timeout | null = null;
 let isRunning = false;
@@ -9,6 +10,9 @@ let isRunning = false;
  * Settles the previous business date that just closed at 06:00 UTC.
  */
 async function executeDailyCycle(): Promise<void> {
+  if (!ENABLE_BINARY_ENGINE) {
+    return;
+  }
   const previousDate = getPreviousUtcBusinessDate();
   console.log(`[MatchingScheduler] 🕛 06:00 UTC reached. Starting daily matching settlement for previous business date: ${previousDate}`);
 
@@ -30,6 +34,9 @@ async function executeDailyCycle(): Promise<void> {
  * Calculates ms until the next 06:00 UTC and arms the timer.
  */
 function scheduleNextDailyRun(): void {
+  if (!ENABLE_BINARY_ENGINE) {
+    return;
+  }
   const { nextRunIso, msUntilRun } = getNextUtc0600Time();
   console.log(`[MatchingScheduler] Next daily settlement scheduled for ${nextRunIso} (in ${Math.round(msUntilRun / 1000)}s)`);
 
@@ -48,6 +55,10 @@ function scheduleNextDailyRun(): void {
  * Initializes the background 06:00 UTC daily matching scheduler.
  */
 export function startMatchingScheduler(): void {
+  if (!ENABLE_BINARY_ENGINE) {
+    console.log('[MatchingScheduler] Binary Matching Engine is deprecated (ENABLE_BINARY_ENGINE=false). Scheduler disabled.');
+    return;
+  }
   if (isRunning) return;
   isRunning = true;
   console.log('[MatchingScheduler] Initializing Daily Binary Matching Settlement Scheduler (06:00 UTC)...');
@@ -65,3 +76,4 @@ export function stopMatchingScheduler(): void {
   isRunning = false;
   console.log('[MatchingScheduler] Stopped Daily Binary Matching Settlement Scheduler.');
 }
+

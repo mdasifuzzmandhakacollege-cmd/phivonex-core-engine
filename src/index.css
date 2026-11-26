@@ -1,9 +1,11 @@
 @import "tailwindcss";
+@import "./styles/phivonexTokens.css";
 
 @theme {
-  --font-sans: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, sans-serif;
+  --font-display: 'Space Grotesk', 'Plus Jakarta Sans', system-ui, sans-serif;
+  --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  --color-brand-bg-deep: #05070B;
+  --color-brand-bg-deep: #050807;
   --color-brand-bg-navy: #07101D;
   --color-brand-bg-surface: #0A1224;
   --color-brand-cyan: #00CFFF;
@@ -161,12 +163,107 @@
   }
 }
 
+@keyframes phx-ticker-marquee {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+.animate-phx-ticker {
+  display: flex;
+  width: max-content;
+  will-change: transform;
+  animation: phx-ticker-marquee 32s linear infinite;
+}
+
+.animate-phx-ticker:hover {
+  animation-play-state: paused;
+}
+
+@keyframes phx-light-sweep {
+  0% {
+    transform: translate3d(-135%, 0, 0) skewX(-22deg);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.7;
+  }
+  55% {
+    transform: translate3d(240%, 0, 0) skewX(-22deg);
+    opacity: 0;
+  }
+  100% {
+    transform: translate3d(240%, 0, 0) skewX(-22deg);
+    opacity: 0;
+  }
+}
+
+.animate-phx-light-sweep {
+  will-change: transform, opacity;
+  animation: phx-light-sweep 5.2s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+}
+
+.oneui-glass-card {
+  background: rgba(14, 21, 19, 0.78);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  box-shadow:
+    0 20px 48px -24px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+.oneui-glass-surface {
+  background: rgba(10, 16, 14, 0.74);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+@keyframes slideRight {
+  from {
+    transform: translate3d(-100%, 0, 0);
+    opacity: 0.6;
+  }
+  to {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+.animate-slideRight {
+  animation: slideRight 0.34s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-spin-slow,
   .animate-spin-reverse-slow,
   .animate-float-gentle,
   .animate-breathing-glow,
-  .animate-radar-sweep {
+  .animate-radar-sweep,
+  .animate-phx-ticker,
+  .animate-phx-light-sweep,
+  .animate-slideRight,
+  .animate-fadeIn {
     animation: none !important;
   }
 }

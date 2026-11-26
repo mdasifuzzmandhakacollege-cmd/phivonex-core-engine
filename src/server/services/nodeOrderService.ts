@@ -10,9 +10,11 @@ import {
 } from '../../config/nodeConfig';
 import { processNodeActivationCommission, SafeReferralCommission } from './referralCommissionService';
 import { propagateNodeSalesVolume } from './binaryVolumeService';
+import { ENABLE_SPOT_COMMISSION, ENABLE_BINARY_ENGINE } from '../../config/referralConfig';
 import { broadcastPublicEvent } from './publicNetworkService';
 import { getNodeBasePrice, isNodeSalesEnabled, getNodeRewardRatePerEpoch, getInternalCoinPrice } from './economicService';
 import { notifyNodeActivated } from './notificationService';
+import { assertFeatureSwitchEnabled } from './unilevelConfigService';
 
 export interface SafeNodeOrder {
   id?: string;
@@ -127,11 +129,16 @@ async function executeReservation(
   order: SafeNodeOrder;
   isExisting: boolean;
 }> {
-  // 0. Check Master Economic Switch: Node Sales Enabled
+  // 0. Check Master Governance & Economic Switch: Genesis Node Purchases Enabled
+  await assertFeatureSwitchEnabled(
+    'genesis_node_purchase_enabled',
+    'PHIVONEX GENESIS CORE™ Node Purchases',
+    db
+  );
   const salesEnabled = await isNodeSalesEnabled(db);
   if (!salesEnabled) {
-    const error: any = new Error('NODE_SALES_PAUSED: Genesis Node sales and reservations are currently paused by administration.');
-    error.code = 'NODE_SALES_PAUSED';
+    const error: any = new Error('MODULE_PAUSED: Module Temporarily Paused by Protocol Governance — Genesis Node sales and reservations are currently paused by administration.');
+    error.code = 'MODULE_PAUSED';
     error.statusCode = 403;
     throw error;
   }
@@ -649,7 +656,7 @@ export async function settleNodeOrder(
     console.warn('[NodeOrderService] Firestore node backup notice:', fsErr);
   }
 
-  // 5. Generate Direct Referral Commission ($50 USD to sponsor if eligible)
+  // 5. Direct Referral Commission & Sponsor Resolution (Task 01: Spot payout guarded by ENABLE_SPOT_COMMISSION, sponsor linkage preserved)
   let referralCommission: SafeReferralCommission | null = null;
   try {
     referralCommission = await processNodeActivationCommission(
@@ -658,15 +665,20 @@ export async function settleNodeOrder(
       finalNode.id,
       order.user_id
     );
+    if (!ENABLE_SPOT_COMMISSION) {
+      referralCommission = null;
+    }
   } catch (commErr) {
     console.warn('[ReferralCommission] Error processing referral commission for node activation:', commErr);
   }
 
-  // 6. Task #10: Propagate Binary Node Sales Volume to binary uplines
-  try {
-    await propagateNodeSalesVolume(db, finalNode.id, order.user_id);
-  } catch (volErr) {
-    console.warn('[BinaryVolume] Error propagating node sales volume:', volErr);
+  // 6. Task #10: Propagate Binary Node Sales Volume to binary uplines (Deprecated when ENABLE_BINARY_ENGINE = false)
+  if (ENABLE_BINARY_ENGINE) {
+    try {
+      await propagateNodeSalesVolume(db, finalNode.id, order.user_id);
+    } catch (volErr) {
+      console.warn('[BinaryVolume] Error propagating node sales volume:', volErr);
+    }
   }
 
   // 6b. Apply Active Promotional Offers (e.g. Buy 1 Genesis Node, Get 1 Free Promo Node)
@@ -733,9 +745,17 @@ export async function settleNodeOrder(
     console.warn('[SecurityEvent] Could not log purchase event:', secErr);
   }
 
-  // Define post-commit side effects (notification, SSE, email, automation)
+  // Define post-commit side effects (rank evaluation, notification, SSE, email, automation)
   // These MUST NOT hold up or deadlock the financial transaction!
   const executePostCommit = async () => {
+    // TASK-08: Trigger 7-Stage Unilevel Career & Leadership Rank evaluation for node buyer + uplines post-commit
+    try {
+      const { evaluateAndPromoteUserAndAncestors } = await import('./unilevelRankService');
+      await evaluateAndPromoteUserAndAncestors(order.user_id);
+    } catch (rankErr) {
+      console.warn('[NodeOrderService] Notice evaluating Unilevel ranks post-node-settlement:', rankErr);
+    }
+
     // Task #20: Trigger in-app notification for node activation
     try {
       await notifyNodeActivated({
@@ -795,7 +815,15 @@ export async function settleNodeOrder(
   };
 
   if (!dbClient) {
-    // If running outside an external transaction, trigger asynchronously (non-blocking)
+    // Run rank promotion evaluation synchronously after commit when not inside an outer transaction,
+    // then trigger remaining notifications asynchronously.
+    try {
+      const { evaluateAndPromoteUserAndAncestors } = await import('./unilevelRankService');
+      await evaluateAndPromoteUserAndAncestors(order.user_id);
+    } catch (rankErr) {
+      console.warn('[NodeOrderService] Notice evaluating Unilevel ranks post-settlement:', rankErr);
+    }
+
     executePostCommit().catch((err) => {
       console.warn('[NodeOrderService] Post-commit execution warning:', err);
     });
@@ -830,6 +858,8 @@ export async function settleNodeOrder(
     runPostCommit: executePostCommit,
   };
 }
+
+export const completeNodeOrder = settleNodeOrder;
 
 /**
  * Cancels a pending node reservation.
@@ -1041,7 +1071,7 @@ export async function purchaseNodeWithDepositBalance(
 }> {
   const db = await getDb();
 
-  return await db.transaction(async (trx) => {
+  const result = await db.transaction(async (trx) => {
     try {
       // Lock user row to serialize concurrent purchase attempts
       await trx.query(`SELECT id FROM users WHERE id = $1 FOR UPDATE`, [userId]);
@@ -1167,4 +1197,14 @@ export async function purchaseNodeWithDepositBalance(
       throw innerErr;
     }
   });
+
+  // TASK-08: Trigger 7-Stage Unilevel Career & Leadership Rank evaluation for node buyer + uplines post-commit
+  try {
+    const { evaluateAndPromoteUserAndAncestors } = await import('./unilevelRankService');
+    await evaluateAndPromoteUserAndAncestors(userId);
+  } catch (rankErr) {
+    console.warn('[NodeOrderService] Notice evaluating Unilevel ranks post-deposit-node-purchase:', rankErr);
+  }
+
+  return result;
 }

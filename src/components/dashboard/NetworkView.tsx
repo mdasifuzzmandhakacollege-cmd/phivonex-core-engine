@@ -1,61 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
+import { UnilevelRoyaltyMatrixHub } from '../unilevel/UnilevelRoyaltyMatrixHub';
+import { LeadershipRankHub } from '../unilevel/LeadershipRankHub';
+import { PhxGlassCard } from '../ui/phivonex';
 import {
+  Globe,
+  Zap,
   Users,
+  Trophy,
   GitFork,
-  ArrowLeft,
-  ArrowRight,
-  RefreshCw,
-  CheckCircle2,
-  AlertCircle,
-  Clock,
-  ChevronDown,
-  ChevronUp,
-  UserCheck,
-  Layers,
-  Info,
-  BarChart3,
-  Activity,
-  Calendar,
-  History,
   Copy,
   Check,
-  Share2,
-  ShieldCheck,
-  Zap,
-  Globe,
-  Award,
+  Loader2,
+  Sparkles,
+  MessageSquare,
 } from 'lucide-react';
-import {
-  MatchingSection,
-  MatchingSummary,
-  MatchingSettlementItem,
-} from './MatchingSection';
-import {
-  PromotionSection,
-} from './PromotionSection';
-import { PlacementManager } from './PlacementManager';
-
-export interface VolumeSummary {
-  businessDate: string;
-  today: {
-    left: number;
-    right: number;
-  };
-  carry: {
-    left: number;
-    right: number;
-  };
-  availableForFutureMatching: {
-    left: number;
-    right: number;
-  };
-}
-
-export interface VolumeHistoryItem {
-  businessDate: string;
-  leftUnits: number;
-  rightUnits: number;
-}
 
 export interface UnplacedMember {
   publicId: string;
@@ -64,1119 +22,342 @@ export interface UnplacedMember {
   placementStatus: 'UNPLACED';
 }
 
-export interface TreeNode {
-  user: {
-    publicId: string;
-    displayName: string;
-  };
-  side: 'LEFT' | 'RIGHT' | null;
-  placedAt: string | null;
-  left: TreeNode | null;
-  right: TreeNode | null;
+interface NetworkViewProps {
+  user?: any;
 }
 
-export interface NetworkSummary {
-  directReferrals: number;
-  placedMembers: number;
-  unplacedDirectReferrals: number;
-  leftNetworkMembers: number;
-  rightNetworkMembers: number;
-}
-
-export const NetworkView: React.FC<{ user?: any }> = ({ user }) => {
-  const [summary, setSummary] = useState<NetworkSummary | null>(null);
-  const [unplacedList, setUnplacedList] = useState<UnplacedMember[]>([]);
-  const [treeData, setTreeData] = useState<TreeNode | null>(null);
-  const [volumeSummary, setVolumeSummary] = useState<VolumeSummary | null>(null);
-  const [volumeHistory, setVolumeHistory] = useState<VolumeHistoryItem[]>([]);
-  const [matchingSummary, setMatchingSummary] = useState<MatchingSummary | null>(null);
-  const [matchingHistory, setMatchingHistory] = useState<MatchingSettlementItem[]>([]);
-  const [showHistory, setShowHistory] = useState<boolean>(false);
-  const [depth, setDepth] = useState<number>(8);
-  const [copiedLink, setCopiedLink] = useState<boolean>(false);
-  const [inspectNode, setInspectNode] = useState<TreeNode | null>(null);
-
-  const [loading, setLoading] = useState<boolean>(true);
-  const [placingMember, setPlacingMember] = useState<{
-    member: UnplacedMember;
-    side: 'LEFT' | 'RIGHT';
-    targetParentPublicId?: string;
-  } | null>(null);
-  const [manualMemberInput, setManualMemberInput] = useState<string>('');
-  const [submittingPlacement, setSubmittingPlacement] = useState<boolean>(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+export const NetworkView: React.FC<NetworkViewProps> = ({ user }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'matrix' | 'ranks' | 'frontline'>('matrix');
+  const [directReferrals, setDirectReferrals] = useState<any[]>([]);
+  const [networkSummary, setNetworkSummary] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedMsgIdx, setCopiedMsgIdx] = useState<number | null>(null);
 
   const referralCode = user?.referralCode || user?.publicId || 'PHX10088';
-  const referralLink = `${window.location.origin}/register?ref=${referralCode}`;
+  const referralLink = typeof window !== 'undefined' ? `${window.location.origin}/register?ref=${referralCode}` : `https://phivonex.com/register?ref=${referralCode}`;
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(referralLink);
     setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2500);
+    setTimeout(() => setCopiedLink(false), 2000);
   };
 
-  const fetchNetworkData = useCallback(async (currentDepth = depth) => {
-    setLoading(true);
-    setErrorMsg(null);
-    try {
-      const [summaryRes, unplacedRes, treeRes, volumeRes, historyRes, matchingSumRes, matchingHistRes] = await Promise.all([
-        fetch('/api/network/summary', { credentials: 'include' }).catch(() => null),
-        fetch('/api/network/unplaced', { credentials: 'include' }).catch(() => null),
-        fetch(`/api/network/tree?depth=${currentDepth}`, { credentials: 'include' }).catch(() => null),
-        fetch('/api/network/volume-summary', { credentials: 'include' }).catch(() => null),
-        fetch('/api/network/volume-history?page=1&limit=5', { credentials: 'include' }).catch(() => null),
-        fetch('/api/matching/summary', { credentials: 'include' }).catch(() => null),
-        fetch('/api/matching/history?page=1&limit=10', { credentials: 'include' }).catch(() => null),
-      ]);
+  const handleCopyId = () => {
+    navigator.clipboard.writeText(referralCode);
+    setCopiedId(true);
+    setTimeout(() => setCopiedId(false), 2000);
+  };
 
-      if (summaryRes && summaryRes.ok) {
-        setSummary(await summaryRes.json());
-      }
-      if (unplacedRes && unplacedRes.ok) {
-        const data = await unplacedRes.json();
-        setUnplacedList(data.unplaced || []);
-      }
-      if (treeRes && treeRes.ok) {
-        const data = await treeRes.json();
-        setTreeData(data.tree || null);
-      }
-      if (volumeRes && volumeRes.ok) {
-        setVolumeSummary(await volumeRes.json());
-      }
-      if (historyRes && historyRes.ok) {
-        const data = await historyRes.json();
-        setVolumeHistory(data.history || []);
-      }
-      if (matchingSumRes && matchingSumRes.ok) {
-        setMatchingSummary(await matchingSumRes.json());
-      }
-      if (matchingHistRes && matchingHistRes.ok) {
-        const data = await matchingHistRes.json();
-        setMatchingHistory(data.history || []);
-      }
-    } catch (err: any) {
-      console.warn('[NetworkView] Error fetching network:', err);
-      setErrorMsg(err.message || 'Unable to connect to network service.');
-    } finally {
-      setLoading(false);
-    }
-  }, [depth]);
+  const handleCopyFollowUp = (partner: any, idx: number) => {
+    const msg = `Hello ${partner.displayName || 'Partner'}, welcome to PHIVONEX Institutional Ecosystem! I see you registered under my partner network. To activate your Genesis Node and unlock up to 40% daily yields across 16 generations, access your secure dashboard here: ${referralLink}`;
+    navigator.clipboard.writeText(msg);
+    setCopiedMsgIdx(idx);
+    setTimeout(() => setCopiedMsgIdx(null), 2000);
+  };
 
   useEffect(() => {
-    fetchNetworkData(depth);
-  }, [fetchNetworkData, depth]);
+    const fetchNetworkData = async () => {
+      try {
+        const [netRes, directsRes] = await Promise.allSettled([
+          fetch('/api/network/summary', { credentials: 'include' }),
+          fetch('/api/referrals/direct', { credentials: 'include' }),
+        ]);
 
-  const handleConfirmPlacement = async () => {
-    if (!placingMember) return;
-    const effectiveMemberId = (placingMember.member.publicId || manualMemberInput || '').trim();
-    if (!effectiveMemberId) {
-      setErrorMsg('Please select a member or enter their Public ID / Email.');
-      return;
-    }
-
-    setSubmittingPlacement(true);
-    setErrorMsg(null);
-    setSuccessMsg(null);
-
-    try {
-      const res = await fetch('/api/network/place', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          memberPublicId: effectiveMemberId,
-          preferredSide: placingMember.side,
-          targetParentPublicId: placingMember.targetParentPublicId || undefined,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.message || 'Placement failed.');
+        if (netRes.status === 'fulfilled' && netRes.value.ok) {
+          const data = await netRes.value.json();
+          setNetworkSummary(data);
+          if (data.directReferralsList) {
+            setDirectReferrals(data.directReferralsList);
+          }
+        }
+        if (directsRes.status === 'fulfilled' && directsRes.value.ok) {
+          const data = await directsRes.value.json();
+          if (Array.isArray(data.referrals)) {
+            setDirectReferrals(data.referrals);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load network summary:', err);
+      } finally {
+        setLoading(false);
       }
+    };
+    fetchNetworkData();
+  }, []);
 
-      setSuccessMsg(
-        `Successfully placed ${placingMember.member.displayName || data.memberPublicId} into ${data.side} team under ${data.parentPublicId}!`
-      );
-      setPlacingMember(null);
-      setManualMemberInput('');
-      await fetchNetworkData(depth);
-    } catch (err: any) {
-      console.warn('[NetworkView] Placement error:', err);
-      setErrorMsg(err.message || 'Failed to complete placement.');
-    } finally {
-      setSubmittingPlacement(false);
-    }
-  };
-
-  const handleOpenManualPlacement = (side: 'LEFT' | 'RIGHT', targetParentPublicId?: string) => {
-    const cleanId = manualMemberInput.trim();
-    const matched = unplacedList.find(
-      (u) => u.publicId.toUpperCase() === cleanId.toUpperCase()
-    );
-    const fallbackMember: UnplacedMember = matched ||
-      unplacedList[0] || {
-        publicId: cleanId,
-        displayName: cleanId || 'Direct Referral Member',
-        joinedAt: new Date().toISOString(),
-        placementStatus: 'UNPLACED',
-      };
-    setPlacingMember({
-      member: fallbackMember,
-      side,
-      targetParentPublicId,
-    });
-  };
-
-  // Calculate balance percentage
-  const leftTotal = summary?.leftNetworkMembers || 0;
-  const rightTotal = summary?.rightNetworkMembers || 0;
-  const totalTeam = leftTotal + rightTotal;
-  const leftPercent = totalTeam > 0 ? Math.round((leftTotal / totalTeam) * 100) : 50;
-  const rightPercent = totalTeam > 0 ? 100 - leftPercent : 50;
+  const totalTeamCount = networkSummary?.totalTeamCount ?? directReferrals.length;
+  const activeTeamCapital =
+    networkSummary?.activeTeamCapital ??
+    directReferrals.reduce((acc, p) => acc + Number(p.personalActiveInvestmentUsd || 0), 0);
+  const unlockedDepth = networkSummary?.unlockedGenerations ?? 0;
 
   return (
-    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
-      {/* ========================================================
-          1. AFFILIATE COMMAND CENTER HERO & REFERRAL CARD
-         ======================================================== */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#07101D] via-[#0B1728] to-[#07101D] border border-white/[0.08] p-6 sm:p-8 shadow-2xl">
-        <div className="absolute top-0 right-0 -mt-12 -mr-12 w-80 h-80 bg-[#00CFFF]/15 rounded-full blur-3xl pointer-events-none" />
-        <div className="absolute bottom-0 left-1/3 -mb-16 w-64 h-64 bg-[#32D583]/10 rounded-full blur-3xl pointer-events-none" />
+    <div className="space-y-6 animate-fadeIn pb-10 min-w-0 max-w-full overflow-x-hidden">
+      {/* 1. EXECUTIVE PARTNER COMMAND HEADER & REFERRAL CONSOLE */}
+      <div className="oneui-glass-card rounded-[24px] p-5 sm:p-7 relative overflow-hidden">
+        <div className="absolute right-0 top-0 w-80 h-80 bg-[#00E5FF]/[0.07] rounded-full blur-3xl pointer-events-none" />
 
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-medium">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#00CFFF]/15 border border-[#00CFFF]/30 text-[#00CFFF] text-xs font-mono font-bold tracking-wider uppercase">
-                <Globe className="w-3.5 h-3.5 animate-spin-slow" />
-                Global Affiliate Command Center
+        <div className="relative z-10 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6">
+          <div className="space-y-3 max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="px-3 py-1 rounded-full text-xs font-mono font-bold tracking-wider uppercase bg-[#00E5FF]/15 text-[#00E5FF] border border-[#00E5FF]/30 flex items-center gap-1.5">
+                <Globe className="w-3.5 h-3.5" />
+                Affiliate &amp; Unilevel Command Center
               </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/[0.04] border border-white/[0.08] text-[#32D583] text-xs font-mono font-bold">
-                <Zap className="w-3.5 h-3.5 text-[#32D583]" />
-                Live Binary Matrix Sync
+              <span className="px-3 py-1 rounded-full text-xs font-mono font-bold tracking-wider uppercase bg-[#32D583]/15 text-[#32D583] border border-[#32D583]/30 flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                16-Gen Royalty Engine Active
               </span>
             </div>
 
-            <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-              Network Tree &amp; Matrix
+            <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
+              GLOBAL AFFILIATE &amp; UNILEVEL COMMAND
             </h1>
-            <p className="text-xs sm:text-sm text-[#98A2B3] max-w-2xl leading-relaxed">
-              Experience the ultra-modern decentralized genealogical gene tree. Monitor team equilibrium, unplaced referrals, daily matching bonuses, and instant referral sharing.
+
+            <p className="text-xs sm:text-sm text-[#98A2B3] leading-relaxed">
+              Real-time telemetry across your 16-generation downline, leadership promotion milestones, and frontline partner pipeline.
             </p>
           </div>
 
-          {/* Quick Referral Share Box */}
-          <div className="p-4 rounded-2xl bg-[#05070B]/90 border border-white/[0.1] shadow-xl backdrop-blur-md flex flex-col space-y-2.5 min-w-[280px] sm:min-w-[320px]">
-            <div className="flex items-center justify-between text-xs text-[#98A2B3] font-mono">
-              <span>Your Referral Link</span>
-              <span className="text-[#00CFFF] font-bold">{referralCode}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                readOnly
-                value={referralLink}
-                className="w-full bg-[#07101D] border border-white/[0.08] rounded-xl px-3 py-2 text-xs font-mono text-white select-all focus:outline-none"
-              />
+          {/* Quick Referral Link & ID Console */}
+          <div className="p-4 rounded-2xl bg-[#050807]/90 border border-white/10 shrink-0 flex flex-col space-y-3 w-full sm:w-[340px]">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-[#98A2B3] uppercase">Partner Referral Code</span>
               <button
-                type="button"
-                onClick={handleCopyLink}
-                className="p-2.5 rounded-xl bg-[#00CFFF] hover:bg-[#00CFFF]/90 text-[#05070B] font-bold transition-all cursor-pointer flex items-center justify-center shrink-0 shadow-lg shadow-[#00CFFF]/20 active:scale-95"
-                title="Copy Referral Link"
+                onClick={handleCopyId}
+                className="text-[11px] font-mono font-bold text-[#00E5FF] hover:underline flex items-center gap-1 cursor-pointer"
               >
-                {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                {copiedId ? <Check className="w-3 h-3 text-[#32D583]" /> : <Copy className="w-3 h-3" />}
+                <span>{referralCode}</span>
               </button>
             </div>
-            {copiedLink && (
-              <div className="text-[10px] font-mono text-[#32D583] text-center animate-fadeIn">
-                ✓ Referral link copied to clipboard!
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Notifications */}
-      {errorMsg && (
-        <div className="p-4 rounded-xl bg-[#F04438]/10 border border-[#F04438]/30 text-[#F04438] text-xs flex items-center justify-between gap-3 animate-fadeIn">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 shrink-0" />
-            <span>{errorMsg}</span>
-          </div>
-          <button onClick={() => setErrorMsg(null)} className="text-white hover:underline text-xs font-mono cursor-pointer">
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {successMsg && (
-        <div className="p-4 rounded-xl bg-[#32D583]/10 border border-[#32D583]/30 text-[#32D583] text-xs flex items-center justify-between gap-3 animate-fadeIn">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
-            <span>{successMsg}</span>
-          </div>
-          <button onClick={() => setSuccessMsg(null)} className="text-white hover:underline text-xs font-mono cursor-pointer">
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* ========================================================
-          2. KPI SUMMARY METRICS GRID
-         ======================================================== */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-        {/* Direct Referrals */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#00CFFF]/30 transition-all">
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Direct Referrals</span>
-            <Users className="w-4 h-4 text-[#00CFFF]" />
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-white tabular-nums">
-              {summary ? summary.directReferrals : '0'}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">Directly sponsored</div>
-          </div>
-        </div>
-
-        {/* Placed Members */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#32D583]/30 transition-all">
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Placed Members</span>
-            <UserCheck className="w-4 h-4 text-[#32D583]" />
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] tabular-nums">
-              {summary ? summary.placedMembers : '0'}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">In binary tree</div>
-          </div>
-        </div>
-
-        {/* Unplaced Referrals */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#F59E0B]/30 transition-all">
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Unplaced</span>
-            <Clock className="w-4 h-4 text-[#F59E0B]" />
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#F59E0B] tabular-nums">
-              {summary ? summary.unplacedDirectReferrals : '0'}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">Pending placement</div>
-          </div>
-        </div>
-
-        {/* Left Network */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between group hover:border-[#00CFFF]/30 transition-all">
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Left Team</span>
-            <ArrowLeft className="w-4 h-4 text-[#00CFFF]" />
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#00CFFF] tabular-nums">
-              {summary ? summary.leftNetworkMembers : '0'}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">Left subtree members</div>
-          </div>
-        </div>
-
-        {/* Right Network */}
-        <div className="p-4 sm:p-5 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-lg flex flex-col justify-between col-span-2 sm:col-span-1 group hover:border-[#32D583]/30 transition-all">
-          <div className="flex items-center justify-between text-xs text-[#98A2B3] mb-2">
-            <span className="font-medium text-[11px] uppercase tracking-wider">Right Team</span>
-            <ArrowRight className="w-4 h-4 text-[#32D583]" />
-          </div>
-          <div>
-            <div className="text-xl sm:text-2xl font-mono font-bold text-[#32D583] tabular-nums">
-              {summary ? summary.rightNetworkMembers : '0'}
-            </div>
-            <div className="text-[11px] text-[#98A2B3] mt-1">Right subtree members</div>
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          3. TEAM EQUILIBRIUM & LEG BALANCE METER
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <GitFork className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Team Equilibrium &amp; Leg Balance</h2>
-              <p className="text-[11px] text-[#98A2B3]">Real-time ratio between Left and Right team distribution.</p>
-            </div>
-          </div>
-          <div className="text-xs font-mono text-[#00CFFF] bg-[#00CFFF]/10 px-2.5 py-1 rounded-lg border border-[#00CFFF]/20">
-            Total Team: {totalTeam} Members
-          </div>
-        </div>
-
-        {/* Visual Progress Bar */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-xs font-mono">
-            <span className="text-[#00CFFF]">Left Team: {leftTotal} ({leftPercent}%)</span>
-            <span className="text-[#32D583]">Right Team: {rightTotal} ({rightPercent}%)</span>
-          </div>
-          <div className="h-3 w-full bg-[#05070B] rounded-full overflow-hidden p-0.5 border border-white/[0.08] flex">
-            <div
-              className="bg-gradient-to-r from-[#00CFFF] to-[#168BFF] h-full rounded-l-full transition-all duration-500"
-              style={{ width: `${leftPercent}%` }}
-            />
-            <div
-              className="bg-gradient-to-r from-[#10B981] to-[#32D583] h-full rounded-r-full transition-all duration-500"
-              style={{ width: `${rightPercent}%` }}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* ========================================================
-          4. BINARY SALES VOLUME SECTION
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <BarChart3 className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Binary Sales Volume</h2>
-              <p className="text-[11px] text-[#98A2B3]">Genesis Node volume attributed through binary tree ancestry (1 Active Node = 1 Unit).</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1.5 text-xs font-mono text-[#98A2B3] self-start sm:self-auto">
-            <Calendar className="w-3.5 h-3.5 text-[#00CFFF]" />
-            <span>Cycle Date:</span>
-            <span className="text-white font-bold">{volumeSummary?.businessDate || '—'}</span>
-          </div>
-        </div>
-
-        {/* 3 Metric Groups */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {/* Today's Sales */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
-            <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5 text-xs font-mono text-[#98A2B3]">
-              <span className="uppercase">Today's Sales</span>
-              <Activity className="w-3.5 h-3.5 text-[#00CFFF]" />
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <div>
-                <div className="text-[10px] text-[#98A2B3]">Today's Left</div>
-                <div className="text-xl font-bold font-mono text-[#00CFFF] tabular-nums">
-                  {volumeSummary ? volumeSummary.today.left : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Node Units</div>
-              </div>
-              <div className="border-l border-white/[0.06] pl-3">
-                <div className="text-[10px] text-[#98A2B3]">Today's Right</div>
-                <div className="text-xl font-bold font-mono text-[#32D583] tabular-nums">
-                  {volumeSummary ? volumeSummary.today.right : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Node Units</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Carry Forward */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
-            <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5 text-xs font-mono text-[#98A2B3]">
-              <span className="uppercase">Carry Forward</span>
-              <GitFork className="w-3.5 h-3.5 text-[#F59E0B]" />
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <div>
-                <div className="text-[10px] text-[#98A2B3]">Carry Left</div>
-                <div className="text-xl font-bold font-mono text-[#00CFFF] tabular-nums">
-                  {volumeSummary ? volumeSummary.carry.left : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Node Units</div>
-              </div>
-              <div className="border-l border-white/[0.06] pl-3">
-                <div className="text-[10px] text-[#98A2B3]">Carry Right</div>
-                <div className="text-xl font-bold font-mono text-[#32D583] tabular-nums">
-                  {volumeSummary ? volumeSummary.carry.right : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Node Units</div>
-              </div>
-            </div>
-          </div>
-
-          {/* Available Volume */}
-          <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2">
-            <div className="flex items-center justify-between border-b border-white/[0.04] pb-1.5 text-xs font-mono text-[#98A2B3]">
-              <span className="uppercase">Available Volume</span>
-              <Layers className="w-3.5 h-3.5 text-[#00CFFF]" />
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-1">
-              <div>
-                <div className="text-[10px] text-[#98A2B3]">Available Left</div>
-                <div className="text-xl font-bold font-mono text-white tabular-nums">
-                  {volumeSummary ? volumeSummary.availableForFutureMatching.left : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Total Units</div>
-              </div>
-              <div className="border-l border-white/[0.06] pl-3">
-                <div className="text-[10px] text-[#98A2B3]">Available Right</div>
-                <div className="text-xl font-bold font-mono text-white tabular-nums">
-                  {volumeSummary ? volumeSummary.availableForFutureMatching.right : '0'}
-                </div>
-                <div className="text-[10px] text-[#667085]">Total Units</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Volume History Toggle */}
-        <div>
-          <button
-            type="button"
-            onClick={() => setShowHistory(!showHistory)}
-            className="flex items-center gap-1.5 text-xs font-mono text-[#98A2B3] hover:text-white transition-colors cursor-pointer"
-          >
-            <History className="w-3.5 h-3.5 text-[#00CFFF]" />
-            <span>{showHistory ? 'Hide' : 'Show'} Volume History</span>
-            {showHistory ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          </button>
-
-          {showHistory && (
-            <div className="mt-3 p-3 rounded-xl bg-[#05070B] border border-white/[0.06] overflow-x-auto">
-              {volumeHistory.length === 0 ? (
-                <div className="text-xs font-mono text-[#98A2B3] py-2 text-center">
-                  No daily volume records generated yet.
-                </div>
-              ) : (
-                <table className="w-full text-xs font-mono text-left">
-                  <thead>
-                    <tr className="border-b border-white/[0.04] text-[#98A2B3] text-[10px] uppercase">
-                      <th className="py-2 px-2">Business Date</th>
-                      <th className="py-2 px-2 text-right text-[#00CFFF]">Left Units</th>
-                      <th className="py-2 px-2 text-right text-[#32D583]">Right Units</th>
-                      <th className="py-2 px-2 text-right text-white">Total Units</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/[0.04]">
-                    {volumeHistory.map((item) => (
-                      <tr key={item.businessDate} className="hover:bg-white/[0.02]">
-                        <td className="py-2 px-2 text-white">{item.businessDate}</td>
-                        <td className="py-2 px-2 text-right text-[#00CFFF] font-bold">{item.leftUnits}</td>
-                        <td className="py-2 px-2 text-right text-[#32D583] font-bold">{item.rightUnits}</td>
-                        <td className="py-2 px-2 text-right text-white font-bold">{item.leftUnits + item.rightUnits}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ========================================================
-          5. DAILY BINARY MATCHING SECTION
-         ======================================================== */}
-      <MatchingSection
-        summary={matchingSummary}
-        history={matchingHistory}
-        loading={loading}
-      />
-
-      {/* ========================================================
-          6. SEQUENTIAL PROMOTION SECTION
-         ======================================================== */}
-      <PromotionSection />
-
-      {/* ========================================================
-          7. UNPLACED DIRECT REFERRALS SECTION
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center text-[#F59E0B]">
-              <Clock className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Unplaced Direct Referrals</h2>
-              <p className="text-[11px] text-[#98A2B3]">
-                Place new direct referrals into your LEFT or RIGHT binary team.
-              </p>
-            </div>
-          </div>
-          <span className="text-xs font-mono text-[#F59E0B] bg-[#F59E0B]/10 px-2.5 py-0.5 rounded-md border border-[#F59E0B]/20 self-start sm:self-auto">
-            {unplacedList.length} Pending
-          </span>
-        </div>
-
-        {/* Quick Manual Placement Bar (by Public ID or Email) */}
-        <div className="p-4 rounded-xl bg-[#05070B] border border-[#00CFFF]/20 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          <div className="space-y-0.5">
-            <div className="text-xs font-bold text-white flex items-center gap-1.5">
-              <UserCheck className="w-3.5 h-3.5 text-[#00CFFF]" />
-              <span>Quick Team Placement (By Public ID or Email)</span>
-            </div>
-            <p className="text-[11px] text-[#98A2B3]">
-              Enter your direct referral&apos;s Public ID (e.g. PHX-100809) or Email and place them directly into your LEFT or RIGHT team.
-            </p>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-            <input
-              type="text"
-              value={manualMemberInput}
-              onChange={(e) => setManualMemberInput(e.target.value)}
-              placeholder="Enter Member ID (PHX-...) or Email"
-              className="bg-[#07101D] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2 text-xs font-mono text-white placeholder-[#667085] outline-none min-w-[230px]"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => handleOpenManualPlacement('LEFT')}
-                className="flex items-center justify-center gap-1 py-2 px-3 rounded-xl bg-[#00CFFF]/15 hover:bg-[#00CFFF]/25 text-[#00CFFF] border border-[#00CFFF]/30 text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>Place LEFT</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleOpenManualPlacement('RIGHT')}
-                className="flex items-center justify-center gap-1 py-2 px-3 rounded-xl bg-[#32D583]/15 hover:bg-[#32D583]/25 text-[#32D583] border border-[#32D583]/30 text-xs font-mono font-bold transition-all cursor-pointer whitespace-nowrap"
-              >
-                <span>Place RIGHT</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {unplacedList.length === 0 ? (
-          <div className="p-6 text-center border border-dashed border-white/[0.06] rounded-xl bg-[#05070B] space-y-1">
-            <CheckCircle2 className="w-6 h-6 text-[#32D583] mx-auto mb-1 opacity-80" />
-            <p className="text-xs font-bold text-white">All direct referrals are placed</p>
-            <p className="text-[11px] text-[#98A2B3]">
-              When new members register with your referral link, they appear here automatically, or you can place them above using their Public ID / Email or by clicking any &ldquo;+ Place Member&rdquo; slot in the tree below.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {unplacedList.map((m) => (
-              <div
-                key={m.publicId}
-                className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] hover:border-[#F59E0B]/30 transition-all flex flex-col justify-between space-y-3"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 flex items-center justify-center font-bold text-[#F59E0B] text-xs font-mono">
-                      {m.displayName.charAt(0)}
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-white">{m.displayName}</div>
-                      <div className="text-[11px] font-mono text-[#00CFFF]">{m.publicId}</div>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-[#F59E0B]/10 border border-[#F59E0B]/20 text-[#F59E0B]">
-                    UNPLACED
-                  </span>
-                </div>
-
-                <div className="text-[10px] font-mono text-[#98A2B3] flex items-center justify-between border-t border-white/[0.04] pt-2">
-                  <span>Joined:</span>
-                  <span>{new Date(m.joinedAt).toLocaleDateString()}</span>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setPlacingMember({ member: m, side: 'LEFT' })}
-                    className="flex items-center justify-center gap-1 py-2 px-3 rounded-lg bg-[#00CFFF]/10 hover:bg-[#00CFFF]/20 text-[#00CFFF] border border-[#00CFFF]/30 text-xs font-mono font-medium transition-all cursor-pointer min-h-[40px]"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    <span>Place LEFT</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPlacingMember({ member: m, side: 'RIGHT' })}
-                    className="flex items-center justify-center gap-1 py-2 px-3 rounded-lg bg-[#32D583]/10 hover:bg-[#32D583]/20 text-[#32D583] border border-[#32D583]/30 text-xs font-mono font-medium transition-all cursor-pointer min-h-[40px]"
-                  >
-                    <span>Place RIGHT</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* ========================================================
-          8. INTERACTIVE BINARY GENE TREE VIEW (International Grade)
-         ======================================================== */}
-      <div className="p-5 sm:p-6 rounded-2xl bg-[#07101D] border border-white/[0.08] shadow-xl overflow-hidden space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/[0.06] pb-3">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-[#00CFFF]/10 border border-[#00CFFF]/20 flex items-center justify-center text-[#00CFFF]">
-              <Layers className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-white">Genealogical Binary Tree</h2>
-              <p className="text-[11px] text-[#98A2B3]">
-                Interactive gene tree visualization down to depth {depth}. Click any node to inspect details.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="flex items-center bg-[#05070B] border border-white/[0.08] rounded-xl p-1">
-              <span className="text-[11px] text-[#98A2B3] px-2 font-mono">Depth:</span>
-              {[3, 5, 8, 10].map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setDepth(d)}
-                  className={`px-2.5 py-1 text-xs font-mono rounded-lg transition-colors cursor-pointer ${
-                    depth === d
-                      ? 'bg-[#00CFFF] text-[#05070B] font-bold shadow-sm'
-                      : 'text-[#98A2B3] hover:text-white'
-                  }`}
-                >
-                  {d}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        {/* Tree Container */}
-        <div className="w-full overflow-x-auto py-8 px-4 bg-[#05070B] rounded-2xl border border-white/[0.06] min-h-[420px] flex items-center justify-center shadow-inner">
-          {loading && !treeData ? (
-            <div className="flex flex-col items-center justify-center space-y-3 py-12">
-              <RefreshCw className="w-7 h-7 text-[#00CFFF] animate-spin" />
-              <p className="text-xs font-mono text-[#98A2B3]">Loading binary gene tree...</p>
-            </div>
-          ) : treeData ? (
-            <div className="min-w-fit flex flex-col items-center">
-              <BinaryTreeNodeRenderer
-                node={treeData}
-                isRoot={true}
-                rootVolume={volumeSummary}
-                onInspect={(node) => setInspectNode(node)}
-                onSelectEmptySlot={(parentPublicId, slotSide) =>
-                  handleOpenManualPlacement(slotSide, parentPublicId)
-                }
-              />
-            </div>
-          ) : (
-            <div className="text-center py-12 text-[#98A2B3] text-xs font-mono">
-              No binary tree data found.
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ========================================================
-          9. CONFIRMATION PLACEMENT MODAL
-         ======================================================== */}
-      {placingMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-md bg-[#07101D] border border-white/[0.12] rounded-2xl p-6 shadow-2xl space-y-5">
-            <div className="flex items-center gap-3">
-              <div
-                className={`p-3 rounded-xl border ${
-                  placingMember.side === 'LEFT'
-                    ? 'bg-[#00CFFF]/10 border-[#00CFFF]/30 text-[#00CFFF]'
-                    : 'bg-[#32D583]/10 border-[#32D583]/30 text-[#32D583]'
-                }`}
-              >
-                <GitFork className="w-6 h-6" />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-white">Confirm Network Placement</h3>
-                <p className="text-xs text-[#98A2B3]">
-                  Place direct referral into your binary team
-                </p>
-              </div>
-            </div>
-
-            {/* Member Selector / Input if multiple unplaced or manual slot click */}
-            <div className="space-y-3">
-              {unplacedList.length > 0 && (
-                <div>
-                  <label className="text-[11px] font-mono text-[#98A2B3] block mb-1">
-                    Select Unplaced Direct Referral:
-                  </label>
-                  <select
-                    value={placingMember.member.publicId}
-                    onChange={(e) => {
-                      const found = unplacedList.find((u) => u.publicId === e.target.value);
-                      if (found) {
-                        setPlacingMember({
-                          ...placingMember,
-                          member: found,
-                        });
-                      }
-                    }}
-                    className="w-full bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2.5 text-xs font-mono text-white outline-none cursor-pointer"
-                  >
-                    {unplacedList.map((u) => (
-                      <option key={u.publicId} value={u.publicId}>
-                        {u.displayName} ({u.publicId})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div>
-                <label className="text-[11px] font-mono text-[#98A2B3] block mb-1">
-                  Member Public ID or Email:
-                </label>
+            <div className="space-y-1">
+              <span className="text-[10px] font-mono text-[#98A2B3] uppercase">Registration URL</span>
+              <div className="flex items-center gap-2">
                 <input
                   type="text"
-                  value={placingMember.member.publicId}
-                  onChange={(e) =>
-                    setPlacingMember({
-                      ...placingMember,
-                      member: {
-                        ...placingMember.member,
-                        publicId: e.target.value,
-                        displayName: e.target.value || 'Direct Referral',
-                      },
-                    })
-                  }
-                  placeholder="e.g. PHX-100809 or user@gmail.com"
-                  className="w-full bg-[#05070B] border border-white/[0.12] focus:border-[#00CFFF] rounded-xl px-3 py-2 text-xs font-mono text-white outline-none"
+                  readOnly
+                  value={referralLink}
+                  className="w-full bg-[#07101D] border border-white/10 rounded-xl px-3 py-2 text-xs font-mono text-white select-all outline-none"
                 />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
                 <button
-                  type="button"
-                  onClick={() => setPlacingMember({ ...placingMember, side: 'LEFT' })}
-                  className={`py-2 px-3 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
-                    placingMember.side === 'LEFT'
-                      ? 'bg-[#00CFFF]/20 border-[#00CFFF] text-[#00CFFF]'
-                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3]'
-                  }`}
+                  onClick={handleCopyLink}
+                  className="p-2.5 rounded-xl bg-[#00E5FF] hover:bg-[#00cce6] text-[#050807] font-bold transition-all cursor-pointer shadow-lg shadow-[#00E5FF]/25 shrink-0"
+                  title="Copy Link"
                 >
-                  LEFT TEAM
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPlacingMember({ ...placingMember, side: 'RIGHT' })}
-                  className={`py-2 px-3 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
-                    placingMember.side === 'RIGHT'
-                      ? 'bg-[#32D583]/20 border-[#32D583] text-[#32D583]'
-                      : 'bg-[#05070B] border-white/[0.08] text-[#98A2B3]'
-                  }`}
-                >
-                  RIGHT TEAM
+                  {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                 </button>
               </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#05070B] border border-white/[0.06] space-y-2 text-xs font-mono">
-              <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Member ID:</span>
-                <span className="text-[#00CFFF] font-bold">
-                  {placingMember.member.publicId || '—'}
-                </span>
-              </div>
-              {placingMember.targetParentPublicId && (
-                <div className="flex justify-between">
-                  <span className="text-[#98A2B3]">Under Parent Node:</span>
-                  <span className="text-white font-bold">
-                    {placingMember.targetParentPublicId}
-                  </span>
-                </div>
+              {copiedLink && (
+                <span className="text-[10px] font-mono text-[#32D583] text-center block">✓ Referral link copied successfully!</span>
               )}
-              <div className="flex justify-between">
-                <span className="text-[#98A2B3]">Target Leg:</span>
-                <span
-                  className={`font-bold px-2 py-0.5 rounded ${
-                    placingMember.side === 'LEFT'
-                      ? 'bg-[#00CFFF]/20 text-[#00CFFF]'
-                      : 'bg-[#32D583]/20 text-[#32D583]'
-                  }`}
-                >
-                  {placingMember.side} TEAM
-                </span>
-              </div>
-            </div>
-
-            <div className="p-3.5 rounded-xl bg-[#F59E0B]/10 border border-[#F59E0B]/20 text-[#F59E0B] text-xs flex items-start gap-2.5">
-              <Info className="w-4 h-4 shrink-0 mt-0.5" />
-              <p className="leading-relaxed">
-                <strong>Placement Notice:</strong> Once placed, this member and any active Genesis Node volume they hold will be attributed to your selected binary leg.
-              </p>
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setPlacingMember(null)}
-                disabled={submittingPlacement}
-                className="flex-1 py-2.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-[#98A2B3] hover:text-white text-xs font-mono font-medium transition-colors border border-white/[0.08] cursor-pointer min-h-[44px]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmPlacement}
-                disabled={submittingPlacement}
-                className={`flex-1 py-2.5 rounded-xl text-[#05070B] text-xs font-mono font-bold transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer min-h-[44px] ${
-                  placingMember.side === 'LEFT'
-                    ? 'bg-[#00CFFF] hover:bg-[#00CFFF]/90 shadow-[#00CFFF]/20'
-                    : 'bg-[#32D583] hover:bg-[#32D583]/90 shadow-[#32D583]/20'
-                } disabled:opacity-50`}
-              >
-                {submittingPlacement ? (
-                  <>
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Placing...</span>
-                  </>
-                ) : (
-                  <span>Confirm Placement</span>
-                )}
-              </button>
             </div>
           </div>
         </div>
-      )}
 
-      {/* ========================================================
-          10. NODE INSPECT MODAL
-         ======================================================== */}
-      {inspectNode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="w-full max-w-sm bg-[#07101D] border border-white/[0.12] rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-[#00CFFF]/15 border border-[#00CFFF]/30 flex items-center justify-center text-[#00CFFF] font-bold">
-                  {inspectNode.user.displayName.charAt(0)}
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white">{inspectNode.user.displayName}</h3>
-                  <p className="text-[11px] font-mono text-[#00CFFF]">{inspectNode.user.publicId}</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setInspectNode(null)}
-                className="text-[#98A2B3] hover:text-white text-xs font-mono cursor-pointer p-1"
-              >
-                ✕
-              </button>
+        {/* 4 Live KPI Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-8 pt-6 border-t border-white/10">
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Direct Frontline (Gen 1)</span>
+            <div className="text-2xl font-mono font-bold text-white tabular-nums">
+              {directReferrals.length} <span className="text-xs text-[#00E5FF] font-normal">Partners</span>
             </div>
+            <span className="text-[10px] text-[#32D583] font-mono">Active Sponsors</span>
+          </div>
 
-            <div className="space-y-2 text-xs font-mono">
-              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
-                <span className="text-[#98A2B3]">Position Side:</span>
-                <span className="text-white font-bold">{inspectNode.side || 'ROOT'}</span>
-              </div>
-              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
-                <span className="text-[#98A2B3]">Placed At:</span>
-                <span className="text-white">{inspectNode.placedAt ? new Date(inspectNode.placedAt).toLocaleDateString() : 'Direct Ancestor'}</span>
-              </div>
-              <div className="flex justify-between p-2.5 rounded-lg bg-[#05070B] border border-white/[0.04]">
-                <span className="text-[#98A2B3]">Subtree Status:</span>
-                <span className="text-[#32D583] font-bold">ACTIVE</span>
-              </div>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Total Network Partners</span>
+            <div className="text-2xl font-mono font-bold text-white tabular-nums">
+              {totalTeamCount} <span className="text-xs text-[#F5B800] font-normal">Downline</span>
             </div>
+            <span className="text-[10px] text-[#98A2B3] font-mono">Across 16 Generations</span>
+          </div>
 
-            {/* Quick Place Under This Node if Left or Right slot is open */}
-            {(!inspectNode.left || !inspectNode.right) && (
-              <div className="pt-2 border-t border-white/[0.06] space-y-2">
-                <div className="text-[11px] font-mono text-[#98A2B3]">
-                  Place a direct referral directly under {inspectNode.user.publicId}:
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    disabled={Boolean(inspectNode.left)}
-                    onClick={() => {
-                      const parentPubId = inspectNode.user.publicId;
-                      setInspectNode(null);
-                      handleOpenManualPlacement('LEFT', parentPubId);
-                    }}
-                    className="py-2 px-2.5 rounded-xl bg-[#00CFFF]/15 hover:bg-[#00CFFF]/25 disabled:opacity-30 text-[#00CFFF] border border-[#00CFFF]/30 text-[11px] font-mono font-bold cursor-pointer"
-                  >
-                    + Place LEFT
-                  </button>
-                  <button
-                    type="button"
-                    disabled={Boolean(inspectNode.right)}
-                    onClick={() => {
-                      const parentPubId = inspectNode.user.publicId;
-                      setInspectNode(null);
-                      handleOpenManualPlacement('RIGHT', parentPubId);
-                    }}
-                    className="py-2 px-2.5 rounded-xl bg-[#32D583]/15 hover:bg-[#32D583]/25 disabled:opacity-30 text-[#32D583] border border-[#32D583]/30 text-[11px] font-mono font-bold cursor-pointer"
-                  >
-                    + Place RIGHT
-                  </button>
-                </div>
-              </div>
-            )}
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Active Team Capital (AUM)</span>
+            <div className="text-2xl font-mono font-bold text-[#32D583] tabular-nums">
+              ${activeTeamCapital.toLocaleString()}
+            </div>
+            <span className="text-[10px] text-[#98A2B3] font-mono">Protocol Deployed</span>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => setInspectNode(null)}
-              className="w-full py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] text-white text-xs font-mono font-bold transition-colors cursor-pointer"
-            >
-              Close
-            </button>
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-1">
+            <span className="text-[10px] font-mono text-[#98A2B3] uppercase tracking-wider block">Unlocked Royalty Depth</span>
+            <div className="text-2xl font-mono font-bold text-[#00E5FF] tabular-nums">
+              {unlockedDepth} / 16 <span className="text-xs text-white font-normal">Gens</span>
+            </div>
+            <span className="text-[10px] text-[#32D583] font-mono">Fully Unlocked</span>
           </div>
         </div>
-      )}
-    </div>
-  );
-};
 
-/**
- * Recursive binary gene tree visualizer component with interactive inspect & clickable Empty Slots
- */
-interface NodeRendererProps {
-  node: TreeNode | null;
-  parentPublicId?: string;
-  isRoot?: boolean;
-  side?: 'LEFT' | 'RIGHT';
-  rootVolume?: VolumeSummary | null;
-  onInspect?: (node: TreeNode) => void;
-  onSelectEmptySlot?: (parentPublicId: string, side: 'LEFT' | 'RIGHT') => void;
-}
-
-const BinaryTreeNodeRenderer: React.FC<NodeRendererProps> = ({
-  node,
-  parentPublicId,
-  isRoot = false,
-  side,
-  rootVolume,
-  onInspect,
-  onSelectEmptySlot,
-}) => {
-  if (!node) {
-    return (
-      <div className="flex flex-col items-center">
-        <button
-          type="button"
-          onClick={() => {
-            if (parentPublicId && side && onSelectEmptySlot) {
-              onSelectEmptySlot(parentPublicId, side);
-            }
-          }}
-          className={`w-28 sm:w-36 p-3 rounded-xl border border-dashed transition-all text-center cursor-pointer group ${
-            side === 'LEFT'
-              ? 'border-[#00CFFF]/30 hover:border-[#00CFFF] bg-[#00CFFF]/[0.03] hover:bg-[#00CFFF]/10'
-              : 'border-[#32D583]/30 hover:border-[#32D583] bg-[#32D583]/[0.03] hover:bg-[#32D583]/10'
-          }`}
-        >
-          <div
-            className={`text-[9px] font-mono uppercase tracking-wider font-bold mb-0.5 ${
-              side === 'LEFT' ? 'text-[#00CFFF]' : 'text-[#32D583]'
+        {/* Sub-navigation Tabs */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-6 pt-5 border-t border-white/[0.08]">
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('matrix')}
+            className={`py-2.5 px-3.5 sm:px-4 rounded-2xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 active:scale-95 ${
+              activeSubTab === 'matrix'
+                ? 'bg-[#00E5FF] text-[#050807] shadow-md shadow-[#00E5FF]/20'
+                : 'bg-white/[0.05] text-slate-300 hover:bg-white/[0.1] hover:text-white border border-white/[0.08]'
             }`}
           >
-            {side || 'Position'} Slot
-          </div>
-          <div className="text-[11px] font-mono text-white/80 group-hover:text-white font-semibold">
-            + Place Member
-          </div>
-        </button>
+            <GitFork className="w-4 h-4" />
+            <span>16-Gen Royalty Matrix</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('ranks')}
+            className={`py-2.5 px-3.5 sm:px-4 rounded-2xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 active:scale-95 ${
+              activeSubTab === 'ranks'
+                ? 'bg-[#F5B800] text-[#050807] shadow-md shadow-[#F5B800]/20'
+                : 'bg-white/[0.05] text-slate-300 hover:bg-white/[0.1] hover:text-white border border-white/[0.08]'
+            }`}
+          >
+            <Trophy className="w-4 h-4" />
+            <span>Leadership Rank Ladder</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubTab('frontline')}
+            className={`py-2.5 px-3.5 sm:px-4 rounded-2xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 active:scale-95 ${
+              activeSubTab === 'frontline'
+                ? 'bg-[#00E676] text-[#050807] shadow-md shadow-[#00E676]/20'
+                : 'bg-white/[0.05] text-slate-300 hover:bg-white/[0.1] hover:text-white border border-white/[0.08]'
+            }`}
+          >
+            <Users className="w-4 h-4" />
+            <span>Direct Frontline Pipeline</span>
+          </button>
+        </div>
       </div>
-    );
-  }
 
-  return (
-    <div className="flex flex-col items-center">
-      {/* Node Card */}
-      <div
-        onClick={() => onInspect?.(node)}
-        className={`w-32 sm:w-40 p-3 rounded-2xl border transition-all relative cursor-pointer group hover:scale-105 ${
-          isRoot
-            ? 'bg-gradient-to-br from-[#0B1728] to-[#07101D] border-[#00CFFF]/50 shadow-xl shadow-[#00CFFF]/15'
-            : node.side === 'LEFT'
-            ? 'bg-[#05070B] border-[#00CFFF]/30 hover:border-[#00CFFF]'
-            : 'bg-[#05070B] border-[#32D583]/30 hover:border-[#32D583]'
-        }`}
-      >
-        <div className="flex items-center justify-between mb-1.5">
-          <span
-            className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
-              isRoot
-                ? 'bg-[#00CFFF]/25 text-[#00CFFF] border border-[#00CFFF]/40'
-                : node.side === 'LEFT'
-                ? 'bg-[#00CFFF]/15 text-[#00CFFF]'
-                : 'bg-[#32D583]/15 text-[#32D583]'
-            }`}
-          >
-            {isRoot ? 'YOU' : node.side}
+      {/* 2. NEXT-SESSION ACTION & PROMOTION READINESS GUIDE */}
+      <div className="oneui-glass-card p-5 sm:p-6 rounded-[24px] space-y-4">
+        <div className="flex items-center justify-between border-b border-white/[0.06] pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-[#00E5FF]/20 border border-[#00E5FF]/40 flex items-center justify-center text-[#00E5FF]">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-white">Next-Session Promotion Readiness Guide</h3>
+              <p className="text-[11px] text-[#98A2B3]">Actionable steps to unlock your next leadership rank and maximize unilevel generation depth.</p>
+            </div>
+          </div>
+          <span className="text-[11px] font-mono text-[#32D583] bg-[#32D583]/10 border border-[#32D583]/30 px-3 py-1 rounded-full">
+            Rank Status: Elite Qualifier
           </span>
-          {node.placedAt && (
-            <span className="text-[9px] font-mono text-[#667085]">
-              {new Date(node.placedAt).toLocaleDateString(undefined, {
-                month: 'numeric',
-                day: 'numeric',
-              })}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="p-4 rounded-xl bg-[#050B14]/90 border border-white/10 space-y-2">
+            <span className="text-[10px] font-mono text-[#00E5FF] uppercase tracking-wider block">Step 1: Frontline Expansion</span>
+            <p className="text-xs text-white font-medium">Sponsor 2 additional direct partners to expand your Gen-1 royalty percentage.</p>
+            <div className="text-[11px] font-mono text-[#98A2B3]">Current: {directReferrals.length} Active Frontline</div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[#050B14]/90 border border-white/10 space-y-2">
+            <span className="text-[10px] font-mono text-[#F5B800] uppercase tracking-wider block">Step 2: Volume Compliance</span>
+            <p className="text-xs text-white font-medium">Maintain 40% anti-single-leg distribution across your 3 distinct leadership legs.</p>
+            <div className="text-[11px] font-mono text-[#32D583]">Status: 100% Balanced &amp; Compliant</div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-[#050B14]/90 border border-white/10 space-y-2">
+            <span className="text-[10px] font-mono text-[#32D583] uppercase tracking-wider block">Step 3: Milestone Reward</span>
+            <p className="text-xs text-white font-medium">Unlock next tier rank bonus ($2,500 USDT instant credit + Global Pool Share).</p>
+            <div className="text-[11px] font-mono text-[#00E5FF]">Target: Director Sovereign</div>
+          </div>
+        </div>
+      </div>
+
+      {/* RENDER ACTIVE SUB-TAB CONTENT */}
+      {activeSubTab === 'matrix' && (
+        <UnilevelRoyaltyMatrixHub user={user} onNavigateTab={() => {}} />
+      )}
+
+      {activeSubTab === 'ranks' && (
+        <LeadershipRankHub user={user} onNavigateTab={() => {}} />
+      )}
+
+      {activeSubTab === 'frontline' && (
+        <PhxGlassCard>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+            <div>
+              <h3 className="text-base font-bold text-white flex items-center gap-2">
+                <Users className="w-5 h-5 text-[#32D583]" />
+                <span>Direct Frontline Partners &amp; Automated Follow-Up Pipeline</span>
+              </h3>
+              <p className="text-xs text-[#98A2B3] mt-0.5">Track your direct sponsorships, investment allocations, and follow up instantly via 1-click tailored messages.</p>
+            </div>
+            <span className="text-xs font-mono text-[#32D583] bg-[#32D583]/10 px-3 py-1 rounded-full border border-[#32D583]/30 shrink-0">
+              {directReferrals.length} Total Frontline
             </span>
+          </div>
+
+          {loading ? (
+            <div className="py-16 flex items-center justify-center">
+              <Loader2 className="w-6 h-6 animate-spin text-[#32D583]" />
+            </div>
+          ) : directReferrals.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 text-xs font-mono bg-[#050B14]/60 rounded-xl border border-white/5 p-6">
+              No direct frontline partners registered under your referral code yet. Share your partner referral link above to begin building your unilevel network.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-white/10 text-slate-400 font-mono">
+                    <th className="pb-3 px-3">Partner Name / ID</th>
+                    <th className="pb-3 px-3">Join Date</th>
+                    <th className="pb-3 px-3">Active Capital</th>
+                    <th className="pb-3 px-3">Leadership Rank</th>
+                    <th className="pb-3 px-3">Follow-Up Status</th>
+                    <th className="pb-3 px-3 text-right">Action / Onboard</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.06] font-mono">
+                  {directReferrals.map((partner: any, idx: number) => {
+                    const capital = partner.personalActiveInvestmentUsd || 0;
+                    const badgeStatus = capital > 0 ? 'ACTIVE INVESTOR' : 'PENDING ACTIVATION';
+                    const badgeColor = capital > 0 ? 'bg-[#32D583]/15 text-[#32D583] border-[#32D583]/30' : 'bg-amber-500/15 text-amber-300 border-amber-500/30 animate-pulse';
+
+                    return (
+                      <tr key={idx} className="hover:bg-white/[0.02] transition-colors">
+                        <td className="py-3.5 px-3">
+                          <div className="font-bold text-white font-sans">{partner.displayName || 'Institutional Partner'}</div>
+                          <div className="text-[10px] text-[#00E5FF]">{partner.publicId || 'PHX-PARTNER'}</div>
+                        </td>
+                        <td className="py-3.5 px-3 text-slate-400">{new Date(partner.joinedAt || Date.now()).toLocaleDateString()}</td>
+                        <td className="py-3.5 px-3 text-white font-bold">${capital.toLocaleString()}</td>
+                        <td className="py-3.5 px-3 text-[#F5B800]">{partner.rankName || 'Initiate Member'}</td>
+                        <td className="py-3.5 px-3">
+                          <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border ${badgeColor}`}>
+                            {badgeStatus}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-3 text-right">
+                          <button
+                            onClick={() => handleCopyFollowUp(partner, idx)}
+                            className="px-3 py-1.5 rounded-lg bg-[#00E5FF]/10 hover:bg-[#00E5FF]/20 border border-[#00E5FF]/30 text-[#00E5FF] font-bold text-[11px] transition-all cursor-pointer inline-flex items-center gap-1.5"
+                            title="Copy Tailored Onboarding / Follow-Up Message"
+                          >
+                            {copiedMsgIdx === idx ? <Check className="w-3.5 h-3.5 text-[#32D583]" /> : <MessageSquare className="w-3.5 h-3.5" />}
+                            <span>{copiedMsgIdx === idx ? 'Copied Message!' : 'Copy Follow-Up'}</span>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
-        </div>
-
-        <div className="text-xs font-bold text-white truncate group-hover:text-[#00CFFF] transition-colors">
-          {node.user.displayName}
-        </div>
-        <div className="text-[10px] font-mono text-[#00CFFF] truncate mt-0.5">
-          {node.user.publicId}
-        </div>
-
-        {/* Root Volume Badges */}
-        {isRoot && rootVolume && (
-          <div className="mt-2.5 pt-2 border-t border-white/[0.08] grid grid-cols-2 gap-1 text-[9px] font-mono">
-            <div className="text-[#00CFFF] flex items-center justify-between">
-              <span>L:</span>
-              <span className="font-bold">{rootVolume.availableForFutureMatching.left}</span>
-            </div>
-            <div className="text-[#32D583] flex items-center justify-between border-l border-white/[0.08] pl-1">
-              <span>R:</span>
-              <span className="font-bold">{rootVolume.availableForFutureMatching.right}</span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Branch Connectors and Children */}
-      <div className="w-0.5 h-6 bg-gradient-to-b from-white/[0.2] to-white/[0.1]"></div>
-
-      <div className="relative flex justify-center items-start pt-0">
-        <div className="grid grid-cols-2 gap-4 sm:gap-8 relative">
-          <div className="absolute top-0 left-1/4 right-1/4 h-0.5 bg-white/[0.15]"></div>
-
-          {/* Left Branch */}
-          <div className="flex flex-col items-center">
-            <div className="w-0.5 h-4 bg-[#00CFFF]/50"></div>
-            <BinaryTreeNodeRenderer
-              node={node.left}
-              parentPublicId={node.user.publicId}
-              side="LEFT"
-              rootVolume={rootVolume}
-              onInspect={onInspect}
-              onSelectEmptySlot={onSelectEmptySlot}
-            />
-          </div>
-
-          {/* Right Branch */}
-          <div className="flex flex-col items-center">
-            <div className="w-0.5 h-4 bg-[#32D583]/50"></div>
-            <BinaryTreeNodeRenderer
-              node={node.right}
-              parentPublicId={node.user.publicId}
-              side="RIGHT"
-              rootVolume={rootVolume}
-              onInspect={onInspect}
-              onSelectEmptySlot={onSelectEmptySlot}
-            />
-          </div>
-        </div>
-      </div>
+        </PhxGlassCard>
+      )}
     </div>
   );
 };
