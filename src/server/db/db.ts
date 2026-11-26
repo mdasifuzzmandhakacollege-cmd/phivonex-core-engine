@@ -29,6 +29,9 @@ declare global {
 }
 
 export function getEffectiveDatabaseUrl(): string | undefined {
+  if ((process.env.NODE_ENV || '').toLowerCase() === 'test' && process.env.PGLITE_DATA_DIR?.trim()) {
+    return undefined;
+  }
   if (process.env.DATABASE_URL?.trim()) {
     return process.env.DATABASE_URL.trim();
   }
@@ -269,33 +272,24 @@ export async function getDb(): Promise<DatabaseClient> {
             await pglite.exec(sql);
           },
           async transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
-            const trxClient: DatabaseClient = {
-              async query<R = any>(sql: string, params?: any[]): Promise<QueryResult<R>> {
-                const res = await pglite.query<R>(sql, params);
-                return {
-                  rows: res.rows as R[],
-                  rowCount: res.rows.length,
-                };
-              },
-              async exec(sql: string): Promise<void> {
-                await pglite.exec(sql);
-              },
-              async transaction<R>(cb: (c: DatabaseClient) => Promise<R>): Promise<R> {
-                return cb(trxClient);
-              },
-            };
-
-            try {
-              await pglite.query('BEGIN');
-              const result = await callback(trxClient);
-              await pglite.query('COMMIT');
-              return result;
-            } catch (err) {
-              await pglite.query('ROLLBACK').catch(() => {});
-              throw err;
-            } finally {
-              // no release needed for PGlite
-            }
+            return pglite.transaction(async (tx) => {
+              const trxClient: DatabaseClient = {
+                async query<R = any>(sql: string, params?: any[]): Promise<QueryResult<R>> {
+                  const res = await tx.query<R>(sql, params);
+                  return {
+                    rows: res.rows as R[],
+                    rowCount: res.rows.length,
+                  };
+                },
+                async exec(sql: string): Promise<void> {
+                  await tx.exec(sql);
+                },
+                async transaction<R>(cb: (c: DatabaseClient) => Promise<R>): Promise<R> {
+                  return cb(trxClient);
+                },
+              };
+              return callback(trxClient);
+            });
           },
         };
       }

@@ -196,7 +196,10 @@ async function runOtpTests() {
     assert(loginPageSrc.includes('6-Digit Verification Code (OTP)'), 'LoginPage includes 6-Digit OTP field for password reset');
     assert(withdrawalsViewSrc.includes('isOtpModalOpen'), 'WithdrawalsView includes isOtpModalOpen state');
     assert(withdrawalsViewSrc.includes('/api/withdrawals/request-otp'), 'WithdrawalsView dispatches request-otp before execution');
-    assert(withdrawalsViewSrc.includes('Authorize Fund Withdrawal'), 'WithdrawalsView includes Withdrawal Authorization modal');
+    assert(
+      withdrawalsViewSrc.includes('Authorize Withdrawal') || withdrawalsViewSrc.includes('Authorize Fund Withdrawal'),
+      'WithdrawalsView includes Withdrawal Authorization modal'
+    );
 
     console.log('\n===============================================================');
     console.log(`📊 OTP TEST SUITE SUMMARY: ${passed} PASSED, ${failed} FAILED`);

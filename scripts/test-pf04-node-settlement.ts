@@ -145,13 +145,22 @@ async function runPf04Tests() {
     const purchaseRes2 = await purchaseNodeWithDepositBalance(buyer2Id, 'USDT');
     assert(purchaseRes2.node.status === 'ACTIVE', 'Sponsored buyer successfully activated node');
 
+    const { ENABLE_SPOT_COMMISSION, ENABLE_BINARY_ENGINE } = await import('../src/config/referralConfig');
     const commCheck2 = await db.query(`SELECT * FROM referral_commissions WHERE sponsor_user_id = $1 AND referred_user_id = $2`, [sponsorId, buyer2Id]);
-    assert(commCheck2.rows.length === 1, 'Exactly one referral commission created for eligible sponsor');
-    assert(Number(commCheck2.rows[0].amount_usd) === 50.00, 'Commission amount is exactly $50.00 USD');
-    assert(commCheck2.rows[0].status === 'EARNED', 'Commission status is EARNED');
+    if (ENABLE_SPOT_COMMISSION) {
+      assert(commCheck2.rows.length === 1, 'Exactly one referral commission created for eligible sponsor');
+      assert(Number(commCheck2.rows[0].amount_usd) === 50.00, 'Commission amount is exactly $50.00 USD');
+      assert(commCheck2.rows[0].status === 'EARNED', 'Commission status is EARNED');
+    } else {
+      assert(commCheck2.rows.length === 0, 'Zero legacy spot commissions created when 16-Gen Unilevel mode is active');
+    }
 
     const volCheck2 = await db.query(`SELECT * FROM binary_volume_events`);
-    assert(volCheck2.rows.length >= 1, 'Binary sales volume event successfully created upon sponsored node activation');
+    if (ENABLE_BINARY_ENGINE) {
+      assert(volCheck2.rows.length >= 1, 'Binary sales volume event successfully created upon sponsored node activation');
+    } else {
+      assert(volCheck2.rows.length === 0, 'Zero legacy binary volume events created when 16-Gen Unilevel mode is active');
+    }
 
     // 5. Idempotency Test (Requirement 6)
     console.log('\n--- 5. IDEMPOTENCY TEST ---');

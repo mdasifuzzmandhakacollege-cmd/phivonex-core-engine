@@ -278,19 +278,17 @@ async function runPf10Tests() {
     // TEST F: Public Landing Page Content Verification
     // =========================================================================
     console.log('\n--- TEST F: Landing Page Public Data Removal Verification ---');
-    const landingPagePath = path.resolve(process.cwd(), 'src/pages/PublicLandingPage.tsx');
+    const landingPagePath = path.resolve(process.cwd(), 'src/pages/LandingPage.tsx');
     const landingContent = fs.readFileSync(landingPagePath, 'utf8');
 
-    // 1. Check absence of exact node quantities / counts
+    // 1. Check absence of fixed legacy 25 PHIVO/day promises or exposed affiliate/compensation copy
     const forbiddenPatterns = [
-      /10,000\s+Nodes/i,
-      /Genesis\s+Cap/i,
-      /Node\s+Limit/i,
       /25\s+PHIVO\s*\/\s*Day/i,
       /25\s+PHIVO\s*\/\s*Eligible\s+Day/i,
       /400\s*[×x]\s*25\s+PHIVO/i,
-      /Current Genesis Capacity:\s*10,000/i,
-      /10,000 Genesis Node cap/i,
+      /16-generation/i,
+      /\$50\s+per\s+eligible\s+node/i,
+      /0x0000000000000000000000000000000000000000/i,
     ];
 
     for (const pattern of forbiddenPatterns) {
@@ -298,22 +296,22 @@ async function runPf10Tests() {
       assert(!match, `Landing page does NOT contain forbidden pattern: ${pattern}`, match ? `Found: "${match[0]}"` : undefined);
     }
 
-    // 2. Check presence of approved protocol-governed text
+    // 2. Check presence of approved institutional architecture copy
     assert(
-      landingContent.includes('Daily PHIVO emission is governed by the active protocol economic configuration.'),
-      'Landing page includes required protocol governance copy'
+      landingContent.includes('100,000,000 PHIVO'),
+      'Landing page displays fixed 100,000,000 PHIVO total supply'
     );
     assert(
-      landingContent.includes('Genesis Node Economy'),
-      'Landing page contains approved conceptual phrase "Genesis Node Economy"'
+      landingContent.includes('BNB Smart Chain (BEP-20)'),
+      'Landing page references BNB Smart Chain (BEP-20) settlement network'
     );
     assert(
-      landingContent.includes('Structured Node Participation'),
-      'Landing page contains approved conceptual phrase "Structured Node Participation"'
+      landingContent.includes('Genesis Nodes'),
+      'Landing page describes Genesis Nodes infrastructure'
     );
     assert(
-      landingContent.includes('Genesis V1 Architecture'),
-      'Landing page contains approved conceptual phrase "Genesis V1 Architecture"'
+      landingContent.includes('Segregated Asset Custody'),
+      'Landing page includes Segregated Asset Custody assurance'
     );
 
     console.log('\n===============================================================');

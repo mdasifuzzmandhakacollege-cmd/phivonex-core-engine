@@ -96,7 +96,7 @@ export async function createRewardEpoch(params?: {
   let configVersion: number | null = null;
 
   if (params?.rewardPerNode !== undefined) {
-    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
+    rewardRate = params.rewardPerNode <= 0 ? null : getConfiguredRewardPerNode(params.rewardPerNode);
   } else {
     const activeCfg = await getEconomicConfigByKey('NODE_REWARD_RATE_PER_EPOCH');
     if (activeCfg && activeCfg.status === 'ACTIVE' && activeCfg.configValue !== null && activeCfg.configValue !== undefined) {
@@ -111,6 +111,8 @@ export async function createRewardEpoch(params?: {
       } else {
         rewardRate = Number(activeCfg.configValue);
       }
+    } else if (activeCfg) {
+      rewardRate = null;
     } else {
       rewardRate = getConfiguredRewardPerNode();
     }
@@ -273,7 +275,7 @@ export async function closeAndSettleEpoch(
   let configVersion: number | null = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
 
   if (options?.configuredRewardPerNode !== undefined) {
-    effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+    effectiveRate = options.configuredRewardPerNode <= 0 ? null : getConfiguredRewardPerNode(options.configuredRewardPerNode);
   } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
     effectiveRate = Number(epoch.reward_rate_used);
   } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
@@ -292,6 +294,8 @@ export async function closeAndSettleEpoch(
       } else {
         effectiveRate = Number(activeCfg.configValue);
       }
+    } else if (activeCfg) {
+      effectiveRate = null;
     } else {
       effectiveRate = getConfiguredRewardPerNode();
     }
@@ -349,14 +353,14 @@ export async function closeAndSettleEpoch(
       AND owner_user_id IS NOT NULL 
       AND (activated_at IS NULL OR activated_at <= $2)
       AND COALESCE(distributed_phivo, 0) < COALESCE(lifetime_phivo_allocation, 10000.00)
-      AND (nodes.last_reward_date IS NULL OR nodes.last_reward_date < $4::date)
+      AND ($3::boolean = false OR nodes.last_reward_date IS NULL OR nodes.last_reward_date < ($4::text)::date)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
       AND (
         $3::boolean = false
         OR NOT EXISTS (
           SELECT 1 FROM node_rewards nr
           WHERE nr.node_id = nodes.id
-            AND nr.business_date = $4
+            AND nr.business_date = $4::text
             AND nr.status != 'REVERSED'
         )
       )

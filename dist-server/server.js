@@ -13997,6 +13997,9 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv417 } from "uuid";
 function getEffectiveDatabaseUrl() {
+  if ((process.env.NODE_ENV || "").toLowerCase() === "test" && process.env.PGLITE_DATA_DIR?.trim()) {
+    return void 0;
+  }
   if (process.env.DATABASE_URL?.trim()) {
     return process.env.DATABASE_URL.trim();
   }
@@ -14197,32 +14200,24 @@ async function getDb() {
             await pglite.exec(sql);
           },
           async transaction(callback) {
-            const trxClient = {
-              async query(sql, params) {
-                const res = await pglite.query(sql, params);
-                return {
-                  rows: res.rows,
-                  rowCount: res.rows.length
-                };
-              },
-              async exec(sql) {
-                await pglite.exec(sql);
-              },
-              async transaction(cb) {
-                return cb(trxClient);
-              }
-            };
-            try {
-              await pglite.query("BEGIN");
-              const result = await callback(trxClient);
-              await pglite.query("COMMIT");
-              return result;
-            } catch (err) {
-              await pglite.query("ROLLBACK").catch(() => {
-              });
-              throw err;
-            } finally {
-            }
+            return pglite.transaction(async (tx) => {
+              const trxClient = {
+                async query(sql, params) {
+                  const res = await tx.query(sql, params);
+                  return {
+                    rows: res.rows,
+                    rowCount: res.rows.length
+                  };
+                },
+                async exec(sql) {
+                  await tx.exec(sql);
+                },
+                async transaction(cb) {
+                  return cb(trxClient);
+                }
+              };
+              return callback(trxClient);
+            });
           }
         };
       }
@@ -22875,7 +22870,7 @@ async function createRewardEpoch(params) {
   let rewardRate = null;
   let configVersion = null;
   if (params?.rewardPerNode !== void 0) {
-    rewardRate = getConfiguredRewardPerNode(params.rewardPerNode);
+    rewardRate = params.rewardPerNode <= 0 ? null : getConfiguredRewardPerNode(params.rewardPerNode);
   } else {
     const activeCfg = await getEconomicConfigByKey("NODE_REWARD_RATE_PER_EPOCH");
     if (activeCfg && activeCfg.status === "ACTIVE" && activeCfg.configValue !== null && activeCfg.configValue !== void 0) {
@@ -22888,6 +22883,8 @@ async function createRewardEpoch(params) {
       } else {
         rewardRate = Number(activeCfg.configValue);
       }
+    } else if (activeCfg) {
+      rewardRate = null;
     } else {
       rewardRate = getConfiguredRewardPerNode();
     }
@@ -22979,7 +22976,7 @@ async function closeAndSettleEpoch(epochId, options) {
   let effectiveRate = null;
   let configVersion = epoch.economic_config_version ? Number(epoch.economic_config_version) : null;
   if (options?.configuredRewardPerNode !== void 0) {
-    effectiveRate = getConfiguredRewardPerNode(options.configuredRewardPerNode);
+    effectiveRate = options.configuredRewardPerNode <= 0 ? null : getConfiguredRewardPerNode(options.configuredRewardPerNode);
   } else if (epoch.reward_rate_used !== null && !isNaN(Number(epoch.reward_rate_used)) && Number(epoch.reward_rate_used) > 0) {
     effectiveRate = Number(epoch.reward_rate_used);
   } else if (epoch.reward_per_node !== null && !isNaN(Number(epoch.reward_per_node)) && Number(epoch.reward_per_node) > 0) {
@@ -22996,6 +22993,8 @@ async function closeAndSettleEpoch(epochId, options) {
       } else {
         effectiveRate = Number(activeCfg.configValue);
       }
+    } else if (activeCfg) {
+      effectiveRate = null;
     } else {
       effectiveRate = getConfiguredRewardPerNode();
     }
@@ -23034,14 +23033,14 @@ async function closeAndSettleEpoch(epochId, options) {
       AND owner_user_id IS NOT NULL 
       AND (activated_at IS NULL OR activated_at <= $2)
       AND COALESCE(distributed_phivo, 0) < COALESCE(lifetime_phivo_allocation, 10000.00)
-      AND (nodes.last_reward_date IS NULL OR nodes.last_reward_date < $4::date)
+      AND ($3::boolean = false OR nodes.last_reward_date IS NULL OR nodes.last_reward_date < ($4::text)::date)
       AND ($1::text IS NULL OR id::text = $1 OR public_node_id = $1)
       AND (
         $3::boolean = false
         OR NOT EXISTS (
           SELECT 1 FROM node_rewards nr
           WHERE nr.node_id = nodes.id
-            AND nr.business_date = $4
+            AND nr.business_date = $4::text
             AND nr.status != 'REVERSED'
         )
       )
