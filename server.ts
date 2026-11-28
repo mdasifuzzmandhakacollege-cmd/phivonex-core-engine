@@ -48,7 +48,7 @@ import {
 } from './src/server/routes/unilevelRankRoutes';
 import { healthRouter } from './src/server/routes/healthRoutes';
 import { legacyRouter } from './src/server/routes/legacyRoutes';
-import { getDb } from './src/server/db/db';
+import { getDb, closeDb } from './src/server/db/db';
 import { startMatchingScheduler } from './src/server/services/binaryMatchingScheduler';
 import { startWeeklyReportScheduler } from './src/server/services/emailReportingService';
 import { startDailyAuditScheduler } from './src/server/services/reconciliationService';
@@ -65,6 +65,14 @@ import { validateProductionConfig } from './src/config/integrationConfig';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Guard process against crashing mid-request on transient background promise rejections
+process.on('unhandledRejection', (reason) => {
+  console.error('[PHIVONEX Unhandled Rejection]:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[PHIVONEX Uncaught Exception]:', err);
+});
 
 async function startServer() {
   // Configuration validation for production environment (logs warnings gracefully)
@@ -213,9 +221,28 @@ async function startServer() {
   }
 
   // Start listening on PORT immediately so Cloud Run liveness/port check passes with zero delay
-  app.listen(PORT, '0.0.0.0', () => {
+  const httpServer = app.listen(PORT, '0.0.0.0', () => {
     console.log(`[PHIVONEX Server] Running on http://0.0.0.0:${PORT}`);
   });
+
+  // CRITICAL for Google Cloud Run / Firebase App Hosting Envoy proxy:
+  // Envoy keeps idle upstream HTTP/1.1 sockets open for 60s. Node.js defaults to 5s,
+  // which causes Envoy 503 "upstream connect error or disconnect/reset before headers"
+  // whenever a user submits Login after sitting on the page for >5s.
+  httpServer.keepAliveTimeout = 65000;
+  httpServer.headersTimeout = 66000;
+  httpServer.requestTimeout = 60000;
+
+  // Graceful shutdown so in-flight requests complete cleanly during Cloud Run rollouts
+  const gracefulShutdown = (signal: string) => {
+    console.log(`[PHIVONEX Server] Received ${signal}. Draining active connections...`);
+    httpServer.close(() => {
+      closeDb().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 10000).unref();
+  };
+  process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.once('SIGINT', () => gracefulShutdown('SIGINT'));
 
   // Initialize Database Schema and background schedulers asynchronously
   getDb().then(async (db) => {

@@ -899,12 +899,16 @@ router.post('/login', loginLimiter, async (req: Request, res: Response): Promise
       // Check Firestore cloud storage ONLY if user is missing in PostgreSQL AND has a verifiable passwordHash
       try {
         const { adminFirestore } = await import('../../lib/firebase-admin');
-        const snap = await adminFirestore.collection('users')
-          .where('email', '==', cleanIdentifier)
-          .limit(1)
-          .get();
+        const usersCol = adminFirestore?.collection?.('users');
+        const snap =
+          usersCol && typeof usersCol.where === 'function'
+            ? await Promise.race([
+                usersCol.where('email', '==', cleanIdentifier).limit(1).get(),
+                new Promise<any>((resolve) => setTimeout(() => resolve({ empty: true, docs: [] }), 3000)),
+              ])
+            : { empty: true, docs: [] };
 
-        if (!snap.empty) {
+        if (snap && !snap.empty) {
           const docData = snap.docs[0].data();
           const restoredId = docData.id || docData.uid || snap.docs[0].id;
           const restoredPasswordHash = docData.passwordHash;

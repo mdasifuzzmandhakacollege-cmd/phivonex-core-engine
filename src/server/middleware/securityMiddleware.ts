@@ -94,10 +94,12 @@ function isTrustedOrigin(origin: string, hostHeader?: string, forwardedHost?: st
       return true;
     }
 
-    // 4. Production Domain
+    // 4. Production Domains
     if (
       originHostname === 'phivonex.com' ||
-      originHostname.endsWith('.phivonex.com')
+      originHostname.endsWith('.phivonex.com') ||
+      originHostname === 'phivonex.online' ||
+      originHostname.endsWith('.phivonex.online')
     ) {
       return true;
     }

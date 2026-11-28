@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { PhivonexLogo } from '../components/brand/PhivonexLogo';
 import { COUNTRIES } from '../data/countries';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, fetchJsonWithRetry } from '../context/AuthContext';
 
 interface RegisterPageProps {
   initialReferralCode?: string;
@@ -258,9 +258,10 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     });
 
     try {
-      const res = await fetch('/api/auth/register/request-verification', {
+      const { res, data: result } = await fetchJsonWithRetry('/api/auth/register/request-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           fullName: fullName.trim(),
           email: email.trim().toLowerCase(),
@@ -270,7 +271,6 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         }),
       });
 
-      const result = await res.json();
       if (!res.ok) {
         throw new Error(result.message || result.error || 'Failed to request verification.');
       }
@@ -300,16 +300,16 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     setErrors({});
 
     try {
-      const res = await fetch('/api/auth/register/verify-email', {
+      const { res, data: result } = await fetchJsonWithRetry('/api/auth/register/verify-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           code: enteredCode,
         }),
       });
 
-      const result = await res.json();
       if (!res.ok) {
         throw new Error(result.message || result.error || 'Verification failed.');
       }
@@ -324,16 +324,16 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
 
   const handleCompleteRegistration = async (token: string) => {
     try {
-      const res = await fetch('/api/auth/register/complete', {
+      const { res, data: result } = await fetchJsonWithRetry('/api/auth/register/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           email: email.trim().toLowerCase(),
           token,
         }),
       });
 
-      const result = await res.json();
       if (!res.ok) {
         throw new Error(result.message || result.error || 'Failed to complete registration.');
       }
@@ -381,9 +381,10 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     setOtp(['', '', '', '', '', '']);
 
     try {
-      const res = await fetch('/api/auth/register/request-verification', {
+      const { res, data: result } = await fetchJsonWithRetry('/api/auth/register/request-verification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           fullName: fullName.trim(),
           email: email.trim().toLowerCase(),
@@ -393,7 +394,6 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         }),
       });
 
-      const result = await res.json();
       if (!res.ok) {
         throw new Error(result.message || result.error || 'Failed to resend code.');
       }

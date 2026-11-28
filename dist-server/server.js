@@ -14042,7 +14042,7 @@ async function getDb() {
           }
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
           const isUnixSocket = databaseUrl.includes("host=/") || databaseUrl.includes("host=%2F") || databaseUrl.startsWith("/");
-          let pool;
+          let pool = null;
           const poolConfig = {
             connectionTimeoutMillis: 1e4,
             idleTimeoutMillis: 3e4,
@@ -14050,41 +14050,89 @@ async function getDb() {
             keepAlive: true,
             keepAliveInitialDelayMillis: 1e4
           };
-          if (isUnixSocket) {
-            pool = new Pool({
-              connectionString: databaseUrl,
-              ssl: false,
-              ...poolConfig
-            });
-          } else {
+          const buildPgPool = (sslOption) => {
+            if (isUnixSocket) {
+              return new Pool({
+                connectionString: databaseUrl,
+                ssl: false,
+                ...poolConfig
+              });
+            }
             try {
               const url = new URL(databaseUrl);
-              pool = new Pool({
+              return new Pool({
                 host: url.hostname,
                 port: parseInt(url.port || "5432", 10),
                 user: decodeURIComponent(url.username),
                 password: decodeURIComponent(url.password),
                 database: (url.pathname ? url.pathname.replace(/^\//, "") : "postgres") || "postgres",
-                ssl: { rejectUnauthorized: false },
+                ssl: sslOption,
                 ...poolConfig
               });
             } catch {
-              pool = new Pool({
+              return new Pool({
                 connectionString: databaseUrl,
-                ssl: { rejectUnauthorized: false },
+                ssl: sslOption,
                 ...poolConfig
               });
             }
+          };
+          const probePool = async (candidate) => {
+            candidate.on("error", (err) => {
+              console.warn("[DB Pool Background Warning]:", err?.message || err);
+            });
+            await Promise.race([
+              candidate.query("SELECT 1"),
+              new Promise(
+                (_, reject) => setTimeout(() => reject(new Error("PostgreSQL connection probe timeout (10000ms)")), 1e4)
+              )
+            ]);
+          };
+          let preferredSsl = isUnixSocket ? false : { rejectUnauthorized: false };
+          try {
+            const parsedForSsl = new URL(databaseUrl);
+            const sslMode = (parsedForSsl.searchParams.get("sslmode") || "").toLowerCase();
+            if (sslMode === "disable") {
+              preferredSsl = false;
+            }
+          } catch {
           }
-          pool.on("error", (err) => {
-            console.warn("[DB Pool Background Warning]:", err?.message || err);
-          });
-          await Promise.race([
-            pool.query("SELECT 1"),
-            new Promise(
-              (_, reject) => setTimeout(() => reject(new Error("PostgreSQL connection probe timeout (10000ms)")), 1e4)
-            )
-          ]);
+          let lastConnectErr = null;
+          const sslCandidates = isUnixSocket ? [false] : preferredSsl === false ? [false, { rejectUnauthorized: false }] : [{ rejectUnauthorized: false }, false];
+          for (const sslOpt of sslCandidates) {
+            const candidate = buildPgPool(sslOpt);
+            try {
+              await probePool(candidate);
+              pool = candidate;
+              break;
+            } catch (probeErr) {
+              lastConnectErr = probeErr;
+              await candidate.end().catch(() => {
+              });
+              const msg = String(probeErr?.message || "");
+              const isSslMismatch = msg.includes("does not support SSL") || msg.includes("SSL") || msg.includes("no pg_hba.conf entry") || msg.includes("EPROTO");
+              if (isSslMismatch) {
+                console.warn(`[DB] PostgreSQL SSL mode (${sslOpt ? "SSL" : "non-SSL"}) rejected (${msg}); retrying alternate SSL mode...`);
+                continue;
+              }
+              const retryCandidate = buildPgPool(sslOpt);
+              try {
+                await new Promise((r) => setTimeout(r, 400));
+                await probePool(retryCandidate);
+                pool = retryCandidate;
+                break;
+              } catch (retryErr) {
+                lastConnectErr = retryErr;
+                await retryCandidate.end().catch(() => {
+                });
+                break;
+              }
+            }
+          }
+          if (!pool) {
+            throw lastConnectErr || new Error("Failed to connect to PostgreSQL");
+          }
+          const activePool = pool;
           async function executeQueryWithRetry(queryFn, maxRetries = 2, delayMs = 300) {
             let attempt = 0;
             while (true) {
@@ -14104,20 +14152,20 @@ async function getDb() {
               }
             }
           }
-          globalThis.__phivonexPool = pool;
+          globalThis.__phivonexPool = activePool;
           client = {
             async query(sql, params) {
-              const res = await executeQueryWithRetry(() => pool.query(sql, params));
+              const res = await executeQueryWithRetry(() => activePool.query(sql, params));
               return {
                 rows: res.rows,
                 rowCount: res.rowCount ?? res.rows.length
               };
             },
             async exec(sql) {
-              await executeQueryWithRetry(() => pool.query(sql));
+              await executeQueryWithRetry(() => activePool.query(sql));
             },
             async transaction(callback) {
-              const pgClient = await pool.connect();
+              const pgClient = await activePool.connect();
               const trxClient = {
                 async query(sql, params) {
                   const res = await pgClient.query(sql, params);
@@ -14154,6 +14202,9 @@ async function getDb() {
             await globalThis.__phivonexPool.end().catch(() => {
             });
             globalThis.__phivonexPool = void 0;
+          }
+          if (isProduction) {
+            throw poolErr;
           }
           console.warn(`[DB] External PostgreSQL connection attempt failed: ${poolErr?.message || poolErr}. Falling back to embedded PGlite.`);
           client = null;
@@ -14233,11 +14284,59 @@ async function getDb() {
   })();
   return globalThis.__phivonexDbPromise;
 }
+async function closeDb() {
+  if (globalThis.__phivonexPool) {
+    try {
+      await globalThis.__phivonexPool.end();
+    } catch {
+    }
+    globalThis.__phivonexPool = void 0;
+  }
+  if (globalThis.__phivonexPglite) {
+    try {
+      await globalThis.__phivonexPglite.close();
+    } catch {
+    }
+    globalThis.__phivonexPglite = void 0;
+  }
+  globalThis.__phivonexDb = void 0;
+  globalThis.__phivonexDbPromise = void 0;
+}
 async function initSchema(client) {
   try {
+    try {
+      const fastCheck = await client.query(`
+        SELECT
+          (SELECT COUNT(*)::int FROM information_schema.tables
+           WHERE table_schema = 'public'
+             AND table_name IN (
+               'users', 'sessions', 'pending_registrations', 'nodes',
+               'financial_ledger_entries', 'user_trading_positions',
+               'user_vault_positions', 'email_delivery_logs',
+               'p2p_internal_transfers', 'unilevel_master_configs',
+               'system_economic_configs', 'binary_placements', 'user_referrals',
+               'email_templates'
+             )) AS table_count,
+          (SELECT COUNT(*)::int FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'nodes'
+             AND column_name = 'accrued_phivo') AS has_accrued_phivo,
+          (SELECT COUNT(*)::int FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'users'
+             AND column_name = 'kyc_status') AS has_kyc_status
+      `);
+      const row = fastCheck.rows[0];
+      if (row && Number(row.table_count) === 14 && Number(row.has_accrued_phivo) === 1 && Number(row.has_kyc_status) === 1) {
+        const nodeCountRes = await client.query(`SELECT COUNT(*)::int AS count FROM nodes`);
+        if (Number(nodeCountRes.rows[0]?.count || 0) >= GENESIS_NODE_CAP) {
+          console.log("[DB] Fast-path schema verification passed (PostgreSQL already initialized).");
+          return;
+        }
+      }
+    } catch {
+    }
     await client.exec(`
-      DROP TABLE IF EXISTS pending_registrations;
-
       CREATE TABLE IF NOT EXISTS pending_registrations (
         email VARCHAR(255) PRIMARY KEY,
         code_hash TEXT NOT NULL,
@@ -15470,7 +15569,19 @@ async function initSchema(client) {
     await backfillExistingUsers(client);
     await seedGenesisNodes(client);
     await seedEconomicConfigs(client);
-    await restoreUsersFromFirestore(client);
+    void (async () => {
+      try {
+        const userCountRes = await client.query(`SELECT COUNT(*)::int AS count FROM users`);
+        if (Number(userCountRes.rows[0]?.count || 0) === 0) {
+          await Promise.race([
+            restoreUsersFromFirestore(client),
+            new Promise((resolve) => setTimeout(resolve, 5e3))
+          ]);
+        }
+      } catch (bgErr) {
+        console.warn("[DB Hydration] Background hydration notice:", bgErr?.message || bgErr);
+      }
+    })();
     console.log("[DB] PostgreSQL schema & Task #6 Genesis Node migrations initialized successfully.");
   } catch (err) {
     console.error("[DB] Error initializing schema:", err);
@@ -15485,8 +15596,11 @@ async function restoreUsersFromFirestore(client) {
   try {
     const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
     console.log("[DB Hydration] Checking Firestore for persistent users across rollouts...");
-    const snapshot = await adminFirestore2.collection("users").get();
-    if (snapshot.empty) {
+    const snapshot = await Promise.race([
+      adminFirestore2.collection("users").get(),
+      new Promise((resolve) => setTimeout(() => resolve({ empty: true, docs: [] }), 4e3))
+    ]);
+    if (!snapshot || snapshot.empty) {
       console.log("[DB Hydration] No Firestore users found to restore.");
       return;
     }
@@ -21687,8 +21801,12 @@ router.post("/login", loginLimiter, async (req, res) => {
     if (!user) {
       try {
         const { adminFirestore: adminFirestore2 } = await Promise.resolve().then(() => (init_firebase_admin(), firebase_admin_exports));
-        const snap = await adminFirestore2.collection("users").where("email", "==", cleanIdentifier).limit(1).get();
-        if (!snap.empty) {
+        const usersCol = adminFirestore2?.collection?.("users");
+        const snap = usersCol && typeof usersCol.where === "function" ? await Promise.race([
+          usersCol.where("email", "==", cleanIdentifier).limit(1).get(),
+          new Promise((resolve) => setTimeout(() => resolve({ empty: true, docs: [] }), 3e3))
+        ]) : { empty: true, docs: [] };
+        if (snap && !snap.empty) {
           const docData = snap.docs[0].data();
           const restoredId = docData.id || docData.uid || snap.docs[0].id;
           const restoredPasswordHash = docData.passwordHash;
@@ -28588,7 +28706,7 @@ function isTrustedOrigin(origin, hostHeader, forwardedHost) {
     if (originHostname.endsWith(".hosted.app") || originHostname.endsWith(".run.app") || originHostname.endsWith(".firebaseapp.com") || originHostname.endsWith(".web.app") || originHostname.endsWith(".google.com") || originHostname.endsWith(".aistudio.google.com")) {
       return true;
     }
-    if (originHostname === "phivonex.com" || originHostname.endsWith(".phivonex.com")) {
+    if (originHostname === "phivonex.com" || originHostname.endsWith(".phivonex.com") || originHostname === "phivonex.online" || originHostname.endsWith(".phivonex.online")) {
       return true;
     }
     if (process.env.APP_URL) {
@@ -36817,6 +36935,12 @@ init_tradingYieldEpochService();
 init_roiGenerationService();
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path2.dirname(__filename);
+process.on("unhandledRejection", (reason) => {
+  console.error("[PHIVONEX Unhandled Rejection]:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[PHIVONEX Uncaught Exception]:", err);
+});
 async function startServer() {
   try {
     validateProductionConfig();
@@ -36937,9 +37061,21 @@ async function startServer() {
       res.sendFile(path2.resolve(distPath, "index.html"));
     });
   }
-  app.listen(PORT, "0.0.0.0", () => {
+  const httpServer = app.listen(PORT, "0.0.0.0", () => {
     console.log(`[PHIVONEX Server] Running on http://0.0.0.0:${PORT}`);
   });
+  httpServer.keepAliveTimeout = 65e3;
+  httpServer.headersTimeout = 66e3;
+  httpServer.requestTimeout = 6e4;
+  const gracefulShutdown = (signal) => {
+    console.log(`[PHIVONEX Server] Received ${signal}. Draining active connections...`);
+    httpServer.close(() => {
+      closeDb().finally(() => process.exit(0));
+    });
+    setTimeout(() => process.exit(0), 1e4).unref();
+  };
+  process.once("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.once("SIGINT", () => gracefulShutdown("SIGINT"));
   getDb().then(async (db) => {
     console.log("[Server] Database and referral migrations initialized.");
     const resetMarkerRes = await db.query(

@@ -62,6 +62,88 @@ interface AuthContextType {
   setUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
 }
 
+const TRANSIENT_GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+interface SafeJsonResponse {
+  res: Response;
+  data: any;
+  isGatewayError: boolean;
+}
+
+/**
+ * Performs an API fetch with safe non-JSON response handling and automatic
+ * bounded retries when Cloud Run / Envoy returns a transient 502/503/504 or
+ * resets an idle upstream connection (prevents raw `Unexpected token 'u', "upstream c"...` errors).
+ */
+export async function fetchJsonWithRetry(
+  url: string,
+  init: RequestInit,
+  maxRetries = 2
+): Promise<SafeJsonResponse> {
+  let lastError: any = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await fetch(url, init);
+      const rawText = await res.text();
+      let parsed: any = null;
+      let isJson = false;
+
+      if (rawText) {
+        try {
+          parsed = JSON.parse(rawText);
+          isJson = true;
+        } catch {
+          isJson = false;
+        }
+      } else {
+        parsed = {};
+        isJson = true;
+      }
+
+      const looksLikeUpstreamProxyError =
+        !isJson &&
+        (TRANSIENT_GATEWAY_STATUSES.has(res.status) ||
+          /upstream|bad gateway|service unavailable|gateway timeout|reset reason/i.test(rawText));
+
+      if (looksLikeUpstreamProxyError && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        continue;
+      }
+
+      if (TRANSIENT_GATEWAY_STATUSES.has(res.status) && parsed?.error === 'DATABASE_UNAVAILABLE' && attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        continue;
+      }
+
+      if (!isJson) {
+        return {
+          res,
+          data: {
+            error: 'UPSTREAM_UNAVAILABLE',
+            message: 'The server is temporarily reconnecting. Please try again in a moment.',
+          },
+          isGatewayError: true,
+        };
+      }
+
+      return { res, data: parsed ?? {}, isGatewayError: false };
+    } catch (networkErr: any) {
+      lastError = networkErr;
+      if (attempt < maxRetries) {
+        await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        continue;
+      }
+    }
+  }
+
+  throw new Error(
+    lastError?.message && !/unexpected token|not valid json/i.test(String(lastError.message))
+      ? 'Network connection interrupted. Please check your internet connection and try again.'
+      : 'The server is temporarily reconnecting. Please try again in a moment.'
+  );
+}
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -71,16 +153,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Fetch current authenticated user from session (/api/auth/me)
   const refreshUser = useCallback(async () => {
     try {
-      const res = await fetch('/api/auth/me', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-      });
+      const { res, data, isGatewayError } = await fetchJsonWithRetry(
+        '/api/auth/me',
+        {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+        },
+        1
+      );
 
-      if (res.ok) {
-        const data = await res.json();
+      if (res.ok && !isGatewayError) {
         setUser(data.user || data);
-      } else {
+      } else if (!isGatewayError) {
         setUser(null);
       }
     } catch (err) {
@@ -203,14 +288,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       ...data,
       email: String(data.email || '').trim().toLowerCase(),
     };
-    const res = await fetch('/api/auth/register', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify(normalizedPayload),
     });
-
-    const result = await res.json();
 
     if (!res.ok) {
       const errMessage = result.message || result.error || 'Registration failed. Please try again.';
@@ -229,7 +312,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     captchaToken?: string;
   }): Promise<UserProfile> => {
     const normalizedIdentifier = String(data.identifier || '').trim();
-    const res = await fetch('/api/auth/login', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -238,8 +321,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         identifier: normalizedIdentifier.includes('@') ? normalizedIdentifier.toLowerCase() : normalizedIdentifier,
       }),
     });
-
-    const result = await res.json();
 
     if (!res.ok) {
       const errMessage = result.message || result.error || 'Invalid email/phone or password.';
@@ -272,7 +353,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     try {
-      const res = await fetch('/api/auth/google', {
+      const { res, data: result } = await fetchJsonWithRetry('/api/auth/google', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -284,7 +365,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }),
       });
 
-      const result = await res.json();
       if (!res.ok) {
         throw new Error(result.message || result.error || 'Failed to authenticate with Google.');
       }
@@ -331,14 +411,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // 4. Forgot Password
   const forgotPassword = async (email: string, captchaToken?: string) => {
-    const res = await fetch('/api/auth/forgot-password', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/forgot-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ email, captchaToken }),
     });
 
-    const result = await res.json();
     if (!res.ok) {
       throw new Error(result.message || 'Failed to process forgot password request.');
     }
@@ -347,7 +426,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // 5. Reset Password
   const resetPassword = async (tokenOrCode: string, newPassword: string, email?: string) => {
-    const res = await fetch('/api/auth/reset-password', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/reset-password', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
@@ -359,7 +438,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }),
     });
 
-    const result = await res.json();
     if (!res.ok) {
       throw new Error(result.message || 'Failed to reset password.');
     }
@@ -368,14 +446,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // 6. Verify Email
   const verifyEmail = async (token: string) => {
-    const res = await fetch('/api/auth/verify-email', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/verify-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ token }),
     });
 
-    const result = await res.json();
     if (!res.ok) {
       throw new Error(result.message || 'Failed to verify email.');
     }
@@ -385,14 +462,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // 7. Resend Verification
   const resendVerification = async (email?: string) => {
-    const res = await fetch('/api/auth/resend-verification', {
+    const { res, data: result } = await fetchJsonWithRetry('/api/auth/resend-verification', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ email: email || user?.email }),
     });
 
-    const result = await res.json();
     if (!res.ok) {
       throw new Error(result.message || 'Failed to resend verification.');
     }

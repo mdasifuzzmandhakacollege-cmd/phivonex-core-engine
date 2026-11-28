@@ -94,7 +94,7 @@ export async function getDb(): Promise<DatabaseClient> {
           }
           console.log(`[DB Identity] Engine: PostgreSQL (Cloud SQL) | Host: ${safeHost} | Database: ${safeDbName}`);
           const isUnixSocket = databaseUrl.includes('host=/') || databaseUrl.includes('host=%2F') || databaseUrl.startsWith('/');
-          let pool: Pool;
+          let pool: Pool | null = null;
           const poolConfig = {
             connectionTimeoutMillis: 10000,
             idleTimeoutMillis: 30000,
@@ -103,44 +103,105 @@ export async function getDb(): Promise<DatabaseClient> {
             keepAliveInitialDelayMillis: 10000,
           };
 
-          if (isUnixSocket) {
-            pool = new Pool({
-              connectionString: databaseUrl,
-              ssl: false,
-              ...poolConfig,
-            });
-          } else {
+          const buildPgPool = (sslOption: false | { rejectUnauthorized: boolean }): Pool => {
+            if (isUnixSocket) {
+              return new Pool({
+                connectionString: databaseUrl,
+                ssl: false,
+                ...poolConfig,
+              });
+            }
             try {
               const url = new URL(databaseUrl);
-              pool = new Pool({
+              return new Pool({
                 host: url.hostname,
                 port: parseInt(url.port || '5432', 10),
                 user: decodeURIComponent(url.username),
                 password: decodeURIComponent(url.password),
                 database: (url.pathname ? url.pathname.replace(/^\//, '') : 'postgres') || 'postgres',
-                ssl: { rejectUnauthorized: false },
+                ssl: sslOption,
                 ...poolConfig,
               });
             } catch {
-              pool = new Pool({
+              return new Pool({
                 connectionString: databaseUrl,
-                ssl: { rejectUnauthorized: false },
+                ssl: sslOption,
                 ...poolConfig,
               });
             }
+          };
+
+          const probePool = async (candidate: Pool): Promise<void> => {
+            candidate.on('error', (err) => {
+              console.warn('[DB Pool Background Warning]:', err?.message || err);
+            });
+            await Promise.race([
+              candidate.query('SELECT 1'),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('PostgreSQL connection probe timeout (10000ms)')), 10000)
+              ),
+            ]);
+          };
+
+          let preferredSsl: false | { rejectUnauthorized: boolean } = isUnixSocket
+            ? false
+            : { rejectUnauthorized: false };
+          try {
+            const parsedForSsl = new URL(databaseUrl);
+            const sslMode = (parsedForSsl.searchParams.get('sslmode') || '').toLowerCase();
+            if (sslMode === 'disable') {
+              preferredSsl = false;
+            }
+          } catch {
+            // keep default preferredSsl
           }
 
-          pool.on('error', (err) => {
-            console.warn('[DB Pool Background Warning]:', err?.message || err);
-          });
+          let lastConnectErr: any = null;
+          const sslCandidates: Array<false | { rejectUnauthorized: boolean }> = isUnixSocket
+            ? [false]
+            : preferredSsl === false
+            ? [false, { rejectUnauthorized: false }]
+            : [{ rejectUnauthorized: false }, false];
 
-          // Fast probe with 3s timeout
-          await Promise.race([
-            pool.query('SELECT 1'),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('PostgreSQL connection probe timeout (10000ms)')), 10000)
-            ),
-          ]);
+          for (const sslOpt of sslCandidates) {
+            const candidate = buildPgPool(sslOpt);
+            try {
+              await probePool(candidate);
+              pool = candidate;
+              break;
+            } catch (probeErr: any) {
+              lastConnectErr = probeErr;
+              await candidate.end().catch(() => {});
+              const msg = String(probeErr?.message || '');
+              const isSslMismatch =
+                msg.includes('does not support SSL') ||
+                msg.includes('SSL') ||
+                msg.includes('no pg_hba.conf entry') ||
+                msg.includes('EPROTO');
+              if (isSslMismatch) {
+                console.warn(`[DB] PostgreSQL SSL mode (${sslOpt ? 'SSL' : 'non-SSL'}) rejected (${msg}); retrying alternate SSL mode...`);
+                continue;
+              }
+              // For transient network hiccup on first attempt, retry once with same SSL setting
+              const retryCandidate = buildPgPool(sslOpt);
+              try {
+                await new Promise((r) => setTimeout(r, 400));
+                await probePool(retryCandidate);
+                pool = retryCandidate;
+                break;
+              } catch (retryErr: any) {
+                lastConnectErr = retryErr;
+                await retryCandidate.end().catch(() => {});
+                break;
+              }
+            }
+          }
+
+          if (!pool) {
+            throw lastConnectErr || new Error('Failed to connect to PostgreSQL');
+          }
+
+          const activePool = pool;
 
           async function executeQueryWithRetry<T>(queryFn: () => Promise<T>, maxRetries = 2, delayMs = 300): Promise<T> {
             let attempt = 0;
@@ -171,21 +232,21 @@ export async function getDb(): Promise<DatabaseClient> {
             }
           }
 
-          globalThis.__phivonexPool = pool;
+          globalThis.__phivonexPool = activePool;
 
           client = {
             async query<T = any>(sql: string, params?: any[]): Promise<QueryResult<T>> {
-              const res = await executeQueryWithRetry(() => pool.query(sql, params));
+              const res = await executeQueryWithRetry(() => activePool.query(sql, params));
               return {
                 rows: res.rows as T[],
                 rowCount: res.rowCount ?? res.rows.length,
               };
             },
             async exec(sql: string): Promise<void> {
-              await executeQueryWithRetry(() => pool.query(sql));
+              await executeQueryWithRetry(() => activePool.query(sql));
             },
             async transaction<T>(callback: (client: DatabaseClient) => Promise<T>): Promise<T> {
-              const pgClient = await pool.connect();
+              const pgClient = await activePool.connect();
               const trxClient: DatabaseClient = {
                 async query<R = any>(sql: string, params?: any[]): Promise<QueryResult<R>> {
                   const res = await pgClient.query(sql, params);
@@ -222,12 +283,17 @@ export async function getDb(): Promise<DatabaseClient> {
             await globalThis.__phivonexPool.end().catch(() => {});
             globalThis.__phivonexPool = undefined;
           }
+          if (isProduction) {
+            // Never silently fall back to empty volatile PGlite WASM in production
+            // (loses real user records and risks OOM-killing Cloud Run containers).
+            throw poolErr;
+          }
           console.warn(`[DB] External PostgreSQL connection attempt failed: ${poolErr?.message || poolErr}. Falling back to embedded PGlite.`);
           client = null;
         }
       }
 
-      // 2. Resilient Embedded PostgreSQL (PGlite) fallback
+      // 2. Resilient Embedded PostgreSQL (PGlite) fallback (dev/test only)
       if (!client) {
         // In container environments (Cloud Run / App Hosting), use /tmp which is guaranteed to be writable
         const isContainer = Boolean(process.env.K_SERVICE || process.env.K_REVISION || process.env.PORT === '8080');
@@ -330,10 +396,48 @@ export async function closeDb(): Promise<void> {
 
 async function initSchema(client: DatabaseClient) {
   try {
-    // 1. Run core DDL statements individually or with client.exec
-    await client.exec(`
-      DROP TABLE IF EXISTS pending_registrations;
+    // 0. Fast-path check: if PostgreSQL already has the full current schema & 10,000 Genesis Nodes,
+    // skip the 1,300-line sequential DDL migration cascade so cold starts finish in <250ms instead of 20s+.
+    try {
+      const fastCheck = await client.query<{
+        table_count: number;
+        has_accrued_phivo: number;
+        has_kyc_status: number;
+      }>(`
+        SELECT
+          (SELECT COUNT(*)::int FROM information_schema.tables
+           WHERE table_schema = 'public'
+             AND table_name IN (
+               'users', 'sessions', 'pending_registrations', 'nodes',
+               'financial_ledger_entries', 'user_trading_positions',
+               'user_vault_positions', 'email_delivery_logs',
+               'p2p_internal_transfers', 'unilevel_master_configs',
+               'system_economic_configs', 'binary_placements', 'user_referrals',
+               'email_templates'
+             )) AS table_count,
+          (SELECT COUNT(*)::int FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'nodes'
+             AND column_name = 'accrued_phivo') AS has_accrued_phivo,
+          (SELECT COUNT(*)::int FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'users'
+             AND column_name = 'kyc_status') AS has_kyc_status
+      `);
+      const row = fastCheck.rows[0];
+      if (row && Number(row.table_count) === 14 && Number(row.has_accrued_phivo) === 1 && Number(row.has_kyc_status) === 1) {
+        const nodeCountRes = await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM nodes`);
+        if (Number(nodeCountRes.rows[0]?.count || 0) >= GENESIS_NODE_CAP) {
+          console.log('[DB] Fast-path schema verification passed (PostgreSQL already initialized).');
+          return;
+        }
+      }
+    } catch {
+      // Fall through to full idempotent schema initialization on fresh DBs
+    }
 
+    // 1. Run core DDL statements individually or with client.exec (non-destructive)
+    await client.exec(`
       CREATE TABLE IF NOT EXISTS pending_registrations (
         email VARCHAR(255) PRIMARY KEY,
         code_hash TEXT NOT NULL,
@@ -1630,8 +1734,21 @@ async function initSchema(client: DatabaseClient) {
     // 5. Seed System Economic Parameters
     await seedEconomicConfigs(client);
 
-    // 6. Hydrate users and essential records from persistent Cloud Firestore across rollouts
-    await restoreUsersFromFirestore(client);
+    // 6. Hydrate users from Firestore asynchronously ONLY if PostgreSQL users table is empty
+    // (never block getDb() / /api/auth/login on external Firestore gRPC calls).
+    void (async () => {
+      try {
+        const userCountRes = await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM users`);
+        if (Number(userCountRes.rows[0]?.count || 0) === 0) {
+          await Promise.race([
+            restoreUsersFromFirestore(client),
+            new Promise((resolve) => setTimeout(resolve, 5000)),
+          ]);
+        }
+      } catch (bgErr: any) {
+        console.warn('[DB Hydration] Background hydration notice:', bgErr?.message || bgErr);
+      }
+    })();
 
     console.log('[DB] PostgreSQL schema & Task #6 Genesis Node migrations initialized successfully.');
   } catch (err) {
@@ -1657,8 +1774,11 @@ async function restoreUsersFromFirestore(client: DatabaseClient) {
   try {
     const { adminFirestore } = await import('../../lib/firebase-admin');
     console.log('[DB Hydration] Checking Firestore for persistent users across rollouts...');
-    const snapshot = await adminFirestore.collection('users').get();
-    if (snapshot.empty) {
+    const snapshot = await Promise.race([
+      adminFirestore.collection('users').get(),
+      new Promise<any>((resolve) => setTimeout(() => resolve({ empty: true, docs: [] }), 4000)),
+    ]);
+    if (!snapshot || snapshot.empty) {
       console.log('[DB Hydration] No Firestore users found to restore.');
       return;
     }
